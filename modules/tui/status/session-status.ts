@@ -1,0 +1,325 @@
+import type {
+	ContextUsage,
+	ExtensionContext,
+	Theme,
+} from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { resolveGlyphs, type IconGlyphs } from "../renderer/icons.ts";
+import { sanitizeSingleLine } from "./project-status.ts";
+import {
+	cacheHitStatusColor,
+	compactionStatusColor,
+	contextUsageStatusColor,
+	turnStatusColor,
+	type StatusSegment,
+} from "./status-segments.ts";
+
+const SEPARATOR = " · ";
+const DEFAULT_GLYPHS = resolveGlyphs("unicode");
+
+export type SessionStatusSegmentId = "session" | "tokens" | "cache" | "cost";
+export type EditorUsageSegmentId = "tokens" | "cache" | "context";
+
+export interface SessionStatusSnapshot {
+	sessionId: string;
+	sessionName?: string;
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	/** 最新 assistant 消息的缓存命中率，口径与 Pi 原生 Footer 一致。 */
+	cacheHitPercent?: number;
+	cost: number;
+	turns: number;
+	compactions: number;
+}
+
+interface UsageValue {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	cost: { total: number };
+}
+
+export interface StatusLineSegment {
+	id: string;
+	text: string;
+	compactText?: string;
+	priority: number;
+}
+
+interface RenderState {
+	segment: StatusLineSegment;
+	text: string;
+	compacted: boolean;
+	hidden: boolean;
+}
+
+function safeAmount(value: number): number {
+	return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function addUsage(snapshot: SessionStatusSnapshot, usage: UsageValue): void {
+	snapshot.inputTokens += safeAmount(usage.input);
+	snapshot.outputTokens += safeAmount(usage.output);
+	snapshot.cacheReadTokens += safeAmount(usage.cacheRead);
+	snapshot.cacheWriteTokens += safeAmount(usage.cacheWrite);
+	snapshot.cost += safeAmount(usage.cost.total);
+}
+
+export function collectSessionStatus(
+	sessionManager: ExtensionContext["sessionManager"],
+): SessionStatusSnapshot {
+	const entries = sessionManager.getEntries();
+	const branchEntries = sessionManager.getBranch?.() ?? entries;
+	const snapshot: SessionStatusSnapshot = {
+		sessionId: sanitizeSingleLine(sessionManager.getSessionId()),
+		sessionName: sanitizeSingleLine(sessionManager.getSessionName() ?? "") || undefined,
+		inputTokens: 0,
+		outputTokens: 0,
+		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
+		cost: 0,
+		turns: branchEntries.filter((entry) => entry.type === "message" && entry.message.role === "user").length,
+		compactions: branchEntries.filter((entry) => entry.type === "compaction").length,
+	};
+
+	// 命中率只取最新 assistant 请求，口径与 Pi 原生 Footer 一致；
+	// toolResult / compaction 的 usage 不参与 CH。
+	let latestCacheHitPercent: number | undefined;
+
+	for (const entry of entries) {
+		let usage: UsageValue | undefined;
+		if (entry.type === "message" && entry.message.role === "assistant") {
+			usage = entry.message.usage as UsageValue | undefined;
+			if (usage) {
+				const promptTokens = safeAmount(usage.input) + safeAmount(usage.cacheRead) + safeAmount(usage.cacheWrite);
+				latestCacheHitPercent = promptTokens > 0
+					? (safeAmount(usage.cacheRead) / promptTokens) * 100
+					: undefined;
+			}
+		} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
+			usage = entry.message.usage as UsageValue;
+		} else if ((entry.type === "compaction" || entry.type === "branch_summary") && entry.usage) {
+			usage = entry.usage as UsageValue;
+		}
+		if (usage) addUsage(snapshot, usage);
+	}
+	snapshot.cacheHitPercent = latestCacheHitPercent;
+
+	return snapshot;
+}
+
+export function formatTokenCount(count: number): string {
+	if (count < 1_000) return String(count);
+	if (count < 10_000) return `${(count / 1_000).toFixed(1)}k`;
+	if (count < 1_000_000) return `${Math.round(count / 1_000)}k`;
+	if (count < 10_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+	return `${Math.round(count / 1_000_000)}M`;
+}
+
+function formatContextTokenCount(count: number): string {
+	if (count < 1_000) return String(count);
+	if (count < 1_000_000) return `${(count / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+	if (count < 1_000_000_000) return `${(count / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+	return `${(count / 1_000_000_000).toFixed(1).replace(/\.0$/, "")}B`;
+}
+
+function formatContextUsageTokenCount(count: number): string {
+	return safeAmount(count) === 0 ? "0k" : formatContextTokenCount(count);
+}
+
+function formatCacheHitPercent(percent: number | undefined): string {
+	const safePercent = Number.isFinite(percent) && percent !== undefined && percent >= 0
+		? percent
+		: 0;
+	return safePercent.toFixed(1).replace(/\.0$/, "");
+}
+
+export function buildEditorUsageSegments(
+	snapshot: SessionStatusSnapshot,
+	contextUsage: ContextUsage | undefined,
+	contextWindowFallback: number | undefined,
+	theme: Theme,
+	glyphs: IconGlyphs,
+	segments: readonly EditorUsageSegmentId[],
+	autoCompactionEnabled = false,
+): StatusSegment[] {
+	// 统计组一体：↑↓ R 默认灰色，只有全局缓存命中率 CH 保留档位色
+	const statsParts = [
+		theme.fg("muted", `${glyphs.inputTokens}${formatTokenCount(safeAmount(snapshot.inputTokens))}`),
+		theme.fg("muted", `${glyphs.outputTokens}${formatTokenCount(safeAmount(snapshot.outputTokens))}`),
+		theme.fg("muted", `R${safeAmount(snapshot.cacheReadTokens) > 0 ? formatTokenCount(snapshot.cacheReadTokens) : "0k"}`),
+	];
+	const cacheHit = theme.fg(
+		cacheHitStatusColor(snapshot.cacheHitPercent),
+		`CH${formatCacheHitPercent(snapshot.cacheHitPercent)}%`,
+	);
+	const statsSeparator = theme.fg("muted", " · ");
+	const statsText = `${statsParts.join(" ")}${statsSeparator}${cacheHit}`;
+	const statsCompact = `${statsParts[2]!}${statsSeparator}${cacheHit}`;
+	const contextWindow = contextUsage?.contextWindow ?? contextWindowFallback;
+	const contextTokens = contextUsage?.tokens ?? 0;
+	const contextValue = contextWindow
+		? `${formatContextUsageTokenCount(contextTokens)}/${formatContextTokenCount(contextWindow)}`
+		: `${formatContextUsageTokenCount(contextTokens)}/?`;
+	const contextText = `${glyphs.context} ${contextValue}`;
+	const stats = {
+		id: "tokens",
+		text: statsText,
+		compactText: statsCompact,
+		priority: 4,
+	};
+	const byId: Readonly<Record<EditorUsageSegmentId, StatusSegment>> = {
+		// tokens 与 cache 已合并为统计组，两个段 id 任一启用即显示
+		tokens: stats,
+		cache: stats,
+		context: {
+			id: "context",
+			text: theme.fg(contextUsageStatusColor(contextUsage?.percent), contextText),
+			priority: 0,
+			required: true,
+		},
+	};
+	const showConversationCounts = segments.includes("tokens")
+		|| segments.includes("cache")
+		|| snapshot.turns > 0
+		|| snapshot.compactions > 0;
+	const turnStatus: StatusSegment = {
+		id: "turns",
+		text: snapshot.turns > 0 ? theme.fg(turnStatusColor(snapshot.turns), `${glyphs.turns} T${snapshot.turns}`) : "",
+		priority: 6,
+	};
+	const compactionStatus: StatusSegment = {
+		id: "compactions",
+		text: theme.fg(
+			compactionStatusColor(snapshot.compactions),
+			`${glyphs.compaction} ${autoCompactionEnabled ? "Auto" : "Off"}${snapshot.compactions > 0 ? `（C${snapshot.compactions}）` : ""}`,
+		),
+		priority: 5,
+	};
+	const seen = new Set<string>();
+	return segments.flatMap((segment) => {
+		const status = byId[segment];
+		if (!status.text || seen.has(status.id)) return [];
+		seen.add(status.id);
+		if (segment !== "context") return [status];
+		const extras: StatusSegment[] = [compactionStatus];
+		const ordered = showConversationCounts
+			? [turnStatus, status, ...extras]
+			: [status, ...extras];
+		return ordered.filter((extra) => extra.text);
+	});
+}
+
+function buildSegments(
+	snapshot: SessionStatusSnapshot,
+	theme: Theme,
+	glyphs: IconGlyphs,
+): Readonly<Record<SessionStatusSegmentId, StatusLineSegment>> {
+	const sessionLabel = snapshot.sessionName ?? snapshot.sessionId.slice(0, 8);
+	const input = snapshot.inputTokens > 0
+		? theme.fg("text", `${glyphs.inputTokens} ${formatTokenCount(snapshot.inputTokens)}`)
+		: "";
+	const compactInput = snapshot.inputTokens > 0
+		? theme.fg("text", `${glyphs.inputTokens}${formatTokenCount(snapshot.inputTokens)}`)
+		: "";
+	const output = snapshot.outputTokens > 0
+		? theme.fg("success", `${glyphs.outputTokens} ${formatTokenCount(snapshot.outputTokens)}`)
+		: "";
+	const compactOutput = snapshot.outputTokens > 0
+		? theme.fg("success", `${glyphs.outputTokens}${formatTokenCount(snapshot.outputTokens)}`)
+		: "";
+	const cacheParts = [
+		snapshot.cacheReadTokens > 0 ? `R${formatTokenCount(snapshot.cacheReadTokens)}` : "",
+		snapshot.cacheWriteTokens > 0 ? `W${formatTokenCount(snapshot.cacheWriteTokens)}` : "",
+		snapshot.cacheHitPercent !== undefined
+			? `CH${snapshot.cacheHitPercent.toFixed(1)}%`
+			: "",
+	].filter(Boolean);
+	const compactCache = snapshot.cacheHitPercent !== undefined
+		? `${Math.round(snapshot.cacheHitPercent)}%`
+		: formatTokenCount(snapshot.cacheReadTokens + snapshot.cacheWriteTokens);
+	const costValue = `$${snapshot.cost.toFixed(3)}`;
+	const costText = glyphs.cost === "$" ? costValue : `${glyphs.cost} ${costValue}`;
+
+	return {
+		session: {
+			id: "session",
+			text: sessionLabel ? theme.fg("accent", `${glyphs.session} ${sessionLabel}`) : "",
+			compactText: sessionLabel ? theme.fg("accent", `${glyphs.session}${sessionLabel}`) : "",
+			priority: 4,
+		},
+		tokens: {
+			id: "tokens",
+			text: [input, output].filter(Boolean).join(" "),
+			compactText: [compactInput, compactOutput].filter(Boolean).join(" "),
+			priority: 1,
+		},
+		cache: {
+			id: "cache",
+			text: cacheParts.length > 0
+				? theme.fg("muted", `${glyphs.cache} ${cacheParts.join(" ")}`)
+				: "",
+			compactText: cacheParts.length > 0
+				? theme.fg("muted", `${glyphs.cache}${compactCache}`)
+				: "",
+			priority: 3,
+		},
+		cost: {
+			id: "cost",
+			text: snapshot.cost > 0 ? theme.fg("warning", costText) : "",
+			priority: 2,
+		},
+	};
+}
+
+function renderStates(states: readonly RenderState[], separator: string): string {
+	return states.filter((state) => !state.hidden && state.text).map((state) => state.text).join(separator);
+}
+
+export function renderStatusLineSegments(
+	segments: readonly StatusLineSegment[],
+	width: number,
+	separator = SEPARATOR,
+): string {
+	if (width <= 0) return "";
+	const states: RenderState[] = segments.map((segment) => ({
+		segment,
+		text: segment.text,
+		compacted: false,
+		hidden: !segment.text,
+	}));
+	let line = renderStates(states, separator);
+
+	while (visibleWidth(line) > width) {
+		const state = states
+			.filter((candidate) => !candidate.hidden)
+			.sort((left, right) => right.segment.priority - left.segment.priority)[0];
+		if (!state) return "";
+		const compact = state.segment.compactText;
+		if (!state.compacted && compact && compact !== state.text) {
+			state.text = compact;
+			state.compacted = true;
+		} else {
+			state.hidden = true;
+		}
+		line = renderStates(states, separator);
+	}
+
+	return line;
+}
+
+export function renderSessionStatusLine(
+	snapshot: SessionStatusSnapshot,
+	width: number,
+	theme: Theme,
+	glyphs: IconGlyphs = DEFAULT_GLYPHS,
+	segments: readonly SessionStatusSegmentId[] = ["tokens", "cost"],
+	extraSegments: readonly StatusLineSegment[] = [],
+): string {
+	const byId = buildSegments(snapshot, theme, glyphs);
+	const ordered = [...new Set(segments)].map((segment) => byId[segment]);
+	return renderStatusLineSegments([...ordered, ...extraSegments], width);
+}

@@ -1,0 +1,28 @@
+{
+  "name": "pi-toolkit",
+  "version": "0.0.1",
+  "description": "Pi all-in-one toolkit: one extension package aggregating everyday tools (vision assistance, subagent orchestration, provider status, appearance) behind a native settings menu",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-toolkit"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "themes": [
+      "./modules/tui/themes"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.85.0",
+    "@earendil-works/pi-tui": ">=0.85.0",
+    "@sinclair/typebox": "*"
+  },
+  "optionalDependencies": {
+    "sharp": "^0.35.3"
+  }
+}
