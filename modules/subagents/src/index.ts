@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   readFileSync,
@@ -747,6 +747,97 @@ function updateWidget() {
   );
 }
 
+/** 统一路径形态供包含判定:Windows 大小写不敏感,统一小写;POSIX 下仅极端目录名受影响且偏向保守跳过。 */
+function normalizeForContains(path: string): string {
+  return resolve(path).replace(/[\\/]+/g, "/").toLowerCase();
+}
+
+function isWithin(path: string, root: string): boolean {
+  const p = normalizeForContains(path);
+  const r = normalizeForContains(root);
+  return p === r || p.startsWith(r + "/");
+}
+
+/** 本扩展的完整包名(@scope/name 或 name),从自身 package.json 读取,发布树与开发树同源。 */
+function ownPackageName(): string | null {
+  try {
+    const pkg: unknown = JSON.parse(readFileSync(join(SUBAGENTS_DIR, "..", "..", "..", "package.json"), "utf8"));
+    const name = (pkg as { name?: unknown } | null)?.name;
+    return typeof name === "string" && name ? name : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 从 packages 条目解析包名(去版本/ref):
+ * npm:@scope/name@1.2.3 → @scope/name(全名,保留 scope 供精确比对);
+ * git:host/path#ref → path 末段;绝对路径 → 末段目录名。
+ */
+function entryPackageName(entry: string): string | null {
+  if (entry.startsWith("npm:")) {
+    let spec = entry.slice("npm:".length);
+    if (spec.startsWith("@")) {
+      // scoped 包:首个 @ 是 scope 分隔,版本从第二个 @ 起
+      const rest = spec.slice(1);
+      const at = rest.indexOf("@");
+      spec = at >= 0 ? `@${rest.slice(0, at)}` : `@${rest}`;
+    } else {
+      const at = spec.indexOf("@");
+      if (at >= 0) spec = spec.slice(0, at);
+    }
+    return spec;
+  }
+  if (entry.startsWith("git:")) {
+    const pathPart = entry.split("#")[0].replace(/^git:(https?:\/\/)?/, "");
+    return pathPart.split("/").filter(Boolean).pop() ?? null;
+  }
+  if (isAbsolute(entry)) {
+    return entry.split(/[\\/]/).filter(Boolean).pop() ?? null;
+  }
+  return null;
+}
+
+/**
+ * 判定子进程的扩展发现是否会注册与本模块同批的工具(spawning 工具):
+ * 读子进程 agentDir 的 settings.json,packages 里任一条目是本包,或绝对
+ * 路径条目的安装根覆盖 SUBAGENTS_DIR(本地测试包场景),即成立。
+ * 与“是否同一份拷贝”无关:任何一份 pi-toolkit 被发现都会注册同批工具,
+ * 再注入本模块必致工具名冲突。读不到或格式异常按不成立处理(保守保留注入)。
+ * 匹配精度:npm 条目带 scope,全名精确匹配;git/绝对路径没有 scope 对应
+ * 关系只能末段名匹配——误命中面仅限“同时装着同名异主的 git 仓/目录”,
+ * 后果是少注入一次(工具由那份同名包提供,仍可用),可接受。
+ */
+function childDiscoversOwnPackage(agentDir: string | null): boolean {
+  const dir = agentDir ?? join(homedir(), ".pi", "agent");
+  const target = resolve(SUBAGENTS_DIR);
+  const own = ownPackageName();
+  try {
+    const settings: unknown = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
+    const packages = (settings as { packages?: unknown } | null)?.packages;
+    if (!Array.isArray(packages)) return false;
+    for (const raw of packages) {
+      // 字符串条目是实证形态;对象形态(source/id 字段)未经证实但兼容成本极低,
+      // 防御性保留,真出现对象条目时也不至于静默漏判
+      const entry = typeof raw === "string"
+        ? raw
+        : raw && typeof raw === "object"
+          ? [((raw as { source?: unknown }).source), ((raw as { id?: unknown }).id)].find(
+              (value): value is string => typeof value === "string",
+            ) ?? null
+          : null;
+      if (!entry) continue;
+      const name = entryPackageName(entry);
+      if (own && name === own) return true;
+      if (own && !entry.startsWith("npm:") && name === own.split("/").pop()) return true;
+      if (isAbsolute(entry) && isWithin(target, entry)) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 /**
  * Apply a loadout snapshot's sandbox to a pi command's `parts` array: model,
  * identity (system prompt), and the profile's tool restriction. Pi's normal
@@ -813,9 +904,17 @@ function applySandboxToParts(
     // -e 注入的路径 containment:只允许插件自身目录与宿主 extensions 目录下的
     // 扩展被回装,防止注册表被注入任意路径后把不可信代码带进子代理沙箱。
     const trustedRoots = [resolve(SUBAGENTS_DIR), resolve(join(getAgentConfigDir(), "extensions"))];
+    // 子进程保留扩展发现:当子进程 agentDir 的 packages 已注册覆盖本模块
+    // 目录的包时,再 -e 注入本模块会把同一批工具注册两次,子进程以工具名
+    // 冲突拒绝启动(exit 1)。此时跳过本模块的注入,工具由发现路径提供;
+    // 仅当发现路径给不出本模块(-e 开发版启动且未装包)才注入。
+    const skipSelfInjection = childDiscoversOwnPackage(loadout.agentDir);
     for (const extPath of extPaths) {
       const resolved = resolve(extPath);
       if (!trustedRoots.some((root) => resolved === root || resolved.startsWith(root + sep))) continue;
+      // 注入候选只可能来自本模块树(spawning 工具映射 index.ts、safe_bash 映射
+      // tools/safe-bash.ts),所以按 SUBAGENTS_DIR 树判定落点即可,与包根无关。
+      if (skipSelfInjection && isWithin(resolved, SUBAGENTS_DIR)) continue;
       parts.push("-e", escape(resolved));
     }
   }
