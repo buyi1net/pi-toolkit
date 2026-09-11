@@ -17,10 +17,17 @@ import {
 	type TUI,
 	type TuiMainScreenRenderState,
 } from "@earendil-works/pi-tui";
-import type { UsageRuntimeState } from "../kernel/usage-node.ts";
+import type { UsageRuntimeState } from "../../providers/api.ts";
 import {
-	splitNativeEditorRender,
+	resolveStatusSettings,
+	type EditorLeftSegmentId,
+	type ResolvedStatusSettings,
+	type TurnTimerSnapshot,
+} from "../../status/api.ts";
+import { sanitizeSingleLine } from "../../../shared/sanitize.ts";
+import {
 	insertTopBorderStatus,
+	splitNativeEditorRender,
 } from "../renderer/editor.ts";
 import { resolveGlyphs, type IconGlyphs } from "../renderer/icons.ts";
 import {
@@ -29,13 +36,7 @@ import {
 	layoutEditorStatus,
 	thinkingStatusColor,
 	type StatusSegment,
-	type TurnTimerSnapshot,
 } from "../status/status-segments.ts";
-import {
-	resolveStatusSettings,
-	type EditorLeftSegmentId,
-	type ResolvedStatusSettings,
-} from "../status/status-config.ts";
 import { buildEditorProviderSegments } from "../status/provider-status.ts";
 import type {
 	EditorLayoutSource,
@@ -44,7 +45,6 @@ import type {
 	StatusAppearance,
 } from "./status-sources.ts";
 import { isMainScreenTui, isSafeRenderState } from "./screen-transition.ts";
-import { sanitizeSingleLine } from "../status/project-status.ts";
 
 const MIN_DECORATED_WIDTH = 6;
 
@@ -136,10 +136,10 @@ export interface PiUiEditorHooks {
 export class PiUiEditor extends CustomEditor {
 	private readonly ctx: ExtensionContext;
 	private readonly getGlyphs: () => IconGlyphs;
-	private readonly settings: ResolvedStatusSettings;
+	private readonly getSettings: () => ResolvedStatusSettings;
 	private readonly getFooterHeight: () => number;
 	private readonly getProviderStatus: () => UsageRuntimeState | undefined;
-	private readonly getTimer: () => TurnTimerSnapshot;
+	private readonly getTimer: () => TurnTimerSnapshot | undefined;
 	private readonly appKeybindings: KeybindingsManager;
 	private readonly autocompleteOverlay: Component & { setLines(lines: readonly string[]): void };
 	private readonly autocompleteOverlayOptions: OverlayOptions;
@@ -168,11 +168,11 @@ export class PiUiEditor extends CustomEditor {
 		super(tui, theme, keybindings);
 		this.ctx = ctx;
 		this.getGlyphs = appearance.getGlyphs ?? (() => resolveGlyphs("unicode"));
-		this.settings = appearance.settings ?? resolveStatusSettings({});
+		this.getSettings = appearance.getSettings ?? (() => resolveStatusSettings({}));
 		this.getFooterHeight = layout.getFooterHeight ?? (() => 0);
 		this.getProviderStatus = provider.getState ?? (() => undefined);
 		this.hooks = hooks;
-		this.getTimer = session.getTimer ?? (() => ({ state: "idle", elapsedMs: 0 }));
+		this.getTimer = session.getTimer ?? (() => undefined);
 		this.appKeybindings = keybindings;
 		this.autocompleteOverlay = {
 			setLines: (lines) => { this.autocompleteOverlayLines = [...lines]; },
@@ -210,9 +210,9 @@ export class PiUiEditor extends CustomEditor {
 				this.ctx.ui.theme,
 				this.getGlyphs(),
 				width,
-				this.settings,
+				this.getSettings(),
 				this.getProviderStatus(),
-				this.getTimer(),
+				this.getTimer() ?? { state: "idle", elapsedMs: 0 },
 			).left,
 			borderColor: (text) => this.borderColor(text),
 		});

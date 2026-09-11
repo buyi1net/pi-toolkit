@@ -8,15 +8,15 @@
 //
 // 写盘落点（工单 04 归一裁决）全在 pi-toolkit.json 的 `modules.subagents` 节；
 // tier 解析仍是六级覆盖链，本页只写第 4 级。缺映射时行描述直接用
-// src/routing.ts 的原版报错文案（不翻译、不改写），与真正 spawn 时抛出的字符串一致。
+// routing.ts 的原版报错文案（不翻译、不改写），与真正 spawn 时抛出的字符串一致。
 
 import { type ExtensionContext, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { Container, type SettingItem, Text } from "@earendil-works/pi-tui";
-import type { Translator } from "../../i18n.ts";
-import { ChoicePicker } from "../../menu/panels.ts";
-import { I18nSettingsList } from "../../menu/settings-list.ts";
-import type { MenuTheme } from "../../menu/theme.ts";
-import type { ModuleMenuContext } from "../../module.ts";
+import type { Translator } from "../../i18n/index.ts";
+import { ChoicePicker } from "../../kit/menu/panels.ts";
+import { I18nSettingsList } from "../../kit/menu/settings-list.ts";
+import type { MenuTheme } from "../../kit/menu/theme.ts";
+import type { ModuleMenuContext } from "../../kit/module.ts";
 import {
   loadEffectiveTierConfig,
   MODEL_TIERS,
@@ -28,7 +28,7 @@ import {
   type TierConfigLoadResult,
   type TierMapping,
 } from "./config.ts";
-import { loadStatusConfig } from "./src/status.ts";
+import { loadStatusConfig } from "./status.ts";
 
 /**
  * 包内 config.json（→ config.json.example）的 status.enabled：
@@ -106,7 +106,7 @@ export function tierRoutingSummary(
 }
 
 /**
- * 第一档缺映射时的原版报错文案。取 src/routing.ts 的 resolveTierForParams 输出，
+ * 第一档缺映射时的原版报错文案。取 routing.ts 的 resolveTierForParams 输出，
  * 与真正 spawn 时抛出的字符串逐字一致；三档都配齐时返回 undefined。
  */
 export function firstTierProblem(
@@ -273,7 +273,7 @@ export class SubagentsPanel extends Container {
     if (this.state.mapping[tier]) {
       return this.options.t("module.subagents.tier.description", { tier });
     }
-    // 缺映射：直接用 src/routing.ts 的原版报错文案（不翻译，保证与原版逐字一致）
+    // 缺映射：直接用 routing.ts 的原版报错文案（不翻译，保证与原版逐字一致）
     return tierRouteError(tier, () => this.loadTierConfig())
       ?? this.options.t("module.subagents.tier.description", { tier });
   }

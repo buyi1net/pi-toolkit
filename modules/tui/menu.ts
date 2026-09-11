@@ -5,30 +5,21 @@
 //   顶部信息栏   —— modules.tui.appearance.header
 //   底部状态栏   —— modules.tui.appearance.footer（迁入后新增的总开关）
 //   工作指示动画 —— modules.tui.advanced.spinner（默认 / 静态 / 隐藏）
-//   状态预设     —— modules.tui.status.preset（minimal / default / full）
-//   余额刷新间隔 —— modules.tui.data.providerRefreshMs
-//   回复遥测     —— modules.tui.data.telemetry
-//   供应商凭据   —— 只读：检测 <agentDir>/pi-tui.json 是否存在
 //
+// 余额刷新间隔与供应商凭据行随工单 10 归 providers 模块（modules/providers/menu.ts）；
+// 状态预设与回复遥测行随工单 11 归 status 模块（modules/status/menu.ts）。
 // 写盘全落 pi-toolkit.json 的 `modules.tui` 节；保存后立刻让 lifecycle 重装常驻 UI
 // （与原 pi-tui 设置保存后的原子重装一致），因此外观开关是即时生效的。
 
 import { Container, type SettingItem, Text } from "@earendil-works/pi-tui";
-import type { MessageKey, Translator } from "../../i18n.ts";
-import { ChoicePicker, type ChoiceOption } from "../../menu/panels.ts";
-import { I18nSettingsList } from "../../menu/settings-list.ts";
-import type { MenuTheme } from "../../menu/theme.ts";
-import type { ModuleMenuContext } from "../../module.ts";
+import type { Translator } from "../../i18n/index.ts";
+import { ChoicePicker, type ChoiceOption } from "../../kit/menu/panels.ts";
+import { I18nSettingsList } from "../../kit/menu/settings-list.ts";
+import type { MenuTheme } from "../../kit/menu/theme.ts";
+import type { ModuleMenuContext } from "../../kit/module.ts";
 import { readTuiSection, saveTuiSection, type TuiSectionUpdate } from "./config.ts";
-import {
-	PROVIDER_REFRESH_INTERVALS,
-	piTuiConfigPath,
-	providerAccessConfigured,
-	type PiTuiConfig,
-	type ProviderRefreshMs,
-	type SpinnerMode,
-} from "./plugin/settings-config.ts";
-import { STATUS_PRESET_NAMES, type StatusPresetName } from "./status/status-config.ts";
+import type { TuiMessageKey } from "./messages/index.ts";
+import { type PiTuiConfig, type SpinnerMode } from "./plugin/settings-config.ts";
 
 /** 分组页里的入口行 id */
 export const TUI_MENU_ITEM_ID = "tui.settings";
@@ -37,10 +28,6 @@ const ROW_EDITOR = "tui.settings.editor";
 const ROW_HEADER = "tui.settings.header";
 const ROW_FOOTER = "tui.settings.footer";
 const ROW_SPINNER = "tui.settings.spinner";
-const ROW_PRESET = "tui.settings.preset";
-const ROW_REFRESH = "tui.settings.refresh";
-const ROW_TELEMETRY = "tui.settings.telemetry";
-const ROW_PROVIDER_ACCESS = "tui.settings.providerAccess";
 
 export const SPINNER_MODES: readonly SpinnerMode[] = ["default", "static", "hidden"];
 
@@ -51,10 +38,6 @@ export function panelRowIds(): readonly string[] {
 		ROW_HEADER,
 		ROW_FOOTER,
 		ROW_SPINNER,
-		ROW_PRESET,
-		ROW_REFRESH,
-		ROW_TELEMETRY,
-		ROW_PROVIDER_ACCESS,
 	];
 }
 
@@ -75,34 +58,6 @@ export function spinnerLabel(t: Translator, mode: SpinnerMode): string {
 		case "hidden":
 			return t("module.tui.spinner.hidden");
 	}
-}
-
-export function presetLabel(t: Translator, preset: StatusPresetName): string {
-	switch (preset) {
-		case "minimal":
-			return t("module.tui.preset.minimal");
-		case "default":
-			return t("module.tui.preset.default");
-		case "full":
-			return t("module.tui.preset.full");
-	}
-}
-
-function refreshLabelKey(ms: ProviderRefreshMs): MessageKey {
-	switch (ms) {
-		case 30_000:
-			return "module.tui.refresh.30";
-		case 60_000:
-			return "module.tui.refresh.60";
-		case 120_000:
-			return "module.tui.refresh.120";
-		case 300_000:
-			return "module.tui.refresh.300";
-	}
-}
-
-export function refreshLabel(t: Translator, ms: ProviderRefreshMs): string {
-	return t(refreshLabelKey(ms));
 }
 
 export function boolLabel(t: Translator, value: boolean): string {
@@ -193,7 +148,6 @@ export class TuiPanel extends Container {
 	}
 
 	private readConfig(): PiTuiConfig {
-		// 凭据文件状态单独查（providerAccessValue），这里只解析 modules.tui 节
 		return readTuiSection(this.options.getSection()).config;
 	}
 
@@ -217,17 +171,7 @@ export class TuiPanel extends Container {
 		this.list?.updateValue(ROW_HEADER, boolLabel(t, cfg.appearance.header));
 		this.list?.updateValue(ROW_FOOTER, boolLabel(t, cfg.appearance.footer));
 		this.list?.updateValue(ROW_SPINNER, spinnerLabel(t, cfg.advanced.spinner));
-		this.list?.updateValue(ROW_PRESET, presetLabel(t, cfg.status.preset));
-		this.list?.updateValue(ROW_REFRESH, refreshLabel(t, cfg.data.providerRefreshMs));
-		this.list?.updateValue(ROW_TELEMETRY, boolLabel(t, cfg.data.telemetry));
-		this.list?.updateValue(ROW_PROVIDER_ACCESS, this.providerAccessValue());
 		this.options.requestRender();
-	}
-
-	private providerAccessValue(): string {
-		return providerAccessConfigured(this.options.agentDir)
-			? this.options.t("module.tui.providerAccess.configured")
-			: this.options.t("module.tui.providerAccess.missing");
 	}
 
 	private runSave(update: TuiSectionUpdate, label: string, done: (value?: string) => void): void {
@@ -249,8 +193,8 @@ export class TuiPanel extends Container {
 
 	private boolRow(params: {
 		id: string;
-		labelKey: MessageKey;
-		descriptionKey: MessageKey;
+		labelKey: TuiMessageKey;
+		descriptionKey: TuiMessageKey;
 		current: boolean;
 		apply: (value: boolean) => TuiSectionUpdate;
 	}): SettingItem {
@@ -277,8 +221,8 @@ export class TuiPanel extends Container {
 
 	private choiceRow(params: {
 		id: string;
-		labelKey: MessageKey;
-		descriptionKey: MessageKey;
+		labelKey: TuiMessageKey;
+		descriptionKey: TuiMessageKey;
 		current: string;
 		options: ChoiceOption[];
 		apply: (value: string) => TuiSectionUpdate;
@@ -343,47 +287,6 @@ export class TuiPanel extends Container {
 			})),
 			apply: (spinner) => ({ advanced: { spinner: spinner as SpinnerMode } }),
 		}));
-
-		items.push(this.choiceRow({
-			id: ROW_PRESET,
-			labelKey: "module.tui.preset.label",
-			descriptionKey: "module.tui.preset.description",
-			current: presetLabel(t, cfg.status.preset),
-			options: STATUS_PRESET_NAMES.map((preset) => ({
-				value: preset,
-				label: presetLabel(t, preset),
-				...(preset === cfg.status.preset ? { description: t("common.current") } : {}),
-			})),
-			apply: (preset) => ({ status: { preset: preset as StatusPresetName } }),
-		}));
-
-		items.push(this.choiceRow({
-			id: ROW_REFRESH,
-			labelKey: "module.tui.refresh.label",
-			descriptionKey: "module.tui.refresh.description",
-			current: refreshLabel(t, cfg.data.providerRefreshMs),
-			options: PROVIDER_REFRESH_INTERVALS.map((ms) => ({
-				value: String(ms),
-				label: refreshLabel(t, ms),
-				...(ms === cfg.data.providerRefreshMs ? { description: t("common.current") } : {}),
-			})),
-			apply: (value) => ({ data: { providerRefreshMs: Number(value) as ProviderRefreshMs } }),
-		}));
-
-		items.push(this.boolRow({
-			id: ROW_TELEMETRY,
-			labelKey: "module.tui.telemetry.label",
-			descriptionKey: "module.tui.telemetry.description",
-			current: cfg.data.telemetry,
-			apply: (telemetry) => ({ data: { telemetry } }),
-		}));
-
-		items.push({
-			id: ROW_PROVIDER_ACCESS,
-			label: t("module.tui.providerAccess.label"),
-			description: `${t("module.tui.providerAccess.description")} ${piTuiConfigPath(this.options.agentDir)}`,
-			currentValue: this.providerAccessValue(),
-		});
 
 		return items;
 	}

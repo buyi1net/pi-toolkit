@@ -2,17 +2,16 @@
 //
 // 节结构（与迁入前的 pi-tui.json 外观语义一致，只是换了宿主文件）：
 //   modules.tui.appearance.editor / header / footer
-//   modules.tui.status.preset / segments
-//   modules.tui.data.providerRefreshMs / telemetry
 //   modules.tui.advanced.spinner
-// 供应商查询凭据不在这里：按用户裁决留在独立文件 <agentDir>/pi-tui.json，
-// 本模块只读（见 plugin/settings-config.ts），toolkit 永不写它。
+// 供应商查询凭据与刷新间隔不在这里（工单 10 归 providers 模块）：
+// 凭据留在独立文件 <agentDir>/pi-tui.json，刷新间隔在 modules.providers.refreshMs。
+// 状态预设 / 段位与回复遥测开关也不在这里（工单 11 归 status 模块：modules.status.*）。
 //
 // 写盘走骨架的 saveToolkitConfig：深合并、剥敏感键、0600 原子替换。
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { getToolkitConfigPath, saveToolkitConfig } from "../../config.ts";
-import type { ModuleConfigRecord } from "../../module.ts";
+import { getToolkitConfigPath, saveToolkitConfig } from "../../kit/config.ts";
+import type { ModuleConfigRecord } from "../../kit/module.ts";
 import {
 	parseTuiSection,
 	type LoadedPiTuiConfig,
@@ -25,8 +24,6 @@ export const TUI_SECTION_LABEL = `modules.${TUI_MODULE_ID}`;
 
 export type TuiSectionUpdate = {
 	appearance?: Partial<PiTuiConfig["appearance"]>;
-	status?: Partial<PiTuiConfig["status"]>;
-	data?: Partial<Pick<PiTuiConfig["data"], "providerRefreshMs" | "telemetry">>;
 	advanced?: Partial<PiTuiConfig["advanced"]>;
 };
 

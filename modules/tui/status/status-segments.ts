@@ -1,5 +1,12 @@
+// tui 渲染半：段位渲染组装（工单 07 定案 5：整文件留在 tui 侧，实为渲染辅助）。
+//
+// 工单 11：回合计时器的状态与控制器（TurnTimerController / TurnTimerSnapshot /
+// TurnTimerState）已切到 modules/status/turn-timer.ts（数据半），本文件只保留
+// 排版、压缩、配色与格式化的渲染逻辑。
+
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { TurnTimerState } from "../../status/api.ts";
 
 const SEGMENT_SEPARATOR = " · ";
 const EDITOR_STATUS_CHROME_WIDTH = 11;
@@ -118,8 +125,6 @@ export function layoutEditorStatus(
 	return layoutWidth(layout) <= budget ? layout : truncateRequiredLayout(layout, budget);
 }
 
-export type TurnTimerState = "idle" | "working" | "done";
-
 const THINKING_COLORS: Readonly<Record<string, ThemeColor>> = {
 	off: "thinkingOff",
 	minimal: "thinkingMinimal",
@@ -171,11 +176,6 @@ export function durationStatusColor(state: TurnTimerState): ThemeColor {
 	return "dim";
 }
 
-export interface TurnTimerSnapshot {
-	state: TurnTimerState;
-	elapsedMs: number;
-}
-
 export function formatElapsed(elapsedMs: number): string {
 	const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
 	const seconds = totalSeconds % 60;
@@ -185,79 +185,4 @@ export function formatElapsed(elapsedMs: number): string {
 	const hours = Math.floor(totalMinutes / 60);
 	if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
 	return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
-}
-
-export class TurnTimerController {
-	private readonly requestRender: () => void;
-	private readonly intervalMs: number;
-	private readonly now: () => number;
-	private startedAt: number | undefined;
-	private completedElapsedMs: number | undefined;
-	private interval: ReturnType<typeof setInterval> | undefined;
-	private disposed = false;
-
-	constructor(
-		requestRender: () => void,
-		intervalMs = 1000,
-		now: () => number = Date.now,
-		completedElapsedMs?: number,
-	) {
-		this.requestRender = requestRender;
-		this.intervalMs = intervalMs;
-		this.now = now;
-		if (Number.isFinite(completedElapsedMs) && (completedElapsedMs ?? -1) >= 0) {
-			this.completedElapsedMs = completedElapsedMs;
-		}
-	}
-
-	start(): void {
-		if (this.disposed) return;
-		this.stopInterval();
-		this.startedAt = this.now();
-		this.completedElapsedMs = undefined;
-		this.interval = setInterval(() => this.requestRender(), this.intervalMs);
-		this.interval.unref();
-		this.requestRender();
-	}
-
-	end(): number | undefined {
-		if (this.disposed || this.startedAt === undefined) return undefined;
-		this.completedElapsedMs = Math.max(0, this.now() - this.startedAt);
-		this.startedAt = undefined;
-		this.stopInterval();
-		this.requestRender();
-		return this.completedElapsedMs;
-	}
-
-	restore(elapsedMs: number): void {
-		if (this.disposed || !Number.isFinite(elapsedMs) || elapsedMs < 0) return;
-		this.startedAt = undefined;
-		this.completedElapsedMs = elapsedMs;
-		this.stopInterval();
-		this.requestRender();
-	}
-
-	getSnapshot(): TurnTimerSnapshot {
-		if (this.startedAt !== undefined) {
-			return {
-				state: "working",
-				elapsedMs: Math.max(0, this.now() - this.startedAt),
-			};
-		}
-		if (this.completedElapsedMs !== undefined) {
-			return { state: "done", elapsedMs: this.completedElapsedMs };
-		}
-		return { state: "idle", elapsedMs: 0 };
-	}
-
-	dispose(): void {
-		if (this.disposed) return;
-		this.disposed = true;
-		this.stopInterval();
-	}
-
-	private stopInterval(): void {
-		if (this.interval) clearInterval(this.interval);
-		this.interval = undefined;
-	}
 }

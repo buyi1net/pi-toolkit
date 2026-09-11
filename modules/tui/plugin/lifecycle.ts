@@ -1,10 +1,8 @@
 import {
-	SettingsManager,
 	VERSION,
 	getAgentDir,
 	type ExtensionAPI,
 	type ExtensionContext,
-	type ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
 import type {
 	EditorTheme,
@@ -12,29 +10,9 @@ import type {
 	TuiMainScreenRenderState,
 } from "@earendil-works/pi-tui";
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import { PiProviderUsageController } from "../adapter/provider-usage.ts";
 import { PiTuiHeader } from "../renderer/header.ts";
 import { resolveGlyphs } from "../renderer/icons.ts";
-import {
-	ProjectStatusController,
-	createGitStatusQuery,
-} from "../status/project-status.ts";
-import {
-	RuntimeStatusController,
-	createRuntimeStatusDetector,
-} from "../status/runtime-status.ts";
-import { TurnTimerController } from "../status/status-segments.ts";
-import { resolveStatusSettings } from "../status/status-config.ts";
-import { collectSessionStatus } from "../status/session-status.ts";
-import {
-	TurnTelemetryController,
-	readLatestTurnDuration,
-	registerTurnTelemetryRenderers,
-} from "../status/turn-telemetry.ts";
-import {
-	AutoCompactionStatusController,
-	watchAgentSettings,
-} from "../status/auto-compaction.ts";
+import { registerTurnTelemetryRenderers } from "../status/turn-telemetry.ts";
 import {
 	loadStandaloneTuiConfig,
 	type LoadedPiTuiConfig,
@@ -58,15 +36,28 @@ import type {
 	SessionStatusSource,
 	StatusAppearance,
 } from "./status-sources.ts";
-import type { Translator } from "../../../i18n.ts";
+import type { Translator } from "../../../i18n/index.ts";
+import type { ServiceRegistry } from "../../../kit/services.ts";
+import { PROVIDERS_USAGE_SERVICE_NAME, type ProvidersUsageService } from "../../providers/api.ts";
+import {
+	STATUS_COMPACTION_SERVICE_NAME,
+	STATUS_SESSION_SERVICE_NAME,
+	STATUS_TIMER_SERVICE_NAME,
+	STATUS_WORKSPACE_SERVICE_NAME,
+	resolveStatusSettings,
+	type StatusCompactionService,
+	type StatusSessionService,
+	type StatusTimerService,
+	type StatusWorkspaceService,
+} from "../../status/api.ts";
 
 export interface PiTuiPluginDependencies {
 	agentDir?: string;
 	env?: Readonly<Record<string, string | undefined>>;
 	loadConfig?: () => LoadedPiTuiConfig;
-	readAutoCompactionEnabled?: (ctx: ExtensionContext, agentDir: string) => boolean;
-	watchAutoCompactionSettings?: (agentDir: string, onChange: () => void) => () => void;
 	transitionGate?: TerminalTransitionGate | null;
+	/** 服务注册表：providers.usage 与 status.* 句柄从这里取；未传时对应区域不显示 */
+	services?: ServiceRegistry;
 	/** 通知文案用的译者；缺省时不发本地化通知 */
 	t?: Translator;
 }
@@ -77,14 +68,15 @@ export interface PiTuiLifecycleHandle {
 	applyConfig(): boolean;
 	/** 常驻 UI 是否已安装 */
 	isActive(): boolean;
-	/** 供应商余额/套餐运行态（常驻 UI 未安装时为 undefined） */
-	getProviderUsage(): PiProviderUsageController | undefined;
 }
 
 /**
- * 插件装配与生命周期：安装/卸载 UI、创建并接线各状态控制器、订阅会话事件。
+ * 插件装配与生命周期：安装/卸载 UI、接线各状态句柄、订阅会话事件。
  * 视图组件（editor/footer/设置向导）只通过数据源分组参数接收数据与回调，
  * 不反向依赖本文件；jiti 重装与模块级状态也留在本文件内。
+ *
+ * 工单 11：状态控制器归 status 模块（status.* 句柄），供应商控制器归 providers 模块
+ * （providers.usage）；本文件只从句柄取快照、在自己的事件上触发刷新与重绘，不再 new 控制器。
  */
 export function registerPiTuiLifecycle(
 	pi: ExtensionAPI,
@@ -93,18 +85,8 @@ export function registerPiTuiLifecycle(
 ): PiTuiLifecycleHandle {
 	const env = dependencies.env ?? process.env;
 	const agentDir = dependencies.agentDir ?? getAgentDir();
-	const readConfig = dependencies.loadConfig ?? (() => loadStandaloneTuiConfig(agentDir));
+	const readConfig = dependencies.loadConfig ?? (() => loadStandaloneTuiConfig());
 	const t = dependencies.t;
-	const watchAutoCompactionSettings = dependencies.watchAutoCompactionSettings ?? watchAgentSettings;
-	const readAutoCompactionEnabled = dependencies.readAutoCompactionEnabled ?? ((ctx: ExtensionContext) => {
-		try {
-			return SettingsManager.create(ctx.cwd, agentDir, {
-				projectTrusted: ctx.isProjectTrusted?.() ?? false,
-			}).getCompactionEnabled();
-		} catch {
-			return false;
-		}
-	});
 
 	let loadedConfig = readConfig();
 	let currentConfig = loadedConfig.config;
@@ -116,20 +98,18 @@ export function registerPiTuiLifecycle(
 	let cleanupEditor: (() => void) | undefined;
 	let cleanupFooter: (() => void) | undefined;
 	let cleanupHeader: (() => void) | undefined;
-	let projectStatus: ProjectStatusController | undefined;
-	let runtimeStatus: RuntimeStatusController | undefined;
-	let providerUsage: PiProviderUsageController | undefined;
-	let turnTimer: TurnTimerController | undefined;
-	let autoCompactionStatus: AutoCompactionStatusController | undefined;
+	/** status 模块的句柄群（status 模块装配时注册；未装配时为 undefined） */
+	let statusWorkspace: StatusWorkspaceService | undefined;
+	let statusSession: StatusSessionService | undefined;
+	let statusTimer: StatusTimerService | undefined;
+	let statusCompaction: StatusCompactionService | undefined;
+	/** 供应商运行态句柄（providers 模块注册；未装配时为 undefined） */
+	let providerUsage: ProvidersUsageService | undefined;
+	/** 回合计时的重绘心跳：状态归 status 模块，重绘节奏属 tui（句柄无变更通知） */
+	let timerRepaint: ReturnType<typeof setInterval> | undefined;
 	let cleanupSpinner: (() => void) | undefined;
-	const turnTelemetry = new TurnTelemetryController({
-		isEnabled: () => currentConfig.data.telemetry,
-		getTimer: () => turnTimer,
-		appendEntry: (customType, data) => pi.appendEntry(customType, data),
-	});
 	let installedTui: TUI | undefined;
-	// 启动守卫跨 UI 工厂共享，避免宿主重建 Footer 后查询状态失步。
-	let projectConnection: { footerData: ReadonlyFooterDataProvider } | undefined;
+	// 启动守卫：首次消费只触发一次 providers 模块的周期刷新。
 	let statusQueriesStarted = false;
 	let deferredStatusImmediate: ReturnType<typeof setImmediate> | undefined;
 	let modelSwitchRepaintImmediate: ReturnType<typeof setImmediate> | undefined;
@@ -171,39 +151,35 @@ export function registerPiTuiLifecycle(
 	let transitionRevealTimer: ReturnType<typeof setTimeout> | undefined;
 	// Footer 首帧回报：模块级，供揭示门槛读取（installUi 闭包外）。
 	const layoutState = { footerHeight: 0 };
-	const connectProjectStatus = (): void => {
-		if (!projectConnection) return;
-		projectStatus?.connect(projectConnection.footerData, requestStatusRender);
-		runtimeStatus?.connect(requestStatusRender);
+	// 计时数据归 status 模块，但句柄没有变更通知：tui 以每秒心跳读快照，
+	// 工作状态下请求重绘（等价于迁出前控制器内部定时器触发的重绘）。
+	const startTimerRepaint = (): void => {
+		if (timerRepaint) return;
+		timerRepaint = setInterval(() => {
+			if (statusTimer?.snapshot()?.state === "working") requestStatusRender();
+		}, 1_000);
+		timerRepaint.unref?.();
 	};
-	const disconnectProjectStatus = (): void => {
-		if (!projectConnection) return;
-		projectConnection = undefined;
-		statusQueriesStarted = false;
-		projectStatus?.disconnect();
-		runtimeStatus?.disconnect();
+	const stopTimerRepaint = (): void => {
+		if (!timerRepaint) return;
+		clearInterval(timerRepaint);
+		timerRepaint = undefined;
 	};
-	const disposeProjectStatus = (): void => {
+	const resetStatusQueries = (): void => {
 		transitionRevealEnabled = false;
 		if (transitionRevealTimer) clearTimeout(transitionRevealTimer);
 		transitionRevealTimer = undefined;
 		if (deferredStatusImmediate) clearImmediate(deferredStatusImmediate);
 		deferredStatusImmediate = undefined;
 		statusQueriesStarted = false;
-		disconnectProjectStatus();
-		projectStatus?.dispose();
-		runtimeStatus?.dispose();
-		projectStatus = undefined;
-		runtimeStatus = undefined;
 	};
 	const startStatusQueries = (): void => {
 		// 安装尾部的延迟补排可能早于揭示，不能让它绕过首帧屏障。
 		if (statusQueriesStarted || !active || transitionGate?.isHolding()) return;
-		// 无 Footer 时没有 footerData 可接，但供应商刷新等状态查询仍要启动。
-		if (footerEnabled && !projectConnection) return;
 		statusQueriesStarted = true;
-		connectProjectStatus();
-		void providerUsage?.start();
+		// 首次消费触发 providers 模块的周期刷新；刷新完成后补一帧
+		// （句柄契约只有 snapshot/refresh，变更通知由消费方自己的事件驱动）
+		void providerUsage?.refresh().then(requestStatusRender);
 	};
 	const scheduleStatusQueries = (): void => {
 		if (statusQueriesStarted || deferredStatusImmediate) return;
@@ -235,13 +211,13 @@ export function registerPiTuiLifecycle(
 		cancelModelSwitchRepaint();
 		installedEditorRef?.dispose();
 		installedEditorRef = undefined;
-		turnTimer?.dispose();
-		autoCompactionStatus?.dispose();
-		providerUsage?.dispose();
-		disposeProjectStatus();
-		turnTimer = undefined;
-		autoCompactionStatus = undefined;
+		stopTimerRepaint();
+		resetStatusQueries();
 		providerUsage = undefined;
+		statusWorkspace = undefined;
+		statusSession = undefined;
+		statusTimer = undefined;
+		statusCompaction = undefined;
 		cleanupFooter = undefined;
 		cleanupHeader = undefined;
 		cleanupEditor = undefined;
@@ -267,79 +243,41 @@ export function registerPiTuiLifecycle(
 			? originalEditorFactory
 			: currentFactory;
 		originalEditorFactory = previousFactory;
-		const statusSettings = resolveStatusSettings(env, {
-			preset: currentConfig.status.preset,
-			segments: currentConfig.status.segments,
-		});
-		const autoCompaction = currentConfig.appearance.editor && statusSettings.footerUsage.includes("context")
-			? new AutoCompactionStatusController(
-				() => readAutoCompactionEnabled(ctx, agentDir),
-				(onChange) => watchAutoCompactionSettings(agentDir, onChange),
-				requestStatusRender,
-			)
-			: undefined;
-		autoCompactionStatus = autoCompaction;
+		const statusSettings = statusWorkspace?.settings() ?? resolveStatusSettings(env);
+		const getStatusSettings = (): ReturnType<typeof resolveStatusSettings> => statusWorkspace?.settings() ?? statusSettings;
 		const getGlyphs = () => resolveGlyphs("auto", env);
-		const timer = statusSettings.editorLeft.includes("duration")
-			? new TurnTimerController(
-				requestStatusRender,
-				1_000,
-				Date.now,
-				readLatestTurnDuration(ctx.sessionManager?.getEntries?.() ?? []),
-			)
-			: undefined;
-		const usage = statusSettings.editorLeft.some((segment) =>
-			segment === "provider" || segment === "balance" || segment === "subscription"
-		)
-			? new PiProviderUsageController(ctx, requestStatusRender, {
-				refreshMs: currentConfig.data.providerRefreshMs,
-				accessConfig: currentConfig.data.providerAccess,
-			})
-			: undefined;
-		const runtime = statusSettings.footerPrimary.includes("runtime")
-			? new RuntimeStatusController(ctx.cwd,
-				createRuntimeStatusDetector(
-					async (command, args, commandCwd, commandSignal) => {
-						const result = await pi.exec(command, [...args], {
-							cwd: commandCwd,
-							signal: commandSignal,
-							timeout: 2500,
-						});
-						return {
-							stdout: result.stdout,
-							stderr: result.stderr,
-							code: result.code,
-							killed: result.killed,
-						};
-					},
-					env,
-				),
-			)
-			: undefined;
-		const controller = statusSettings.footerPrimary.includes("git")
-			? new ProjectStatusController(ctx.cwd, createGitStatusQuery(pi.exec.bind(pi)))
-			: undefined;
-		projectStatus = controller;
-		runtimeStatus = runtime;
+		// 句柄组：控制器归 status / providers 模块（它们在自己在装配时创建），
+		// tui 只取快照；模块未装配或未启用时句柄不存在，对应区域自动降级。
+		// 供应商段是否使用由段位设置决定（渲染时过滤），这里不做门控。
+		const usage = dependencies.services?.get<ProvidersUsageService>(PROVIDERS_USAGE_SERVICE_NAME);
+		const workspace = dependencies.services?.get<StatusWorkspaceService>(STATUS_WORKSPACE_SERVICE_NAME);
+		const session = dependencies.services?.get<StatusSessionService>(STATUS_SESSION_SERVICE_NAME);
+		const timer = dependencies.services?.get<StatusTimerService>(STATUS_TIMER_SERVICE_NAME);
+		const compaction = dependencies.services?.get<StatusCompactionService>(STATUS_COMPACTION_SERVICE_NAME);
+		statusWorkspace = workspace;
+		statusSession = session;
+		statusTimer = timer;
+		statusCompaction = compaction;
+		providerUsage = usage;
 		let activeTui: TUI | undefined;
 		let preClearState: TuiMainScreenRenderState | undefined;
 		let headerInstalled = false;
 		let footerInstalled = false;
 		let installedEditor: PiUiEditor | undefined;
-		// 数据源分组接线：视图构造器只收分组接口；控制器刷新回调（供应商刷新、
-		// 转场闸门等模块级状态）留在装配层，不外泄到视图构造接口。
-		const appearanceSource: StatusAppearance = { getGlyphs, settings: statusSettings };
-		const providerSource: ProviderUsageSource = usage ? { getState: () => usage.getState() } : {};
+		// 数据源分组接线：视图构造器只收分组接口；段位设置每帧读取
+		// （status 模块配置改动后下一次重绘即生效）。
+		const appearanceSource: StatusAppearance = { getGlyphs, getSettings: getStatusSettings };
+		const providerSource: ProviderUsageSource = { getState: () => usage?.snapshot() };
 		const sessionSource: SessionStatusSource = {
-			getTimer: () => timer?.getSnapshot() ?? { state: "idle", elapsedMs: 0 },
-			getSessionStatus: () => collectSessionStatus(ctx.sessionManager),
+			getTimer: () => timer?.snapshot(),
+			getSessionStatus: () => session?.snapshot(),
 			getContextUsage: () => ctx.getContextUsage(),
 			getContextWindow: () => ctx.model?.contextWindow,
-			getAutoCompactionEnabled: () => autoCompaction?.getSnapshot() ?? false,
+			getAutoCompactionEnabled: () => compaction?.snapshot(),
 		};
 		const projectSource: ProjectEnvironmentSource = {
-			getProjectStatus: controller ? () => controller.getSnapshot() : undefined,
-			getRuntimeStatus: runtime ? () => runtime.getSnapshot() : undefined,
+			getProjectStatus: workspace ? () => workspace.snapshot() : undefined,
+			getRuntimeStatus: workspace ? () => workspace.snapshot()?.runtime : undefined,
 			cwd: ctx.cwd,
 		};
 		const editorLayoutSource: EditorLayoutSource = { getFooterHeight: () => layoutState.footerHeight };
@@ -403,9 +341,6 @@ export function registerPiTuiLifecycle(
 				ctx.ui.setFooter((tui, theme, footerData) => {
 					activeTui ??= tui;
 					installedTui = tui;
-					disconnectProjectStatus();
-					const connection = { footerData };
-					projectConnection = connection;
 					const installedFooter = new ProjectStatusFooter(
 						tui,
 						theme,
@@ -417,9 +352,6 @@ export function registerPiTuiLifecycle(
 						{
 							beforeDispose: () => {
 								transitionGate?.hold(tui);
-								// 宿主可能先创建替代 Footer 再卸载旧实例，旧回调不能断开新连接。
-								if (projectConnection !== connection) return;
-								disconnectProjectStatus();
 							},
 						},
 					);
@@ -445,12 +377,9 @@ export function registerPiTuiLifecycle(
 				restoreVisibleMainScreen(activeTui, preClearState, true);
 			}
 		} catch (error) {
-			disposeProjectStatus();
+			resetStatusQueries();
+			stopTimerRepaint();
 			installedEditor?.dispose();
-			autoCompaction?.dispose();
-			if (autoCompactionStatus === autoCompaction) autoCompactionStatus = undefined;
-			timer?.dispose();
-			usage?.dispose();
 			ctx.ui.setWorkingIndicator?.();
 			ctx.ui.setWorkingVisible?.(true);
 			try {
@@ -474,8 +403,7 @@ export function registerPiTuiLifecycle(
 			throw error;
 		}
 
-		providerUsage = usage;
-		turnTimer = timer;
+		startTimerRepaint();
 		cleanupEditor = currentConfig.appearance.editor ? () => {
 			installedEditor?.dispose();
 			installedEditor = undefined;
@@ -504,31 +432,28 @@ export function registerPiTuiLifecycle(
 
 	const uninstallUi = (): void => {
 		if (
-			!active && !projectStatus && !runtimeStatus && !providerUsage && !turnTimer && !autoCompactionStatus &&
+			!active && !providerUsage && !statusWorkspace && !statusSession && !statusTimer && !statusCompaction &&
 			!cleanupEditor && !cleanupFooter && !cleanupHeader && !cleanupSpinner
 		) return;
 		active = false;
 		cancelModelSwitchRepaint();
-		const usage = providerUsage;
-		const timer = turnTimer;
-		const autoCompaction = autoCompactionStatus;
+		stopTimerRepaint();
+		resetStatusQueries();
 		const restoreFooter = cleanupFooter;
 		const restoreHeader = cleanupHeader;
 		const restoreEditor = cleanupEditor;
 		const restoreSpinner = cleanupSpinner;
-		disposeProjectStatus();
 		providerUsage = undefined;
-		turnTimer = undefined;
-		autoCompactionStatus = undefined;
+		statusWorkspace = undefined;
+		statusSession = undefined;
+		statusTimer = undefined;
+		statusCompaction = undefined;
 		cleanupFooter = undefined;
 		cleanupHeader = undefined;
 		cleanupEditor = undefined;
 		cleanupSpinner = undefined;
 		installedTui = undefined;
 
-		timer?.dispose();
-		autoCompaction?.dispose();
-		usage?.dispose();
 		try {
 			restoreFooter?.();
 		} finally {
@@ -554,9 +479,6 @@ export function registerPiTuiLifecycle(
 		}
 		return false;
 	};
-
-	/** 供应商余额/套餐运行态句柄（服务注册表用；未安装时为 undefined） */
-	const getProviderUsage = (): PiProviderUsageController | undefined => providerUsage;
 
 	let pendingOrderNotice: ReturnType<typeof setTimeout> | undefined;
 	pi.on("session_start", (event, ctx) => {
@@ -598,40 +520,32 @@ export function registerPiTuiLifecycle(
 		installUi(ctx);
 	});
 
+	// 状态数据的取数策略在 status 模块；消费方在自己的事件上触发刷新，
+	// 等刷新完成再补一帧（与 providers.usage 的消费形式一致）。
 	pi.on("tool_execution_end", () => {
-		projectStatus?.requestRefresh();
-		runtimeStatus?.requestRefresh();
+		void statusWorkspace?.refresh().then(requestStatusRender);
 	});
 	pi.on("model_select", (event) => {
-		void providerUsage?.refresh(event.model);
+		void providerUsage?.refresh(event.model).then(requestStatusRender);
 		requestStatusRender();
 		scheduleModelSwitchRepaint();
 	});
 
-	pi.on("turn_start", (event) => turnTelemetry.handle(event));
-	pi.on("message_start", (event) => turnTelemetry.handle(event));
-	pi.on("message_update", (event) => turnTelemetry.handle(event));
-	pi.on("message_end", (event) => {
-		turnTelemetry.handle(event);
-		requestStatusRender();
-	});
-	pi.on("turn_end", (event) => turnTelemetry.handle(event));
+	// 回合计时与遥测的事件接线归 status 模块（turn/message/agent 事件）。
+	pi.on("message_end", requestStatusRender);
 	pi.on("session_info_changed", requestStatusRender);
 	pi.on("session_compact", requestStatusRender);
 	pi.on("session_tree", requestStatusRender);
 
-	pi.on("agent_start", (event) => turnTelemetry.handle(event));
-	pi.on("agent_end", (event) => turnTelemetry.handle(event));
-	pi.on("agent_settled", (event, ctx) => {
-		void providerUsage?.refresh(ctx.model);
-		turnTelemetry.settle(event, ctx.mode);
+	pi.on("agent_settled", (_event, ctx) => {
+		void providerUsage?.refresh(ctx.model).then(requestStatusRender);
+		requestStatusRender();
 	});
 
 	pi.on("session_shutdown", (event) => {
-		turnTelemetry.reset();
 		uninstallUi();
 		if (event.reason === "quit") transitionGate?.release(false);
 	});
 
-	return { applyConfig, isActive: () => active, getProviderUsage };
+	return { applyConfig, isActive: () => active };
 }

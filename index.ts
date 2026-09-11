@@ -6,13 +6,13 @@ import {
   type ExtensionAPI,
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
-import { languageLabelKey } from "./i18n.ts";
-import { groupItemId } from "./menu/items.ts";
-import { createMenuTheme } from "./menu/theme.ts";
-import { applyMenuChange, ToolkitMenu } from "./menu/toolkit-menu.ts";
-import { ENABLED_FIELD } from "./module.ts";
+import { languageLabelKey } from "./i18n/index.ts";
+import { groupItemId } from "./kit/menu/items.ts";
+import { createMenuTheme } from "./kit/menu/theme.ts";
+import { applyMenuChange, ToolkitMenu } from "./kit/menu/toolkit-menu.ts";
+import { ENABLED_FIELD } from "./kit/module.ts";
 import { BUILT_IN_MODULES } from "./modules/index.ts";
-import { createToolkit, type Toolkit } from "./toolkit.ts";
+import { createToolkit, type Toolkit } from "./kit/toolkit.ts";
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

@@ -1,10 +1,11 @@
 // 子代理模块：把 pi-subagents 整体装进 pi-toolkit。
 //
-// 迁入原则是搬移优先于重写：`src/` 下是原 pi-subagents 的全部实现（只加了
-// 宿主配置注入点与命令注册开关），`agents/` 是随包代理定义，
-// `config.json.example` 是包内兜底配置。目录形状保持 `src/` 相对两层到包根，
-// 因此 `SUBAGENTS_DIR` / `PACKAGE_ROOT`、`-e` 装载路径、trustedRoots
-// containment、agents 发现路径全部沿用原规则，不需要改算法。
+// 迁入原则是搬移优先于重写：模块根下是原 pi-subagents 的全部实现（工单 13 平掉
+// `src/` 夹层后按模块模板落位：本文件是装配定义，`mod.ts` 是实现入口，实现文件
+// 平铺，`tools/` 保持子目录；只加了宿主配置注入点与命令注册开关），`agents/`
+// 是随包代理定义，`config.json.example` 是包内兜底配置。平层后按 src 相对深度
+// 硬算的常量（SUBAGENTS_DIR、PACKAGE_ROOT、package.json 上溯层数、agents
+// 发现路径）已同步修正；`-e` 装载路径与 trustedRoots containment 语义不变。
 //
 // 这里只做装配：
 //   - 6 个模型侧工具（subagent / subagent_message / subagents_list /
@@ -16,16 +17,16 @@
 //   - 服务句柄 `subagents.running`：供其它模块查询子代理运行状态
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { getToolkitConfigPath } from "../../config.ts";
-import { enabledField, type ModuleContext, type ModuleDefinition } from "../../module.ts";
+import { getToolkitConfigPath } from "../../kit/config.ts";
+import { enabledField, type ModuleContext, type ModuleDefinition } from "../../kit/module.ts";
 import { SUBAGENTS_MODULE_ID } from "./config.ts";
 import { buildSubagentsMenuItems, type SubagentsMenuRuntime } from "./menu.ts";
 import subagentsExtension, {
   listRunningSubagents,
   runtimeRegistryPathForSession,
   type SubagentsHostSection,
-} from "./src/index.ts";
-import { readRuntimeRecords, type RuntimeRecord } from "./src/runtime-registry.ts";
+} from "./mod.ts";
+import { readRuntimeRecords, type RuntimeRecord } from "./runtime-registry.ts";
 
 export { SUBAGENTS_MODULE_ID } from "./config.ts";
 

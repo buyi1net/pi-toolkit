@@ -12,10 +12,10 @@
 //   5. 模块目录 config.json
 //   6. 模块目录 config.json.example
 // 第 4 级只在真的声明了 models 对象时参与（否则让链继续落到包内兜底）；
-// 候选链的拼接在 src/routing.ts，本文件只负责本节的读写与校验。
+// 候选链的拼接在 routing.ts，本文件只负责本节的读写与校验。
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { getToolkitConfigPath, saveToolkitConfig } from "../../config.ts";
+import { getToolkitConfigPath, saveToolkitConfig } from "../../kit/config.ts";
 import {
   MODEL_TIERS,
   normalizeTier,
@@ -24,8 +24,8 @@ import {
   loadTierRouteConfig,
   type ModelTier,
   type TierConfigLoadResult,
-} from "./src/routing.ts";
-import { getAgentConfigDir, resolveHostTierSources } from "./src/index.ts";
+} from "./routing.ts";
+import { getAgentConfigDir, resolveHostTierSources } from "./mod.ts";
 
 /** 模块 id：同时是配置节名与菜单项 id 前缀 */
 export const SUBAGENTS_MODULE_ID = "subagents";
@@ -50,7 +50,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * 读 `modules.subagents` 节。校验直接复用 src/routing.ts 的 parseTierConfig，
+ * 读 `modules.subagents` 节。校验直接复用 routing.ts 的 parseTierConfig，
  * 保证菜单里看到的判定与 spawn 时的判定完全一致（同一份严格规则）。
  */
 export function readSubagentsSection(section: Record<string, unknown>): SubagentsSectionView {
@@ -101,7 +101,7 @@ export function loadEffectiveTierConfig(options?: {
 }
 
 /**
- * 某一档缺映射时的报错文案。走 src/routing.ts 的 resolveTierForParams，
+ * 某一档缺映射时的报错文案。走 routing.ts 的 resolveTierForParams，
  * 与真正 spawn 时抛出的字符串逐字一致（含"Add models.x to <path>"与
  * "No pi-subagents config was found (looked at …)"两条原文）。
  */

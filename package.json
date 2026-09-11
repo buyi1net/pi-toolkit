@@ -14,7 +14,7 @@
       "./index.ts"
     ],
     "themes": [
-      "./modules/tui/themes"
+      "./modules/themes"
     ]
   },
   "peerDependencies": {

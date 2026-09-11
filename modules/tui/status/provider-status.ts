@@ -1,8 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { sanitizeQuotaWindowLabel } from "../kernel/usage-core.ts";
-import type { UsageRuntimeState } from "../kernel/usage-node.ts";
+import { sanitizeQuotaWindowLabel, type UsageRuntimeState } from "../../providers/api.ts";
+import { sanitizeSingleLine } from "../../../shared/sanitize.ts";
 import type { StatusLineSegment } from "./session-status.ts";
-import { sanitizeSingleLine } from "./project-status.ts";
 
 const PROVIDER_CORAL = {
 	dark: {
