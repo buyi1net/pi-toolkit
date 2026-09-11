@@ -1,5 +1,5 @@
 {
-  "name": "pi-toolkit",
+  "name": "@buyi1net/pi-toolkit",
   "version": "0.0.1",
   "description": "Pi all-in-one toolkit: one extension package aggregating everyday tools (vision assistance, subagent orchestration, provider status, appearance) behind a native settings menu",
   "keywords": [

@@ -5,7 +5,7 @@ pi-toolkit 把日常编码中会用到的工具聚合进一个 Pi 扩展包，�
 ## 安装
 
 ```bash
-pi install npm:pi-toolkit
+pi install npm:@buyi1net/pi-toolkit
 ```
 
 或从 GitHub 安装：
