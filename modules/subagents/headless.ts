@@ -16,6 +16,8 @@
  * 修复抛 EINVAL,因此与官方 RpcClient 一致,用 `spawn(process.execPath, [entry])`
  * 直接以 node 执行 pi 入口脚本;入口默认取宿主 pi 进程自身的 process.argv[1]
  * (子代理与宿主 pi 同版本同入口),允许 PI_SUBAGENT_PI_ENTRY 显式覆盖。
+ * Linux 全局安装下 argv[1] 是 /usr/bin/pi 这类无后缀 symlink,需 realpath
+ * 解到 dist/bundle/cli.js 才能交给 node 执行,细节见 resolvePiEntry()。
  *
  * RPC stdout 是严格 LF JSONL:不能用 readline(它按 U+2028/U+2029 也分帧,
  * 会撕裂 JSON 字符串),帧解析用下方 attachJsonlReader(语义对齐官方
@@ -23,7 +25,7 @@
  * 阻塞子进程。
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { join } from "node:path";
 import { debugLog } from "./diagnostics.ts";
@@ -103,6 +105,12 @@ export function serializeJsonLine(value: unknown): string {
  *   1. PI_SUBAGENT_PI_ENTRY(显式覆盖,测试注入 stub 也走这里);
  *   2. 宿主 pi 进程自身的 process.argv[1](子代理与宿主同版本同入口,
  *      且恰好绕开 Windows 上 .cmd shim 不可 spawn 的问题);
+ *   3. argv[1] 存在但不以 .js 结尾时,realpath 解符号链接后再判。
+ *      Linux 全局安装(~/.npm 或 /usr/lib 全局包)把 CLI 装成
+ *      /usr/bin/pi → ../lib/node_modules/@earendil-works/pi-coding-agent/
+ *      dist/bundle/cli.js 的 symlink;node 执行的是 symlink 路径本身,
+ *      argv[1] 因此无 .js 后缀,直判失败,必须解到真身才能 spawn。
+ *      Windows 不受影响:npm 的 pi.cmd shim 调 node 时 argv[1] 已是 cli.js 真路径。
  * 找不到时返回 null,由调用方报错——不做 PATH 里 spawn "pi" 的尝试,
  * 那在 Windows 上不可靠(ENOENT/EINVAL)。
  */
@@ -110,8 +118,17 @@ export function resolvePiEntry(): string | null {
   const override = process.env.PI_SUBAGENT_PI_ENTRY?.trim();
   if (override) return override;
   const self = process.argv[1];
-  if (self && /\.(c|m)?js$/i.test(self) && existsSync(self)) return self;
-  return null;
+  if (!self || !existsSync(self)) return null;
+  if (/\.(c|m)?js$/i.test(self)) return self;
+  // symlink 形态:解真身再判后缀。realpathSync 抛错(路径已消失/权限不足)
+  // 时安静返回 null,让调用方沿用原来的报错提示。
+  let real: string;
+  try {
+    real = realpathSync(self);
+  } catch {
+    return null;
+  }
+  return /\.(c|m)?js$/i.test(real) && existsSync(real) ? real : null;
 }
 
 /**
