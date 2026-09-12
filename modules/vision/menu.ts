@@ -1,9 +1,13 @@
 // 视觉配置子菜单：常规组里的 `视觉配置` 行打开这一页（原生 SettingsList 形态）。
-// 页面四行：
-//   视觉模型   —— SelectList 选 auto / off / 具体模型；改模型前先跑真实图片探测，通过才写盘
+// 页面行：
+//   视觉模型     —— SelectList 选 auto / off / 具体模型；改模型前先跑真实图片探测，通过才写盘
+//   项目层提示   —— 受信任项目层提供了路由时出现（只读）：菜单显示与写盘目标均为全局值
 //   刷新模型目录 —— 重读 Pi 的模型目录（不联网），成功后候选列表与目录版本号都刷新
-//   运行自检   —— 对当前生效路由发一张探测图（原向导 T 键的等价物），结果进诊断缓存
-//   路由状态   —— 只读展示当前路由
+//   运行自检     —— 对当前生效路由发一张探测图（原向导 T 键的等价物），结果进诊断缓存
+//   路由状态     —— 只读展示全局路由
+//
+// 菜单只画界面：路由解析、合并、写盘、描述与缓存协议都在 facade.ts；菜单运行态接口只有
+// 「取门面快照」（snapshot）与「保存补丁」（save）两个动作。
 //
 // 原 setup.ts 里必须保留的业务流程都落在下面这些可单测的函数上：
 //   discoverCandidates / routePatchFor / saveRouteSelection / runVisionSelfCheck / refreshVisionCatalogue
@@ -26,7 +30,14 @@ import type { Translator } from "../../i18n/index.ts";
 import { I18nSettingsList } from "../../kit/menu/settings-list.ts";
 import type { MenuTheme } from "../../kit/menu/theme.ts";
 import type { ModuleMenuContext } from "../../kit/module.ts";
-import { describeVisionRoute, saveVisionRoute, type VisionRouteConfig } from "./config.ts";
+import type { VisionRouteConfig } from "./config.ts";
+import {
+  modelValueLabel,
+  routeValueLabel,
+  type VisionFacadePatch,
+  type VisionRouteSnapshot,
+  type VisionSaveOptions,
+} from "./facade.ts";
 import { selectAutomaticPiVisionModel, testPiVisionModel } from "./pi-model-backend.ts";
 import { VISION_PROBE_EXPECTED, VISION_PROBE_IMAGE } from "./vision-probe.ts";
 
@@ -34,6 +45,7 @@ import { VISION_PROBE_EXPECTED, VISION_PROBE_IMAGE } from "./vision-probe.ts";
 export const VISION_MENU_ITEM_ID = "vision.settings";
 
 const ROW_MODEL = "vision.settings.model";
+const ROW_PROJECT_OVERRIDE = "vision.settings.projectOverride";
 const ROW_REFRESH = "vision.settings.refresh";
 const ROW_CHECK = "vision.settings.check";
 const ROW_ROUTE = "vision.settings.route";
@@ -65,23 +77,12 @@ export interface VisionCandidate extends VisionSelection {
   readonly authenticated: boolean;
 }
 
-export interface VisionDiagnostic {
-  readonly key: string;
-  readonly passed: boolean;
-  readonly elapsedMs: number;
-  readonly detail: string;
-}
-
-/** 菜单运行态：路由镜像、目录版本号与诊断缓存都由模块持有，跨菜单开关保留 */
+/** 菜单运行态接口（两个动作）：取门面快照、保存补丁 */
 export interface VisionMenuRuntime {
-  /** 写盘目标（全局节）当前路由；会话启动与每次保存后刷新 */
-  globalRoute(): VisionRouteConfig;
-  /** 保存后重载配置并刷新视觉链，返回刷新后的全局路由 */
-  reapply(context: ExtensionContext): Promise<VisionRouteConfig>;
-  catalogueGeneration(): number;
-  bumpCatalogueGeneration(): void;
-  diagnostic(): VisionDiagnostic | undefined;
-  setDiagnostic(diagnostic: VisionDiagnostic): void;
+  /** 取门面快照：菜单渲染与自检缓存需要的全部当前值 */
+  snapshot(): VisionRouteSnapshot;
+  /** 保存补丁：路由只写全局层并重读合并；目录刷新与自检结果只更新缓存协议 */
+  save(patch: VisionFacadePatch, options?: VisionSaveOptions): Promise<VisionRouteSnapshot>;
 }
 
 function describeError(error: unknown): string {
@@ -90,11 +91,6 @@ function describeError(error: unknown): string {
 
 function singleLine(text: string): string {
   return text.replace(/\s+/g, " ").trim();
-}
-
-/** config.ts 的只读路由文案吃整份视觉配置（VisionConfig），这里把路由包回去 */
-function describeRoute(route: VisionRouteConfig, t: Translator): string {
-  return describeVisionRoute({ route }, t);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -170,17 +166,6 @@ export function routePatchFor(value: string): Partial<VisionRouteConfig> | undef
     : undefined;
 }
 
-/** 菜单行显示的当前视觉模型（不带 fixed 前缀，区别于只读路由行） */
-export function modelValueLabel(route: VisionRouteConfig, t: Translator): string {
-  if (route.allowedModels !== null && route.allowedModels.length === 0) {
-    return t("module.vision.model.off");
-  }
-  if (route.mode === "fixed" && route.fixedModel) {
-    return `${route.fixedModel.provider}/${route.fixedModel.model}`;
-  }
-  return t("module.vision.model.auto");
-}
-
 /** 当前路由实际会调用的模型；off 返回 undefined，auto 走 Pi 的自动选择规则 */
 export function resolveRouteCandidate(
   route: VisionRouteConfig,
@@ -241,14 +226,13 @@ export interface SaveRouteResult {
   readonly reason?: string;
 }
 
-/** 保存路由：先重扫目录，候选变了就中止；写盘走 02 的 saveVisionRoute，再让模块重载并刷新视觉链 */
+/** 保存路由：先重扫目录，候选变了就中止；路由补丁交给门面（只写全局层），由门面重读并刷新视觉链 */
 export async function saveRouteSelection(options: {
   readonly value: string;
   readonly openedWith: readonly VisionCandidate[];
   readonly registry: VisionMenuRegistry;
   readonly runtime: VisionMenuRuntime;
   readonly context: ExtensionContext;
-  readonly agentDir?: string;
 }): Promise<SaveRouteResult> {
   const patch = routePatchFor(options.value);
   if (!patch) return { kind: "failed", reason: `unknown selection: ${options.value}` };
@@ -257,9 +241,8 @@ export async function saveRouteSelection(options: {
   if (!sameCandidates(options.openedWith, latest)) return { kind: "modelsChanged" };
 
   try {
-    await saveVisionRoute(patch, options.agentDir === undefined ? {} : { agentDir: options.agentDir });
-    const route = await options.runtime.reapply(options.context);
-    return { kind: "saved", route };
+    const snapshot = await options.runtime.save({ route: patch }, { context: options.context });
+    return { kind: "saved", route: snapshot.route };
   } catch (error) {
     return { kind: "failed", reason: describeError(error) };
   }
@@ -277,12 +260,13 @@ export async function runVisionSelfCheck(options: {
   readonly registry: VisionMenuRegistry;
   readonly runtime: VisionMenuRuntime;
   readonly context: ExtensionContext;
-  readonly route: VisionRouteConfig;
   readonly candidates: readonly VisionCandidate[];
   readonly signal?: AbortSignal;
 }): Promise<SelfCheckResult> {
   const { t, registry, runtime } = options;
-  if (options.route.allowedModels !== null && options.route.allowedModels.length === 0) {
+  const snapshot = runtime.snapshot();
+  const route = snapshot.route;
+  if (route.allowedModels !== null && route.allowedModels.length === 0) {
     return { kind: "noRoute", text: t("module.vision.check.noRoute"), cached: false };
   }
 
@@ -290,22 +274,22 @@ export async function runVisionSelfCheck(options: {
     ? { provider: options.context.model.provider, id: options.context.model.id }
     : undefined;
   const key = diagnosticCacheKey({
-    generation: runtime.catalogueGeneration(),
-    route: options.route,
+    generation: snapshot.catalogueGeneration,
+    route,
     candidates: options.candidates,
     ...(currentModel ? { currentModel } : {}),
   });
 
-  const cached = runtime.diagnostic();
+  const cached = snapshot.diagnostic;
   if (cached?.key === key) {
     return cached.passed
       ? { kind: "passed", text: t("module.vision.check.passed", { elapsed: cached.elapsedMs }), cached: true }
       : { kind: "failed", text: t("module.vision.check.failed", { reason: cached.detail }), cached: true };
   }
 
-  const selection = resolveRouteCandidate(options.route, registry, currentModel);
+  const selection = resolveRouteCandidate(route, registry, currentModel);
   if (!selection) {
-    runtime.setDiagnostic({ key, passed: false, elapsedMs: 0, detail: "" });
+    await runtime.save({ diagnostic: { key, passed: false, elapsedMs: 0, detail: "" } });
     return { kind: "noModel", text: t("module.vision.check.noModel"), cached: false };
   }
 
@@ -317,7 +301,7 @@ export async function runVisionSelfCheck(options: {
     }
     const elapsedMs = Date.now() - startedAt;
     const detail = singleLine(probe.text || (probe.passed ? "OK" : "unknown error"));
-    runtime.setDiagnostic({ key, passed: probe.passed, elapsedMs, detail });
+    await runtime.save({ diagnostic: { key, passed: probe.passed, elapsedMs, detail } });
     return probe.passed
       ? { kind: "passed", text: t("module.vision.check.passed", { elapsed: elapsedMs }), cached: false }
       : { kind: "failed", text: t("module.vision.check.failed", { reason: detail }), cached: false };
@@ -327,7 +311,7 @@ export async function runVisionSelfCheck(options: {
     }
     const elapsedMs = Date.now() - startedAt;
     const detail = singleLine(describeError(error));
-    runtime.setDiagnostic({ key, passed: false, elapsedMs, detail });
+    await runtime.save({ diagnostic: { key, passed: false, elapsedMs, detail } });
     return { kind: "failed", text: t("module.vision.check.failed", { reason: detail }), cached: false };
   }
 }
@@ -388,8 +372,6 @@ interface PanelEnv {
   readonly t: Translator;
   readonly theme: MenuTheme;
   readonly context: ExtensionContext;
-  /** pi 配置目录：写盘目标 */
-  readonly agentDir: string;
   readonly runtime: VisionMenuRuntime;
   readonly requestRender: () => void;
 }
@@ -629,7 +611,6 @@ export class VisionModelPicker extends Container {
       registry: this.options.context.modelRegistry,
       runtime: this.options.runtime,
       context: this.options.context,
-      agentDir: this.options.agentDir,
     });
     if (this.token !== token) return;
     if (result.kind === "modelsChanged") {
@@ -694,13 +675,13 @@ export class VisionPanel extends Container {
   }
 
   private close(): void {
-    this.options.onDone(describeRoute(this.options.runtime.globalRoute(), this.options.t));
+    this.options.onDone(routeValueLabel(this.options.runtime.snapshot().route, this.options.t));
   }
 
   private refreshRows(): void {
-    const route = this.options.runtime.globalRoute();
+    const route = this.options.runtime.snapshot().route;
     this.list?.updateValue(ROW_MODEL, modelValueLabel(route, this.options.t));
-    this.list?.updateValue(ROW_ROUTE, describeRoute(route, this.options.t));
+    this.list?.updateValue(ROW_ROUTE, routeValueLabel(route, this.options.t));
     this.list?.updateValue(ROW_REFRESH, this.refreshValue());
     if (this.checkValue) this.list?.updateValue(ROW_CHECK, this.checkValue);
     this.options.requestRender();
@@ -712,8 +693,9 @@ export class VisionPanel extends Container {
 
   private buildItems(): SettingItem[] {
     const t = this.options.t;
-    const route = this.options.runtime.globalRoute();
-    return [
+    const snapshot = this.options.runtime.snapshot();
+    const route = snapshot.route;
+    const items: SettingItem[] = [
       {
         id: ROW_MODEL,
         label: t("module.vision.model.label"),
@@ -722,12 +704,23 @@ export class VisionPanel extends Container {
         submenu: (_currentValue, done) =>
           new VisionModelPicker({
             ...this.options,
-            selection: this.options.runtime.globalRoute(),
+            selection: route,
             candidates: this.candidates,
             onSaved: () => this.refreshRows(),
             onDone: done,
           }),
       },
+    ];
+    if (snapshot.projectLayer) {
+      // 决策 7：项目层提供了路由就提示（不预设值与全局一定不同），菜单仍显示与写盘全局值
+      items.push({
+        id: ROW_PROJECT_OVERRIDE,
+        label: t("module.vision.projectOverride.label"),
+        description: t("module.vision.projectOverride.description"),
+        currentValue: "",
+      });
+    }
+    items.push(
       {
         id: ROW_REFRESH,
         label: t("module.vision.refresh.label"),
@@ -747,7 +740,7 @@ export class VisionPanel extends Container {
                 return;
               }
               if (result.kind === "ok") {
-                this.options.runtime.bumpCatalogueGeneration();
+                await this.options.runtime.save({ catalogueRefreshed: true });
                 this.candidates = discoverCandidates(this.options.context.modelRegistry);
                 setStatus(t("module.vision.refresh.complete"), "success");
                 this.refreshRows();
@@ -783,7 +776,6 @@ export class VisionPanel extends Container {
                 registry: this.options.context.modelRegistry,
                 runtime: this.options.runtime,
                 context: this.options.context,
-                route: this.options.runtime.globalRoute(),
                 candidates: this.candidates,
                 signal,
               });
@@ -795,13 +787,14 @@ export class VisionPanel extends Container {
         id: ROW_ROUTE,
         label: t("module.vision.route.label"),
         description: t("module.vision.route.description"),
-        currentValue: describeRoute(route, t),
+        currentValue: routeValueLabel(route, t),
       },
-    ];
+    );
+    return items;
   }
 }
 
-/** 模块的菜单行：一行入口，进去是四行视觉配置页 */
+/** 模块的菜单行：一行入口，进去是视觉配置页（项目层提供路由时多一行提示） */
 export function buildVisionMenuItems(
   context: ModuleMenuContext,
   runtime: VisionMenuRuntime,
@@ -812,13 +805,12 @@ export function buildVisionMenuItems(
       id: VISION_MENU_ITEM_ID,
       label: t("module.vision.menu.label"),
       description: t("module.vision.menu.description"),
-      currentValue: describeRoute(runtime.globalRoute(), t),
+      currentValue: routeValueLabel(runtime.snapshot().route, t),
       submenu: (_currentValue, done) =>
         new VisionPanel({
           t,
           theme: context.theme,
           context: context.context,
-          agentDir: context.agentDir,
           runtime,
           requestRender: () => context.requestRender(),
           onDone: (value) => done(value),

@@ -15,10 +15,8 @@ import {
 import { sanitizeStyledSingleLine } from "../../../shared/sanitize.ts";
 import { formatLeadingIcon, resolveGlyphs, type IconGlyphs } from "../renderer/icons.ts";
 import { renderProjectStatusLine } from "../status/project-status.ts";
-import {
-	buildEditorUsageSegments,
-	renderStatusLineSegments,
-} from "../status/session-status.ts";
+import { renderStatusLineSegments } from "../status/segment-layout.ts";
+import { buildEditorUsageSegments } from "../status/session-status.ts";
 import type {
 	FooterLayoutSource,
 	ProjectEnvironmentSource,
@@ -127,6 +125,8 @@ export class ProjectStatusFooter implements Component {
 		);
 		// 行首图标属于状态行的一部分，必须先从可用宽度中扣除；最后的截断
 		// 只是防御性兜底，避免宽字符或第三方状态文本再次把整行顶出终端。
+		// required 段（上下文用量）由统一段位模块保护：只压缩不隐藏，
+		// 宽度吃紧时走截断兜底。
 		const usageIconText = formatLeadingIcon(glyphs.usage);
 		const usageIconWidth = visibleWidth(usageIconText);
 		const usageSegmentsWidth = Math.max(0, contentWidth - usageIconWidth);

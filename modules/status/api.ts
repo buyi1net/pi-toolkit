@@ -7,12 +7,16 @@
 // 句柄契约：`{ snapshot(): T | undefined; refresh(): Promise<void> }`。
 // 唯一补充：`status.workspace` 额外带 `settings()` —— 段位配置（preset/segments）
 // 按定案 4 归本模块配置节后，渲染侧（tui）必须能读到解析结果，见接口注释。
+//
+// 工单 18（决策 9）：快照对象上带变更序号（内容变化时递增），由本模块内部维护，
+// 供 tui 心跳做重绘检测；句柄方法集不变，仍只有 snapshot/refresh。
 
 import type { ProjectStatusSnapshot } from "./project-status.ts";
 import type { ResolvedStatusSettings } from "./status-config.ts";
 import type { SessionStatusSnapshot } from "./session-status.ts";
 import type { TurnTelemetrySnapshot } from "./turn-telemetry.ts";
 import type { TurnTimerSnapshot } from "./turn-timer.ts";
+import type { AutoCompactionSnapshot } from "./auto-compaction.ts";
 
 /** 本模块在服务注册表里的五个句柄名（工单 07 定案 2） */
 export const STATUS_WORKSPACE_SERVICE_NAME = "status.workspace";
@@ -20,6 +24,26 @@ export const STATUS_SESSION_SERVICE_NAME = "status.session";
 export const STATUS_TIMER_SERVICE_NAME = "status.timer";
 export const STATUS_TELEMETRY_SERVICE_NAME = "status.telemetry";
 export const STATUS_COMPACTION_SERVICE_NAME = "status.compaction";
+
+/** 自动压缩快照（开关值 + 变更序号） */
+export type { AutoCompactionSnapshot } from "./auto-compaction.ts";
+
+/**
+ * 句柄快照的变更序号（工单 18 / 决策 9）：模块内部在快照内容变化时递增，
+ * 随快照对象带出，供 tui 心跳做「有变化才重绘」；不属于服务注册表句柄契约扩展。
+ */
+export interface SnapshotRevision {
+	readonly revision: number;
+}
+
+/** `status.workspace` 快照：四段聚合数据 + 变更序号 */
+export type StatusWorkspaceSnapshot = ProjectStatusSnapshot & SnapshotRevision;
+
+/** `status.session` 快照：会话采集结果 + 变更序号 */
+export type StatusSessionSnapshot = SessionStatusSnapshot & SnapshotRevision;
+
+/** `status.timer` 快照：计时快照 + 变更序号 */
+export type StatusTimerSnapshot = TurnTimerSnapshot & SnapshotRevision;
 
 /** git 数据域类型（经 `status.workspace` 快照透出，不单独设句柄） */
 export type {
@@ -82,7 +106,7 @@ export { parseGitStatusV2 } from "./project-status.ts";
  */
 export interface StatusWorkspaceService {
 	readonly id: "status";
-	snapshot(): ProjectStatusSnapshot | undefined;
+	snapshot(): StatusWorkspaceSnapshot | undefined;
 	refresh(): Promise<void>;
 	settings(): ResolvedStatusSettings;
 }
@@ -90,14 +114,14 @@ export interface StatusWorkspaceService {
 /** `status.session` 句柄：会话段数据（token / cache / 轮数 / 压缩次数） */
 export interface StatusSessionService {
 	readonly id: "status";
-	snapshot(): SessionStatusSnapshot | undefined;
+	snapshot(): StatusSessionSnapshot | undefined;
 	refresh(): Promise<void>;
 }
 
 /** `status.timer` 句柄：回合计时（会话绑定前 undefined；刷新是空操作，状态由事件驱动） */
 export interface StatusTimerService {
 	readonly id: "status";
-	snapshot(): TurnTimerSnapshot | undefined;
+	snapshot(): StatusTimerSnapshot | undefined;
 	refresh(): Promise<void>;
 }
 
@@ -108,9 +132,9 @@ export interface StatusTelemetryService {
 	refresh(): Promise<void>;
 }
 
-/** `status.compaction` 句柄：自动压缩开关（未创建控制器时 undefined） */
+/** `status.compaction` 句柄：自动压缩开关与变更序号（未创建控制器时 undefined） */
 export interface StatusCompactionService {
 	readonly id: "status";
-	snapshot(): boolean | undefined;
+	snapshot(): AutoCompactionSnapshot | undefined;
 	refresh(): Promise<void>;
 }

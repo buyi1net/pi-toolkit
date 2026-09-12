@@ -4,19 +4,16 @@ import { Text } from "@earendil-works/pi-tui";
 import { existsSync } from "node:fs";
 import type { ListedAgentDefinition } from "./agents.ts";
 import type { NameRegistry, NameRegistryEntry, SubagentLoadout } from "./session.ts";
-import type { RuntimeRecord } from "./runtime-registry.ts";
-import type { RunningSubagent } from "./types.ts";
+import type { RuntimeRegistry } from "./registry.ts";
 
 export interface SubagentsListDeps {
   discoverAgents: () => ListedAgentDefinition[];
   /** scope=session/all 需要:父会话 artifact 目录解析。缺省时 session 视图明确报不可用。 */
   getArtifactDir?: (sessionDir: string, sessionId: string) => string;
-  /** 本进程正在运行的子代理(状态判定用)。 */
-  runningSubagents?: Map<string, RunningSubagent>;
+  /** 会话子代理视图需要：登记表提供内存实时态（缺省时 session 视图明确报不可用）。 */
+  registry?: RuntimeRegistry;
   readNameRegistry?: (artifactDir: string) => NameRegistry;
   readSubagentLoadout?: (sessionFile: string) => SubagentLoadout | null;
-  readRuntimeRecords?: (path: string) => RuntimeRecord[];
-  runtimeRegistryPath?: (artifactDir: string) => string;
 }
 
 export interface SessionSubagentView {
@@ -41,14 +38,12 @@ export interface SessionSubagentView {
  */
 export function buildSessionSubagentViews(
   registry: NameRegistry,
-  runningSubagents: Map<string, RunningSubagent> | undefined,
+  runtime: RuntimeRegistry | undefined,
   readSubagentLoadout: (sessionFile: string) => SubagentLoadout | null,
 ): SessionSubagentView[] {
   const views: SessionSubagentView[] = [];
   const consider = (name: string, entry: NameRegistryEntry) => {
-    const running = runningSubagents
-      ? Array.from(runningSubagents.values()).find((candidate) => candidate.name === name)
-      : undefined;
+    const running = runtime?.findByName(name);
     if (running) {
       views.push({
         name,
@@ -89,9 +84,9 @@ export function buildSessionSubagentViews(
     if (entry && typeof entry.sessionFile === "string") consider(name, entry);
   }
   // 运行态登记里可能还有尚未写入名字注册表的名字(启动竞态/reload 边界)。
-  if (runningSubagents) {
+  if (runtime) {
     const known = new Set(views.map((view) => view.name));
-    for (const running of runningSubagents.values()) {
+    for (const running of runtime.list()) {
       if (!known.has(running.name)) consider(running.name, {
         sessionFile: running.sessionFile,
         sessionId: null,
@@ -195,7 +190,7 @@ export function registerSubagentsListTool(
         ctx.sessionManager.getSessionId(),
       );
       const registry = deps.readNameRegistry(artifactDir);
-      const views = buildSessionSubagentViews(registry, deps.runningSubagents, (file) =>
+      const views = buildSessionSubagentViews(registry, deps.registry, (file) =>
         deps.readSubagentLoadout
           ? deps.readSubagentLoadout(file)
           : null,

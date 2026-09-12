@@ -3,6 +3,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ToolkitConfig } from "./config.ts";
+import type { ConfigWriteHooks } from "./config-transaction.ts";
 import type { Translator } from "../i18n/index.ts";
 import {
   assertModuleDefinition,
@@ -32,6 +33,12 @@ export interface ModuleContextOptions {
   readonly getModuleConfig: (moduleId: string) => ModuleConfigRecord;
   readonly reloadConfig: () => Promise<void>;
   readonly setModuleConfig: (moduleId: string, key: string, value: ModuleConfigScalar) => Promise<ModuleConfigScalar>;
+  /** 结构化配置写入事务入口：模块配置节补丁 → 落盘 → 内存重载 → reapply */
+  readonly saveModuleSection: (
+    moduleId: string,
+    patch: ModuleConfigRecord,
+    hooks?: ConfigWriteHooks,
+  ) => Promise<void>;
 }
 
 export interface AssembleOptions extends ModuleContextOptions {
@@ -96,6 +103,7 @@ function createModuleContext(
     getConfig: () => options.getModuleConfig(definition.id),
     reloadConfig: () => options.reloadConfig(),
     setConfig: (key, value) => options.setModuleConfig(definition.id, key, value),
+    saveConfig: (patch, hooks) => options.saveModuleSection(definition.id, patch, hooks),
   };
 }
 

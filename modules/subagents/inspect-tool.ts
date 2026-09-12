@@ -23,7 +23,7 @@ import {
 } from "./session.ts";
 import { normalizeSubagentName as normalizeName } from "./names.ts";
 import { peekExitSidecar } from "./surface.ts";
-import type { RuntimeRecord } from "./runtime-registry.ts";
+import type { RuntimeRecord, RuntimeRegistry } from "./registry.ts";
 import type { RunningSubagent, SubagentWaitMode, SubagentWaitRelease } from "./types.ts";
 
 /** 只读状态观测的来源。runtime-registry 是 /reload 后尚未恢复的磁盘记录。 */
@@ -111,14 +111,13 @@ export interface InspectRosterMember {
 }
 
 export interface SubagentInspectDeps {
-  runningSubagents: Map<string, RunningSubagent>;
+  /** 运行态登记表：实时态、内存优先的磁盘记录视图都从它取。 */
+  registry: RuntimeRegistry;
   /** 读取并刷新当前进程持有的 activity/status 快照。 */
   observeRunningSubagent: (running: RunningSubagent, observedAt?: number) => void;
   getArtifactDir: (sessionDir: string, sessionId: string) => string;
   readNameRegistry: (artifactDir: string) => NameRegistry;
   readSubagentLoadout: (sessionFile: string) => SubagentLoadout | null;
-  readRuntimeRecords: (path: string) => RuntimeRecord[];
-  runtimeRegistryPath: (artifactDir: string) => string;
   isPidAlive: (pid: number) => boolean;
   /** 没有复用器或表面不支持探测时返回 null。 */
   probeSurface?: (surface: string) => boolean | null;
@@ -691,24 +690,26 @@ export function registerSubagentInspectTool(pi: ExtensionAPI, deps: SubagentInsp
       );
       const now = Date.now();
       const registry = deps.readNameRegistry(artifactDir);
-      const runtimePath = deps.runtimeRegistryPath(artifactDir);
-      const runtimeRecords = deps.readRuntimeRecords(runtimePath);
+      const runtimePath = deps.registry.pathFor(artifactDir);
+      const runtimeRecords = deps.registry.readRecords(runtimePath);
       const requestedName = typeof params?.name === "string"
         ? normalizeName(params.name.trim(), "")
         : "";
       const includeFinished = params?.includeFinished === true;
+      const live = deps.registry.list();
       const liveByName = new Map<string, RunningSubagent>();
-      for (const running of deps.runningSubagents.values()) {
+      for (const running of live) {
         liveByName.set(running.name, running);
       }
+      // 内存优先：磁盘记录里名字已被实时运行态占用的条目不再单独展示。
       const runtimeByName = new Map<string, RuntimeRecord>();
-      for (const record of runtimeRecords) {
-        if (!liveByName.has(record.name)) runtimeByName.set(record.name, record);
+      for (const record of deps.registry.inspectableRecords(runtimePath)) {
+        runtimeByName.set(record.name, record);
       }
       const rosterFor = (name: string): InspectRosterMember | null =>
         deps.readRosterMember ? deps.readRosterMember(name, artifactDir) : null;
       const childRecords = [
-        ...Array.from(deps.runningSubagents.values()).map((child) => ({
+        ...live.map((child) => ({
           id: child.id,
           name: child.name,
           parentId: child.parentId ?? null,

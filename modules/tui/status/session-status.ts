@@ -1,39 +1,25 @@
-// tui 渲染半：会话遥测行（↑↓ R CH / ctx）的段位构造、压缩与渲染
+// tui 渲染半：会话遥测行（↑↓ R CH / ctx）的段位构造与渲染
 // （工单 11 从原 status/session-status.ts 切出）。
 //
 // 数据半（collectSessionStatus 与会话快照类型）已迁 modules/status/：本文件只从
 // status 模块静态导出面取类型，快照由 `status.session` 句柄提供。
+// 工单 20：压缩与单行组装改走 segment-layout.ts 的统一段位模块，本文件只负责
+// 把快照构造成段位（含 required 标记）。
 
 import type { ContextUsage, Theme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
 import type { EditorUsageSegmentId, SessionStatusSnapshot } from "../../status/api.ts";
 import { resolveGlyphs, type IconGlyphs } from "../renderer/icons.ts";
+import { renderStatusLineSegments, type StatusSegment } from "./segment-layout.ts";
 import {
 	cacheHitStatusColor,
 	compactionStatusColor,
 	contextUsageStatusColor,
 	turnStatusColor,
-	type StatusSegment,
 } from "./status-segments.ts";
 
-const SEPARATOR = " · ";
 const DEFAULT_GLYPHS = resolveGlyphs("unicode");
 
 export type SessionStatusSegmentId = "session" | "tokens" | "cache" | "cost";
-
-export interface StatusLineSegment {
-	id: string;
-	text: string;
-	compactText?: string;
-	priority: number;
-}
-
-interface RenderState {
-	segment: StatusLineSegment;
-	text: string;
-	compacted: boolean;
-	hidden: boolean;
-}
 
 /** 与 status 模块数据半同口径的防负数/NaN 取值（两行小函数，不额外进 shared/） */
 function safeAmount(value: number): number {
@@ -146,7 +132,7 @@ function buildSegments(
 	snapshot: SessionStatusSnapshot,
 	theme: Theme,
 	glyphs: IconGlyphs,
-): Readonly<Record<SessionStatusSegmentId, StatusLineSegment>> {
+): Readonly<Record<SessionStatusSegmentId, StatusSegment>> {
 	const sessionLabel = snapshot.sessionName ?? snapshot.sessionId.slice(0, 8);
 	const input = snapshot.inputTokens > 0
 		? theme.fg("text", `${glyphs.inputTokens} ${formatTokenCount(snapshot.inputTokens)}`)
@@ -204,49 +190,13 @@ function buildSegments(
 	};
 }
 
-function renderStates(states: readonly RenderState[], separator: string): string {
-	return states.filter((state) => !state.hidden && state.text).map((state) => state.text).join(separator);
-}
-
-export function renderStatusLineSegments(
-	segments: readonly StatusLineSegment[],
-	width: number,
-	separator = SEPARATOR,
-): string {
-	if (width <= 0) return "";
-	const states: RenderState[] = segments.map((segment) => ({
-		segment,
-		text: segment.text,
-		compacted: false,
-		hidden: !segment.text,
-	}));
-	let line = renderStates(states, separator);
-
-	while (visibleWidth(line) > width) {
-		const state = states
-			.filter((candidate) => !candidate.hidden)
-			.sort((left, right) => right.segment.priority - left.segment.priority)[0];
-		if (!state) return "";
-		const compact = state.segment.compactText;
-		if (!state.compacted && compact && compact !== state.text) {
-			state.text = compact;
-			state.compacted = true;
-		} else {
-			state.hidden = true;
-		}
-		line = renderStates(states, separator);
-	}
-
-	return line;
-}
-
 export function renderSessionStatusLine(
 	snapshot: SessionStatusSnapshot,
 	width: number,
 	theme: Theme,
 	glyphs: IconGlyphs = DEFAULT_GLYPHS,
 	segments: readonly SessionStatusSegmentId[] = ["tokens", "cost"],
-	extraSegments: readonly StatusLineSegment[] = [],
+	extraSegments: readonly StatusSegment[] = [],
 ): string {
 	const byId = buildSegments(snapshot, theme, glyphs);
 	const ordered = [...new Set(segments)].map((segment) => byId[segment]);

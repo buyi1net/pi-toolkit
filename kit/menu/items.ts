@@ -26,6 +26,7 @@ import {
 } from "../module.ts";
 import type { ActiveModule } from "../assembler.ts";
 import { moduleFieldId } from "../assembler.ts";
+import type { ConfigWriteHooks } from "../config-transaction.ts";
 import type { ToolkitProblem } from "../toolkit.ts";
 import type { ServiceRegistry } from "../services.ts";
 import { ChoicePicker, SettingsPanel } from "./panels.ts";
@@ -62,6 +63,8 @@ export interface MenuBuildContext {
   onChange(id: string, value: string): void;
   /** 异步动作结束后请宿主重绘 */
   requestRender(): void;
+  /** 结构化配置写入事务（工单 19）：模块菜单把补丁写进自己的配置节，重绘请求由菜单层注入 */
+  saveModuleConfig(moduleId: string, patch: ModuleConfigRecord, hooks?: ConfigWriteHooks): Promise<void>;
   /** 重建整棵菜单：语言切换后用它刷新全部文案 */
   refresh(selectId?: string): void;
 }
@@ -227,6 +230,7 @@ function moduleItems(build: MenuBuildContext, definition: ModuleDefinition): Set
         agentDir: build.agentDir,
         theme: build.theme,
         requestRender: () => build.requestRender(),
+        saveConfig: (patch, hooks) => build.saveModuleConfig(definition.id, patch, hooks),
       }),
     );
   }

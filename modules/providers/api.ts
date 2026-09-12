@@ -26,9 +26,20 @@ export type ProviderUsageModel = NonNullable<ExtensionContext["model"]>;
  */
 export interface ProvidersUsageService {
 	readonly id: "providers";
-	snapshot(): UsageRuntimeState | undefined;
+	snapshot(): ProvidersUsageSnapshot | undefined;
 	refresh(model?: ProviderUsageModel): Promise<void>;
 }
+
+/**
+ * 句柄快照的变更序号（工单 18 / 决策 9）：模块内部在内容变化时递增，随快照对象带出，
+ * 供 tui 心跳做「有变化才重绘」；不属于服务注册表句柄契约扩展。
+ */
+export interface ProvidersUsageRevision {
+	readonly revision: number;
+}
+
+/** `providers.usage` 快照：运行态 + 变更序号 */
+export type ProvidersUsageSnapshot = UsageRuntimeState & ProvidersUsageRevision;
 
 /** 供应商查询凭据配置（来自独立只读文件 `<agentDir>/pi-tui.json` 的 data.providerAccess） */
 export interface PiProviderAccessConfig {

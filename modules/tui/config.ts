@@ -7,10 +7,9 @@
 // 凭据留在独立文件 <agentDir>/pi-tui.json，刷新间隔在 modules.providers.refreshMs。
 // 状态预设 / 段位与回复遥测开关也不在这里（工单 11 归 status 模块：modules.status.*）。
 //
-// 写盘走骨架的 saveToolkitConfig：深合并、剥敏感键、0600 原子替换。
+// 写盘走 kit 的结构化配置写入事务（ModuleContext / ModuleMenuContext.saveConfig）：
+// 深合并、剥敏感键、0600 原子替换与内存重载都在事务里。
 
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { getToolkitConfigPath, saveToolkitConfig } from "../../kit/config.ts";
 import type { ModuleConfigRecord } from "../../kit/module.ts";
 import {
 	parseTuiSection,
@@ -35,13 +34,7 @@ export function readTuiSection(section: Record<string, unknown> | undefined): Lo
 	return parseTuiSection(section);
 }
 
-/** 写本节点（深合并，不动其它模块节与语言设置）。 */
-export async function saveTuiSection(
-	update: TuiSectionUpdate,
-	options: { readonly agentDir?: string } = {},
-): Promise<void> {
-	const path = getToolkitConfigPath(options.agentDir ?? getAgentDir());
-	await saveToolkitConfig(path, {
-		modules: { [TUI_MODULE_ID]: update as ModuleConfigRecord },
-	});
+/** 写盘补丁语义（工单 19）：外观 / 高级更新 → `modules.tui` 节补丁 */
+export function tuiSectionPatch(update: TuiSectionUpdate): ModuleConfigRecord {
+	return { ...update } as ModuleConfigRecord;
 }

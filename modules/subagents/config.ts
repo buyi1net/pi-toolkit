@@ -15,7 +15,8 @@
 // 候选链的拼接在 routing.ts，本文件只负责本节的读写与校验。
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { getToolkitConfigPath, saveToolkitConfig } from "../../kit/config.ts";
+import { getToolkitConfigPath } from "../../kit/config.ts";
+import type { ModuleConfigRecord } from "../../kit/module.ts";
 import {
   MODEL_TIERS,
   normalizeTier,
@@ -115,30 +116,17 @@ function assertModelValue(tier: ModelTier, model: string, source: string): void 
   if ("error" in checked) throw new Error(checked.error);
 }
 
-export interface SubagentsWriteOptions {
-  readonly agentDir?: string;
+/**
+ * 写盘补丁语义（工单 19）：一档 tier 的模型映射。
+ * 写前按 spawn 时的同一严格规则校验，非法取值直接抛出（不产生写盘）。
+ * source 用于错误文案定位本节点（与 Spawn 时的报错逐字一致）。
+ */
+export function tierModelPatch(tier: ModelTier, model: string, source: string): ModuleConfigRecord {
+  assertModelValue(tier, model, source);
+  return { models: { [tier]: model } };
 }
 
-/** 写一档 tier 的模型映射到本节点 */
-export async function saveTierModel(
-  tier: ModelTier,
-  model: string,
-  options: SubagentsWriteOptions = {},
-): Promise<void> {
-  const path = getToolkitConfigPath(options.agentDir ?? getAgentDir());
-  assertModelValue(tier, model, path);
-  await saveToolkitConfig(path, {
-    modules: { [SUBAGENTS_MODULE_ID]: { models: { [tier]: model } } },
-  });
-}
-
-/** 写状态显示开关到本节点 */
-export async function saveStatusEnabled(
-  enabled: boolean,
-  options: SubagentsWriteOptions = {},
-): Promise<void> {
-  const path = getToolkitConfigPath(options.agentDir ?? getAgentDir());
-  await saveToolkitConfig(path, {
-    modules: { [SUBAGENTS_MODULE_ID]: { status: { enabled } } },
-  });
+/** 写盘补丁语义（工单 19）：状态显示开关 */
+export function statusEnabledPatch(enabled: boolean): ModuleConfigRecord {
+  return { status: { enabled } };
 }

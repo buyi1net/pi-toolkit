@@ -174,7 +174,6 @@ export class ProjectStatusController {
 	private readonly pollIntervalMs: number;
 	private details: GitStatusDetails | undefined;
 	private refreshState: GitRefreshState = "idle";
-	private requestRender: (() => void) | undefined;
 	private refreshTimer: ReturnType<typeof setTimeout> | undefined;
 	private pollTimer: ReturnType<typeof setInterval> | undefined;
 	private refreshInFlight = false;
@@ -190,12 +189,11 @@ export class ProjectStatusController {
 		this.pollIntervalMs = pollIntervalMs;
 	}
 
-	/** 开始查询（含 1 秒轮询）；`requestRender` 由消费方决定，缺省时不主动重绘 */
-	connect(requestRender?: () => void): void {
+	/** 开始查询（含 1 秒轮询）；数据变化由 `status.workspace` 快照的变更序号带出，控制器不触发重绘 */
+	connect(): void {
 		this.disconnect();
 		if (this.disposed) return;
 		this.connected = true;
-		this.requestRender = requestRender;
 		this.requestRefresh(0);
 		if (this.pollIntervalMs > 0) {
 			this.pollTimer = setInterval(() => this.requestPollRefresh(), this.pollIntervalMs);
@@ -207,7 +205,6 @@ export class ProjectStatusController {
 		this.connected = false;
 		if (this.pollTimer) clearInterval(this.pollTimer);
 		this.pollTimer = undefined;
-		this.requestRender = undefined;
 	}
 
 	getSnapshot(): ProjectStatusSnapshot {
@@ -248,7 +245,6 @@ export class ProjectStatusController {
 		}
 
 		this.refreshInFlight = true;
-		const wasError = this.refreshState === "error";
 		if (this.refreshState === "idle") this.refreshState = "loading";
 		const abortController = new AbortController();
 		this.abortController = abortController;
@@ -257,13 +253,10 @@ export class ProjectStatusController {
 			if (this.disposed) return;
 			if (!result) {
 				this.refreshState = "error";
-				if (!wasError) this.requestRender?.();
 				return;
 			}
-			const changed = JSON.stringify(result) !== JSON.stringify(this.details);
 			this.details = result;
 			this.refreshState = "ready";
-			if (changed || wasError) this.requestRender?.();
 		} finally {
 			if (this.abortController === abortController) this.abortController = undefined;
 			this.refreshInFlight = false;

@@ -6,13 +6,12 @@
 //   modules.status.preset     状态预设（minimal / default / full）
 //   modules.status.segments   段位顺序覆盖（数组或 null）
 //   modules.status.telemetry  是否记录回合遥测条目（默认开）
-// 写盘走 kit 的 saveToolkitConfig：深合并、剥敏感键、0600 原子替换。
+// 写盘走 kit 的结构化配置写入事务（补丁 → 落盘 → 内存重载 → reapply）：
+// 深合并、剥敏感键与 0600 原子替换都在事务里。
 //
 // 对外导出面（模块 api.ts 的纯函数来源）：STATUS_PRESET_NAMES、STATUS_SEGMENT_IDS、
 // resolveStatusSettings 等；tui 侧只读解析结果，不自己读配置节。
 
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { getToolkitConfigPath, saveToolkitConfig } from "../../kit/config.ts";
 import type { ModuleConfigRecord } from "../../kit/module.ts";
 import type { ProjectStatusSegmentId } from "./project-status.ts";
 import type { EditorUsageSegmentId } from "./session-status.ts";
@@ -207,13 +206,7 @@ export function statusSettingsFromSection(
 	return resolveStatusSettings(env, { preset, segments });
 }
 
-/** 写本节点（深合并，不动其它模块节与语言设置）。 */
-export async function saveStatusSection(
-	update: StatusSectionUpdate,
-	options: { readonly agentDir?: string } = {},
-): Promise<void> {
-	const path = getToolkitConfigPath(options.agentDir ?? getAgentDir());
-	await saveToolkitConfig(path, {
-		modules: { [STATUS_MODULE_ID]: update as ModuleConfigRecord },
-	});
+/** 写盘补丁语义（工单 19）：段位 / 遥测更新 → `modules.status` 节补丁（校验在读路径） */
+export function statusSectionPatch(update: StatusSectionUpdate): ModuleConfigRecord {
+	return { ...update } as ModuleConfigRecord;
 }

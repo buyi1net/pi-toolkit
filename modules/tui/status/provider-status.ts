@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { sanitizeQuotaWindowLabel, type UsageRuntimeState } from "../../providers/api.ts";
 import { sanitizeSingleLine } from "../../../shared/sanitize.ts";
-import type { StatusLineSegment } from "./session-status.ts";
+import type { StatusSegment } from "./segment-layout.ts";
 
 const PROVIDER_CORAL = {
 	dark: {
@@ -52,9 +52,9 @@ export function formatResetCountdown(resetMs: number | null, now = Date.now()): 
 }
 
 export interface EditorProviderSegments {
-	provider: StatusLineSegment;
-	balance: StatusLineSegment | null;
-	subscription: StatusLineSegment | null;
+	provider: StatusSegment;
+	balance: StatusSegment | null;
+	subscription: StatusSegment | null;
 }
 
 function providerBrand(brandName: string): string {
@@ -66,7 +66,7 @@ function buildSubscriptionSegment(
 	state: UsageRuntimeState,
 	theme: Theme,
 	now = Date.now(),
-): StatusLineSegment | null {
+): StatusSegment | null {
 	const snapshot = state.snapshot;
 	if (
 		!snapshot ||

@@ -2,7 +2,8 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { assembleModules, resolveModuleConfig, type ActiveModule } from "./assembler.ts";
-import { getToolkitConfigPath, loadToolkitConfig, saveToolkitConfig, type ToolkitConfig } from "./config.ts";
+import { getToolkitConfigPath, loadToolkitConfig, type ToolkitConfig } from "./config.ts";
+import { createConfigTransaction, type ConfigWriteHooks } from "./config-transaction.ts";
 import {
   createTranslator,
   isLanguageSetting,
@@ -41,7 +42,7 @@ export interface Toolkit {
   getModuleDefinition(moduleId: string): ModuleDefinition | undefined;
   /** 实时解析的本模块配置（schema 默认值 + 磁盘取值） */
   getModuleConfig(moduleId: string): ModuleConfigRecord;
-  /** 重新从磁盘读整份配置，刷新内存副本（模块自己写盘後靠它刷新菜单展示与后续读取） */
+  /** 重新从磁盘读整份配置，刷新内存副本（保存事务落盘后由事务调用） */
   reloadConfig(): Promise<void>;
   setLanguage(value: string): Promise<LanguageSetting>;
   /** 写单个模块字段并持久化，返回规范化后的值（只接受 schema 声明的字段） */
@@ -81,6 +82,22 @@ export async function createToolkit(options: CreateToolkitOptions): Promise<Tool
     return definition ? resolveModuleConfig(definition, config.modules[moduleId]) : {};
   };
 
+  const reloadConfig = async (): Promise<void> => {
+    config = (await loadToolkitConfig(configPath)).config;
+  };
+
+  // 结构化配置写入事务（工单 19）：落盘与内存刷新只从 kit 出去，模块侧只给补丁与 reapply
+  const configTransaction = createConfigTransaction({ configPath, reload: reloadConfig });
+
+  /** 模块配置节补丁 → 事务（ModuleContext.saveConfig 的落点） */
+  const saveModuleSection = async (
+    moduleId: string,
+    patch: ModuleConfigRecord,
+    hooks?: ConfigWriteHooks,
+  ): Promise<void> => {
+    await configTransaction.write({ modules: { [moduleId]: patch } }, hooks);
+  };
+
   const setModuleField = async (
     moduleId: string,
     field: string,
@@ -95,18 +112,14 @@ export async function createToolkit(options: CreateToolkitOptions): Promise<Tool
       throw new Error(`配置字段 ${moduleId}.${field} 不接受取值 ${JSON.stringify(value)}`);
     }
     const section = { ...(config.modules[moduleId] ?? {}), [field]: normalized };
-    config = await saveToolkitConfig(configPath, { modules: { [moduleId]: section } });
+    await saveModuleSection(moduleId, section);
     return normalized;
   };
 
   const setLanguage = async (value: string): Promise<LanguageSetting> => {
     if (!isLanguageSetting(value)) throw new Error(`未知语言设置：${value}`);
-    config = await saveToolkitConfig(configPath, { language: value });
+    await configTransaction.write({ language: value });
     return config.language;
-  };
-
-  const reloadConfig = async (): Promise<void> => {
-    config = (await loadToolkitConfig(configPath)).config;
   };
 
   const assembly = assembleModules({
@@ -118,6 +131,7 @@ export async function createToolkit(options: CreateToolkitOptions): Promise<Tool
     getModuleConfig,
     reloadConfig,
     setModuleConfig: setModuleField,
+    saveModuleSection,
   });
 
   for (const failure of assembly.failures) {

@@ -13,11 +13,12 @@
 
 import { Container, type SettingItem, Text } from "@earendil-works/pi-tui";
 import type { Translator } from "../../i18n/index.ts";
+import type { ConfigWriteHooks } from "../../kit/config-transaction.ts";
 import { ChoicePicker, type ChoiceOption } from "../../kit/menu/panels.ts";
 import { I18nSettingsList } from "../../kit/menu/settings-list.ts";
 import type { MenuTheme } from "../../kit/menu/theme.ts";
-import type { ModuleMenuContext } from "../../kit/module.ts";
-import { readTuiSection, saveTuiSection, type TuiSectionUpdate } from "./config.ts";
+import type { ModuleConfigRecord, ModuleMenuContext } from "../../kit/module.ts";
+import { readTuiSection, tuiSectionPatch, type TuiSectionUpdate } from "./config.ts";
 import type { TuiMessageKey } from "./messages/index.ts";
 import { type PiTuiConfig, type SpinnerMode } from "./plugin/settings-config.ts";
 
@@ -43,8 +44,6 @@ export function panelRowIds(): readonly string[] {
 
 /** 菜单运行态：由模块 register 装上 */
 export interface TuiMenuRuntime {
-	/** 写盘后重载状态中枢的内存副本，让 getConfig() 跟上磁盘 */
-	reload: () => Promise<void>;
 	/** 重读配置并原子重装常驻 UI（未安装时是空操作）；返回是否重装 */
 	applyUi: () => boolean;
 }
@@ -85,8 +84,9 @@ function describeError(error: unknown): string {
 export interface TuiPanelOptions {
 	readonly t: Translator;
 	readonly theme: MenuTheme;
-	readonly agentDir: string;
 	readonly runtime: TuiMenuRuntime;
+	/** 结构化配置写入事务（由菜单层注入，重绘请求也由它带）：模块只给补丁与 reapply */
+	readonly saveConfig: (patch: ModuleConfigRecord, hooks?: ConfigWriteHooks) => Promise<void>;
 	readonly requestRender: () => void;
 	/** 读本模块配置节（实时） */
 	readonly getSection: () => Record<string, unknown>;
@@ -95,23 +95,17 @@ export interface TuiPanelOptions {
 	readonly onDone: (value: string) => void;
 }
 
-/** 写本节点 → 重载状态中枢 → 重装常驻 UI；返回结果供 UI 与自测判定 */
+/** 保存补丁 → 事务（落盘 → 内存重载 → 原子重装界面）；返回结果供 UI 与自测判定 */
 export async function persistTuiSection(
 	options: TuiPanelOptions,
 	update: TuiSectionUpdate,
 ): Promise<SaveOutcome> {
 	try {
-		await saveTuiSection(update, { agentDir: options.agentDir });
-	} catch (error) {
-		return { ok: false, error: describeError(error) };
-	}
-	try {
-		await options.runtime.reload();
-	} catch {
-		// 内存副本落后不影响磁盘已写入的事实；下一次读盘会跟上
-	}
-	try {
-		options.runtime.applyUi();
+		await options.saveConfig(tuiSectionPatch(update), {
+			reapply: () => {
+				options.runtime.applyUi();
+			},
+		});
 	} catch (error) {
 		return { ok: false, error: describeError(error) };
 	}
@@ -309,8 +303,8 @@ export function buildTuiMenuItems(
 				new TuiPanel({
 					t,
 					theme: context.theme,
-					agentDir: context.agentDir,
 					runtime,
+					saveConfig: (patch, hooks) => context.saveConfig(patch, hooks),
 					requestRender: () => context.requestRender(),
 					getSection: () => context.getConfig(),
 					notify: (message, type) => context.context.ui.notify(message, type),

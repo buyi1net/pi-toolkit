@@ -4,6 +4,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SettingItem } from "@earendil-works/pi-tui";
 import type { Translator } from "../i18n/index.ts";
+import type { ConfigWriteHooks } from "./config-transaction.ts";
 import type { MenuTheme } from "./menu/theme.ts";
 import type { ServiceRegistry } from "./services.ts";
 
@@ -93,9 +94,14 @@ export interface ModuleContext {
   reloadConfig(): Promise<void>;
   /**
    * 写入并持久化单个配置字段，返回规范化后的值。
-   * 只接受 schema 声明的字段；模块私有的结构化配置（非 schema 键）由模块自己的配置层写入。
+   * 只接受 schema 声明的字段；模块私有的结构化配置（非 schema 键）走 saveConfig。
    */
   setConfig(key: string, value: ModuleConfigScalar): Promise<ModuleConfigScalar>;
+  /**
+   * 结构化配置写入事务（工单 19）：把本模块配置节的补丁写盘 → 内存重载 → reapply。
+   * 只允许从 kit 出去写盘，模块只提供补丁与重生效回调。
+   */
+  saveConfig(patch: ModuleConfigRecord, hooks?: ConfigWriteHooks): Promise<void>;
 }
 
 export interface ModuleMenuContext {
@@ -110,6 +116,11 @@ export interface ModuleMenuContext {
   readonly theme: MenuTheme;
   /** 异步动作结束后请宿主重绘（pi 的 TUI 是按需渲染） */
   requestRender(): void;
+  /**
+   * 结构化配置写入事务（工单 19）：补丁 → 落盘 → 内存重载 → reapply → 菜单重绘请求。
+   * 重绘请求由菜单层注入，模块只需给出补丁与 reapply。
+   */
+  saveConfig(patch: ModuleConfigRecord, hooks?: ConfigWriteHooks): Promise<void>;
 }
 
 export interface ModuleDefinition {

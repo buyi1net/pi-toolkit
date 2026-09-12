@@ -49,7 +49,7 @@ function registerTui(
 	const agentDir = options.agentDir ?? getAgentDir();
 
 	// 宿主注入：配置完全来自本模块（modules.tui 节），lifecycle 不再自己找配置文件；
-	// 保存后由 TuiMenuRuntime.applyUi 触发原子重装。
+	// 保存后由配置写入事务的 reapply 调 TuiMenuRuntime.applyUi 触发原子重装。
 	const handle = registerPiTuiLifecycle(context.pi, options.output ?? process.stdout, {
 		agentDir,
 		loadConfig: () => loadModuleConfig(context),
@@ -58,13 +58,12 @@ function registerTui(
 	});
 	__test__.handle = handle;
 
-	runtime.reload = () => context.reloadConfig();
 	runtime.applyUi = () => handle.applyConfig();
 }
 
 export function createTuiModule(options: TuiModuleOptions = {}): ModuleDefinition {
-	// 菜单写盘后要让状态中枢重新读盘，并让 lifecycle 重装常驻 UI
-	const runtime: TuiMenuRuntime = { reload: async () => {}, applyUi: () => false };
+	// 菜单保存走 kit 的配置写入事务（补丁 → 落盘 → 重载 → reapply）：模块只留界面重装动作
+	const runtime: TuiMenuRuntime = { applyUi: () => false };
 
 	return {
 		id: TUI_MODULE_ID,

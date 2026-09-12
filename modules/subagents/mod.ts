@@ -7,7 +7,6 @@ import {
   existsSync,
   mkdirSync,
   renameSync,
-  statSync,
   unlinkSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -21,20 +20,16 @@ import {
   pollForExit,
   closeSurface,
   shellEscape,
-  sentinelSuffix,
   adoptSurface,
   probeSurface,
   readExitSidecar,
   type PollResult,
 } from "./surface.ts";
 import {
-  formatHeadlessSurface,
   isPidAlive,
   parseHeadlessSurface,
   spawnHeadlessPi,
-  createSubagentLaunchEnv,
   terminateHeadlessProcess,
-  type HeadlessChild,
 } from "./headless.ts";
 
 import {
@@ -43,15 +38,6 @@ import {
   getNewEntries,
   readNameRegistry,
   readSubagentLoadout,
-  registerName,
-  resolveNameInRegistry,
-  seedSubagentSessionFile,
-  writeSubagentLoadout,
-  writeAnchoredLoadout,
-  readAnchoredLoadout,
-  diffSubagentLoadouts,
-  SUBAGENT_LOADOUT_VERSION,
-  type AnchoredSubagentLoadout,
   type MessageEntry,
   type SubagentLoadout,
 } from "./session.ts";
@@ -60,7 +46,6 @@ import {
   advanceStatusState,
   capStatusLines,
   classifyStatus,
-  createStatusState,
   forceStatusAfterInterrupt,
   formatStatusAggregate,
   formatTransitionLine,
@@ -68,7 +53,6 @@ import {
   loadStatusConfig,
 } from "./status.ts";
 import {
-  getSubagentActivityFile,
   readSubagentActivityFile,
   type ActivityReadResult,
   type SubagentActivityState,
@@ -79,7 +63,7 @@ import {
   type AgentDefaults,
 } from "./agents.ts";
 import { normalizeSubagentName, sanitizeSubagentFileName } from "./names.ts";
-import { loadTierRouteConfig, resolveTierForParams, normalizeTier, type TierRouteInjectedSource } from "./routing.ts";
+import { loadTierRouteConfig, type TierRouteInjectedSource } from "./routing.ts";
 import { routeExceptionFromResult } from "./route-error.ts";
 import { settleCompletionFromResult } from "./dependencies.ts";
 import { extractSubagentResult } from "./result.ts";
@@ -91,18 +75,15 @@ import { registerSubagentTool } from "./subagent-tool.ts";
 import { registerSubagentMessageTool } from "./message-tool.ts";
 import { registerSubagentStopTool } from "./stop-tool.ts";
 import { registerTeamDispatchTool } from "./team-dispatch-tool.ts";
-import { claimRoundSignal, claimTeamMessages, buildTeamRoundPrompt, findRosterMember, rosterPath, teamRoundMarker, upsertRosterMember } from "./team.ts";
-import { normalizeCohortId, SubagentParams, validateCohortId } from "./params.ts";
+import { claimRoundSignal, claimTeamMessages, findRosterMember, rosterPath, teamRoundMarker, upsertRosterMember } from "./team.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
 import {
   buildPiPromptArgs,
   buildSubagentToolAllowlist,
-  getDefaultSessionDirFor,
   resolveEffectiveAutoExit,
   resolveEffectiveInteractive,
   resolveEffectiveSessionMode,
   resolveLaunchBehavior,
-  resolveSubagentPaths,
   resolveSurfaceChoice,
   validateAgentLifecycleConfig,
   SPAWNING_TOOLS,
@@ -119,13 +100,19 @@ import {
   widgetIcon,
 } from "./display.ts";
 import { debugLog } from "./diagnostics.ts";
+import { createRuntimeRegistry, type RuntimeRecord } from "./registry.ts";
 import {
-  createRuntimeRecord,
-  readRuntimeRecords,
-  removeRuntimeRecord,
-  runtimeRegistryPath,
-  upsertRuntimeRecord,
-} from "./runtime-registry.ts";
+  buildWatcherTerminal,
+  failureSettlement,
+  takeMemberOffline,
+  type MemberTerminalActions,
+} from "./terminal.ts";
+import {
+  createSubagentStartup,
+  validateResumeTarget,
+  type StartedRun,
+  type SubagentStartup,
+} from "./startup.ts";
 
 /**
  * 本模块目录的绝对路径（工单 13 平掉 src/ 后实现文件平铺在模块根）。
@@ -162,6 +149,9 @@ const moduleInstanceId = randomUUID();
 function getModuleAbortSignal(): AbortSignal {
   return ((globalThis as any)[POLL_ABORT_KEY] as AbortController).signal;
 }
+
+/** 思考等级白名单：`--model` 后缀识别与 loadout 校验共用同一集合。 */
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 // ── 宿主(pi-toolkit)配置注入 ──────────────────────────────────────────
 // 本文件既作为 pi-toolkit 的子代理模块被装配，也作为子进程 `-e` 的独立扩展
@@ -212,140 +202,6 @@ export function resolveHostTierSources(): TierRouteInjectedSource[] {
   const models = host.section.models;
   if (!isPlainObject(models) || Object.keys(models).length === 0) return [];
   return [{ source: host.source, raw: { models } }];
-}
-
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-
-/**
- * resume 路径的信任校验:registry 与 .loadout.json 都是磁盘文件,可能被篡改
- * (子代理进程可写自己 session 目录下的 sidecar)。恢复前强制验证:
- *   1. loadout 字段合法(枚举值/类型),agentDir 存在且为目录;
- *   2. session containment 只锚定父侧可信根,绝不由 loadout.agentDir 自己
- *      决定:新快照(有锚定副本)要求 session 路径与锚定副本记录的
- *      sessionFile 精确匹配;旧快照(无锚定副本,兼容路径)固定用宿主
- *      agentDir(getAgentConfigDir,宿主环境可信)的 sessions 根,外加按
- *      spawn 时的推导规则从 loadout.cwd 重新推导出的项目本地
- *      .pi/agent sessions 根——除此之外的 agentDir 不再作为 containment 根;
- *   3. 锚定副本存在时,session sidecar 必须与它逐字段一致(只收窄不放宽:
- *      任何安全字段被改动都拒绝 resume,而不是静默接受更宽的授权)。
- * 诚实边界:同用户恶意进程可同时改写两份副本,这里不做绝对隔离承诺;
- * 目标是堵死“只改 session sidecar 即可扩权”的路径,并让篡改可检测。
- */
-function validateResumeTarget(
-  sessionPath: string,
-  loadout: SubagentLoadout,
-  agentDir: string,
-  opts?: { anchored?: AnchoredSubagentLoadout | null; requireAnchored?: boolean },
-): string | null {
-  const anchored = opts?.anchored ?? null;
-  const snapshotVersion = loadout.snapshotVersion;
-  if (
-    snapshotVersion !== undefined &&
-    (typeof snapshotVersion !== "number" ||
-      !Number.isInteger(snapshotVersion) ||
-      snapshotVersion !== SUBAGENT_LOADOUT_VERSION)
-  ) {
-    return `unsupported loadout snapshot version: ${String(snapshotVersion)}`;
-  }
-  // 新版快照自身携带强制锚定标记;即使 registry 的 anchored 字段被删除,
-  // 也不能把新快照静默降级为 legacy 校验。
-  const requiresAnchored = opts?.requireAnchored === true || snapshotVersion === SUBAGENT_LOADOUT_VERSION;
-  if (requiresAnchored && !anchored) {
-    return "parent-anchored loadout snapshot is missing or unreadable; refusing to fall back to legacy resume validation";
-  }
-  const resolvedSession = resolve(sessionPath);
-  // 先校验会参与路径推导的字段,避免恶意快照用非字符串触发 resolve
-  // 异常并绕过后续的结构化拒绝。
-  if (loadout.agentDir !== undefined && loadout.agentDir !== null && typeof loadout.agentDir !== "string") {
-    return "loadout agentDir must be a string or null";
-  }
-  if (loadout.cwd !== undefined && loadout.cwd !== null && typeof loadout.cwd !== "string") {
-    return "loadout cwd must be a string or null";
-  }
-  if (anchored) {
-    // 锚定副本精确匹配:父进程自己登记过这个路径,containment 即成立。
-    if (resolve(anchored.sessionFile) !== resolvedSession) {
-      return `session path does not match the parent-anchored snapshot: ${sessionPath} (anchored: ${anchored.sessionFile})`;
-    }
-  } else {
-    // 旧快照兼容:containment 根固定为宿主 agentDir 的 sessions 根;项目
-    // 本地 .pi/agent 只有在能从 loadout.cwd 按 spawn 推导规则复算出同一
-    // agentDir 时才可作为根(localAgentDir = <cwd>/.pi/agent,存在才生效)。
-    // loadout.agentDir 本身不再单独决定 containment 根,只作被校验后的
-    // 运行配置。
-    const trustedRoots = [resolve(join(agentDir, "sessions"))];
-    if (loadout.cwd && loadout.agentDir) {
-      const derivedLocal = join(resolve(loadout.cwd), ".pi", "agent");
-      if (resolve(loadout.agentDir) === derivedLocal) {
-        trustedRoots.push(resolve(join(derivedLocal, "sessions")));
-      }
-    }
-    if (!trustedRoots.some((root) => resolvedSession.startsWith(root + sep))) {
-      return `session file escapes the sessions directory: ${sessionPath}`;
-    }
-  }
-  if (!resolvedSession.endsWith(".jsonl") || !existsSync(resolvedSession)) {
-    return `session file missing or not a .jsonl session: ${sessionPath}`;
-  }
-  // 锚定副本交叉校验优先于字段存在性检查:篡改场景应报告“被改动”而不是
-  // 改动后的字段自身的次要错误。
-  if (anchored) {
-    const diff = diffSubagentLoadouts(anchored, loadout);
-    if (diff.length > 0) {
-      return (
-        `loadout snapshot was modified after spawn (fields: ${diff.join(", ")}); ` +
-        `refusing to resume with an altered authorization. ` +
-        `Re-run the task as a fresh subagent instead.`
-      );
-    }
-  }
-  if (loadout.agentDir) {
-    const ad = resolve(loadout.agentDir);
-    try {
-      if (!statSync(ad).isDirectory()) return `loadout agentDir is not a directory: ${loadout.agentDir}`;
-    } catch {
-      return `loadout agentDir does not exist: ${loadout.agentDir}`;
-    }
-  }
-  if (loadout.thinking != null && !THINKING_LEVELS.has(loadout.thinking)) {
-    return `loadout thinking level invalid: ${loadout.thinking}`;
-  }
-  if (loadout.thinkingOverride != null && !THINKING_LEVELS.has(loadout.thinkingOverride)) {
-    return `loadout thinkingOverride invalid: ${loadout.thinkingOverride}`;
-  }
-  if (
-    loadout.systemPromptMode != null &&
-    loadout.systemPromptMode !== "append" &&
-    loadout.systemPromptMode !== "replace"
-  ) {
-    return `loadout systemPromptMode invalid: ${loadout.systemPromptMode}`;
-  }
-  if (loadout.toolAllowlist !== undefined && loadout.toolAllowlist !== null && typeof loadout.toolAllowlist !== "string") {
-    return "loadout toolAllowlist must be a string or null";
-  }
-  if (loadout.model !== undefined && loadout.model !== null && typeof loadout.model !== "string") {
-    return "loadout model must be a string or null";
-  }
-  if (loadout.tier != null && (typeof loadout.tier !== "string" || normalizeTier(loadout.tier) === null)) {
-    return `loadout tier invalid: ${loadout.tier}`;
-  }
-  if (loadout.cohortId != null) {
-    const cohortError = validateCohortId(loadout.cohortId);
-    if (cohortError) return `loadout cohortId invalid: ${cohortError}`;
-  }
-  if (loadout.agent !== undefined && loadout.agent !== null && typeof loadout.agent !== "string") {
-    return "loadout agent must be a string or null";
-  }
-  if (loadout.identity !== undefined && loadout.identity !== null && typeof loadout.identity !== "string") {
-    return "loadout identity must be a string or null";
-  }
-  if (loadout.spawnable != null && (!Array.isArray(loadout.spawnable) || loadout.spawnable.some((item) => typeof item !== "string"))) {
-    return "loadout spawnable must be an array of agent names or null";
-  }
-  if (loadout.autoExit !== undefined && typeof loadout.autoExit !== "boolean") {
-    return "loadout autoExit must be a boolean";
-  }
-  return null;
 }
 
 /** Built-in tools pi provides natively — no extension needs to be loaded. */
@@ -574,26 +430,24 @@ function resolveResultPresentation(
 // 交互式子代理的 pane 归用户驱动,保持异步:watcher 终态后经 steer 消息
 // 回注。ask_question 与 stalled/recovered 状态通知也保持即时通道。
 /**
- * Result from running a single subagent.
+ * 进程级运行态登记表：内存运行态、保留名与磁盘运行记录统一由它持有。
+ * 本文件的启动/恢复/watcher/关闭路径与所有工具都只经它读写运行态。
  */
-/** All currently running subagents, keyed by id. */
-const runningSubagents = new Map<string, RunningSubagent>();
+const runtimeRegistry = createRuntimeRegistry();
 
 /**
- * 运行中的子代理快照（服务注册表句柄 `subagents.running` 用）。
- * 与状态 widget 同源：同一份进程内 Map。
+ * 服务注册表句柄 `subagents.running` 的只读投影（三个方法签名与既有一致）：
+ * 数据源统一为登记表——内存实时态来自 list()，会话磁盘记录来自 readRecords()。
  */
-export function listRunningSubagents(): readonly RunningSubagent[] {
-  return Array.from(runningSubagents.values());
-}
-
-/**
- * 会话作用域的运行态登记文件路径（沿用 runtime-registry 的既有布局：
- * <sessionDir>/artifacts/<sessionId>/subagent-runtime.json）。
- */
-export function runtimeRegistryPathForSession(sessionDir: string, sessionId: string): string {
-  return runtimeRegistryPath(getArtifactDir(sessionDir, sessionId));
-}
+export const subagentsRunningView = {
+  /** 进程内运行中的子代理数量（与状态 widget 同源，实时）。 */
+  runningCount: (): number => runtimeRegistry.list().length,
+  /** 进程内运行中的子代理名（便于其它模块做哨兵判断）。 */
+  runningNames: (): readonly string[] => runtimeRegistry.list().map((running) => running.name),
+  /** 会话作用域的持久化运行态登记（沿用 subagent-runtime.json 的既有布局）。 */
+  runtimeRecords: (sessionDir: string, sessionId: string): RuntimeRecord[] =>
+    runtimeRegistry.readRecords(runtimeRegistry.pathFor(getArtifactDir(sessionDir, sessionId))),
+};
 
 // When this extension is loaded inside a subagent that itself spawns children
 // (e.g. a worker delegating to scout/researcher), `subagent-done.ts` runs in the
@@ -602,7 +456,7 @@ export function runtimeRegistryPathForSession(sessionDir: string, sessionId: str
 // report back. Expose a live count through a process-global symbol that both
 // modules share. (subagent-done.ts reads it; if absent it assumes zero.)
 const RUNNING_CHILDREN_COUNT_KEY = Symbol.for("pi-subagents/running-children-count");
-(globalThis as any)[RUNNING_CHILDREN_COUNT_KEY] = () => runningSubagents.size;
+(globalThis as any)[RUNNING_CHILDREN_COUNT_KEY] = () => runtimeRegistry.list().length;
 
 // ── Widget management ──
 
@@ -726,7 +580,7 @@ function renderSubagentWidgetLines(agents: RunningSubagent[], width: number): st
 function updateWidget() {
   if (!latestCtx?.hasUI) return;
 
-  if (runningSubagents.size === 0) {
+  if (runtimeRegistry.list().length === 0) {
     latestCtx.ui.setWidget("subagent-status", undefined);
     if (widgetInterval) {
       clearInterval(widgetInterval);
@@ -742,7 +596,7 @@ function updateWidget() {
       return {
         invalidate() {},
         render(width: number) {
-          return renderSubagentWidgetLines(Array.from(runningSubagents.values()), width);
+          return renderSubagentWidgetLines(runtimeRegistry.list(), width);
         },
       };
     },
@@ -974,60 +828,8 @@ function observeRunningSubagent(running: RunningSubagent, observedAt = Date.now(
   }, observedAt);
 }
 
-/**
- * Names claimed by spawns that are mid-launch but not yet registered in
- * `runningSubagents`. Parallel `subagent` tool calls run their synchronous
- * prefix (name defaulting) before any of them finishes `launchSubagent` and
- * registers, so without this they'd all see an empty map and pick the same
- * name. Reserved synchronously when a default name is chosen and released once
- * the subagent registers (or its launch fails).
- */
-const reservedNames = new Set<string>();
-
-/**
- * Return `base`, or `base-2`, `base-3`, … so the result is unique within this
- * spawner session. Considers (a) currently-running subagents, (b) names
- * reserved by parallel in-flight spawns, and (c) every name already recorded in
- * the spawner's persistent registry — so a defaulted name never collides with a
- * finished subagent either. This lets `subagent_message({ name })` address any
- * subagent of this session unambiguously, running or finished.
- *
- * `registryNames` is the set of names already taken in the registry (empty when
- * there is no session file / artifact dir yet).
- */
-function uniqueRunningName(base: string, registryNames?: Set<string>): string {
-  const taken = new Set(Array.from(runningSubagents.values()).map((r) => r.name));
-  for (const reserved of reservedNames) taken.add(reserved);
-  if (registryNames) for (const n of registryNames) taken.add(n);
-  if (!taken.has(base)) return base;
-  let n = 2;
-  while (taken.has(`${base}-${n}`)) n++;
-  return `${base}-${n}`;
-}
-
-function resolveRunningByName(name: string):
-  | { running: RunningSubagent }
-  | { error: string } {
-  // 与 spawn/resume 同規则 normalize,多余空白/大小写差异不再导致寻址失败;
-  // 空名仍报错(fallback 传空串,不默认成 "subagent")。
-  const requestedName = normalizeSubagentName(name, "");
-  if (!requestedName) {
-    return { error: "Provide the exact display name of a running subagent." };
-  }
-
-  const matches = Array.from(runningSubagents.values()).filter((running) => running.name === requestedName);
-  if (matches.length === 1) return { running: matches[0] };
-  if (matches.length === 0) {
-    const names = Array.from(runningSubagents.values()).map((r) => r.name);
-    const hint = names.length
-      ? ` Currently running: ${[...new Set(names)].join(", ")}.`
-      : " No subagents are currently running.";
-    return { error: `No running subagent named "${requestedName}".${hint}` };
-  }
-
-  const candidates = matches.map((running) => `${running.name} [${running.id}]`).join(", ");
-  return { error: `Ambiguous subagent name "${requestedName}". Matches: ${candidates}` };
-}
+// 名字保留（reserveName/releaseName/isNameTaken/uniqueName）与按名解析
+// （resolveName）已收进登记表 registry.ts；本文件不再持有进程内 Map/Set。
 
 /**
  * Type a follow-up message into a running subagent's live pane. Newlines are
@@ -1089,7 +891,7 @@ function handleSubagentSteer(
     return { content: [{ type: "text" as const, text: err }], details: { error: err } };
   }
 
-  const resolved = resolveRunningByName(params.name ?? "");
+  const resolved = runtimeRegistry.resolveName(params.name ?? "");
   if ("error" in resolved) {
     return {
       content: [{ type: "text" as const, text: resolved.error }],
@@ -1137,7 +939,7 @@ function startStatusRefresh(pi: ExtensionAPI) {
   if (!isStatusEnabled() || statusInterval) return;
 
   statusInterval = setInterval(() => {
-    if (runningSubagents.size === 0) {
+    if (runtimeRegistry.list().length === 0) {
       if (statusInterval) {
         clearInterval(statusInterval);
         statusInterval = null;
@@ -1150,7 +952,7 @@ function startStatusRefresh(pi: ExtensionAPI) {
     const now = Date.now();
     let shouldRefreshWidget = false;
 
-    for (const running of runningSubagents.values()) {
+    for (const running of runtimeRegistry.list()) {
       observeRunningSubagent(running, now);
       const { nextState, snapshot, transition } = advanceStatusState(running.statusState, now);
       if (nextState.currentKind !== running.statusState.currentKind) {
@@ -1211,28 +1013,20 @@ export const __test__ = {
   buildSubagentToolAllowlist,
   applySandboxToParts,
   buildPiPromptArgs,
-  formatWidgetRightLabel,
   observeRunningSubagent,
   getToolExtensionPath,
-  resolveRunningByName,
-  uniqueRunningName,
-  reservedNames,
   steerSubagent,
   handleSubagentSteer,
   classifyWatcherFailure,
   watchMemberRound,
-  dispatchMarkerInSession,
   canReuseMemberName,
-  markMemberOffline,
   drainMemberMailbox,
   resolveResultPresentation,
   resolveResumeLaunchBehavior,
   buildHeadlessPrompt,
-  runningSubagents,
+  runtimeRegistry,
   watchSubagent,
   waitForHeadlessExit,
-  watchHeadlessSubagent,
-  formatElapsed,
   formatTokens,
   formatContextUsage,
   contextWindowFor,
@@ -1250,421 +1044,9 @@ function startWidgetRefresh() {
 }
 
 /**
- * Launch a subagent: creates the multiplexer pane, builds the command, and
- * sends it. Returns a RunningSubagent — does NOT poll.
- *
- * Call watchSubagent() on the returned object to observe completion.
- */
-async function launchSubagent(
-  params: typeof SubagentParams.static,
-  ctx: { sessionManager: { getSessionFile(): string | null | undefined; getSessionId(): string; getSessionDir(): string }; cwd: string },
-  options?: { surface?: string },
-): Promise<RunningSubagent> {
-  const startTime = Date.now();
-  const id = Math.random().toString(16).slice(2, 10);
-  const sentinelToken = `__PI_SUBAGENT_DONE_${randomUUID()}__`;
-  const cohortError = validateCohortId(params.cohortId);
-  if (cohortError) throw new Error(cohortError);
-  const cohortId = normalizeCohortId(params.cohortId);
-
-  const agentDefs = params.agent ? loadAgentDefaults(params.agent) : null;
-  // Resolve the target before tier lookup so a project-local
-  // .pi/agent/pi-subagents.json is honored when the caller selected a
-  // different cwd. The concrete model is then captured in the loadout below,
-  // so resume does not drift if the tier configuration changes later.
-  const { effectiveCwd, localAgentDir, effectiveAgentDir } = resolveSubagentPaths(
-    params,
-    agentDefs,
-    getAgentConfigDir,
-  );
-  const targetCwdForSession = effectiveCwd ?? ctx.cwd;
-
-  // tier 解析先于 loadout 写入:显式 params.model 优先 tier;tier 无法归一化
-  // 或缺映射时直接抛错拒绝启动,绝不静默换模型。loadout.model 存具体模型,
-  // tier 仅作记录,resume 不随配置漂移。
-  const tierResolution = resolveTierForParams(params, () =>
-    loadTierRouteConfig({
-      cwd: targetCwdForSession,
-      agentConfigDir: effectiveAgentDir,
-      injected: resolveHostTierSources(),
-    }));
-  if ("error" in tierResolution) throw new Error(tierResolution.error);
-  const effectiveModel = params.model ?? tierResolution.model ?? agentDefs?.model;
-  const effectiveTools = agentDefs?.tools;
-  const effectiveSkills = agentDefs?.skills;
-  const effectiveThinking = params.thinking ?? agentDefs?.thinking;
-  if (effectiveThinking != null && !THINKING_LEVELS.has(effectiveThinking)) {
-    throw new Error(
-      `Invalid thinking level "${effectiveThinking}". Use: ${[...THINKING_LEVELS].join(", ")}.`,
-    );
-  }
-  const lifecycleError = validateAgentLifecycleConfig(agentDefs);
-  if (lifecycleError) throw new Error(lifecycleError);
-  const effectiveInteractive = resolveEffectiveInteractive(params, agentDefs);
-  const effectiveAutoExit = resolveEffectiveAutoExit(agentDefs);
-  // 持久团队成员(member):常驻 headless 进程,不走 auto-exit/barrier。
-  // 工具层已拒绝 pane/interactive/discard/timeoutMs/dependsOn 组合;这里
-  // 强制 headless 表面,不改变非 member 的任何默认行为。
-  const memberMode = params.member === true;
-
-  // 表面选择:pane(现有 herdr/tmux 路径)或 headless(独立后台 pi 进程)。
-  // interactive 请求 background 在此直接报错,不静默建 pane。
-  const surfaceChoice = resolveSurfaceChoice(
-    memberMode ? "background" : params.surface,
-    memberMode ? false : effectiveInteractive,
-  );
-  if ("error" in surfaceChoice) throw new Error(surfaceChoice.error);
-  const useHeadless = surfaceChoice.choice === "headless";
-
-  const sessionFile = ctx.sessionManager.getSessionFile();
-  if (!sessionFile) throw new Error("No session file");
-  const sessionId = ctx.sessionManager.getSessionId();
-  const artifactDir = getArtifactDir(ctx.sessionManager.getSessionDir(), sessionId);
-
-  // fork 模式拦截必须先于 createSurface/spawnHeadless(否则被拒绝的 spawn 会泄漏 pane 或进程)。
-  // fork 的任务文本直传 argv,在 Windows pane 的 PowerShell 引号规则下无法安全
-  // 转义,pane 表面不支持;standalone/lineage-only 的任务走 @artifact 文件,不受影响。
-  const launchBehavior = resolveLaunchBehavior(params, agentDefs);
-  if (launchBehavior.inheritsConversationContext) {
-    throw new Error(
-      'session-mode: fork is not supported by this extension. Use "standalone" or "lineage-only".',
-    );
-  }
-
-  const sessionDir = getDefaultSessionDirFor(targetCwdForSession, effectiveAgentDir);
-
-  // Generate a deterministic session file path for this subagent.
-  // This eliminates race conditions when multiple agents launch simultaneously —
-  // each agent knows exactly which file is theirs.
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 23) + "Z";
-  const uuid = [
-    id,
-    Math.random().toString(16).slice(2, 10),
-    Math.random().toString(16).slice(2, 10),
-    Math.random().toString(16).slice(2, 6),
-  ].join("-");
-  const subagentSessionFile = join(sessionDir, `${timestamp}_${uuid}.jsonl`);
-
-  // Use pre-created surface (parallel mode) or create a new one.
-  // For new surfaces, pause briefly so the shell is ready before sending the command.
-  const surfacePreCreated = !!options?.surface;
-  // 与 steer/resume 的寻址规则一致:入口处统一 normalize,保证 pane、widget、
-  // registry 与运行态 map 里的名称同源(幂等,已干净的名称不变)。
-  const surfaceName = normalizeSubagentName(params.name ?? params.agent ?? "subagent");
-  const activityFile = getSubagentActivityFile(artifactDir, id);
-  mkdirSync(dirname(activityFile), { recursive: true });
-  // An agent with a non-empty subagent_agents list is granted the spawning
-  // toolset and may only spawn the listed agents (enforced via PI_SUBAGENT_ALLOWED).
-  const grantSpawning = !!(agentDefs?.subagentAgents && agentDefs.subagentAgents.length > 0);
-  // Resolve the config dir the child sees: a target-local .pi/agent/ wins,
-  // else the propagated global dir. Captured once so the launch env and the
-  // resume snapshot agree.
-  const resolvedAgentDir =
-    localAgentDir && existsSync(localAgentDir)
-      ? localAgentDir
-      : process.env.PI_CODING_AGENT_DIR ?? null;
-  // herdr 版:环境变量在 split 时注入(pane split --env),因此 splitEnv 的构造
-  // 必须在 createSurface 之前;pane id 相关变量不再注入(子进程自带 HERDR_PANE_ID)。
-  // (activityFile / grantSpawning / resolvedAgentDir 的声明相应提前到此处。)
-  const splitEnv: Record<string, string> = createSubagentLaunchEnv();
-  if (resolvedAgentDir) {
-    splitEnv.PI_CODING_AGENT_DIR = resolvedAgentDir;
-  }
-  if (grantSpawning && agentDefs?.subagentAgents) {
-    splitEnv.PI_SUBAGENT_ALLOWED = agentDefs.subagentAgents.join(",");
-  }
-  splitEnv.PI_SUBAGENT_NAME = surfaceName;
-  if (params.agent) {
-    splitEnv.PI_SUBAGENT_AGENT = params.agent;
-  }
-  if (effectiveAutoExit && !memberMode) {
-    splitEnv.PI_SUBAGENT_AUTO_EXIT = "1";
-  }
-  // Automatic subagent tool calls are hard barriers. If such a child needs
-  // input, subagent-done converts ask_question into a durable checkpoint and
-  // exits so the parent can resume it; leaving the old live-parking behavior
-  // here would deadlock the blocking tool call.
-  // member 例外:无 barrier——ask_question 保持可回复的实时等待(成员常驻,
-  // 父侧 watcher 轮询 .ask 并即时投递)。
-  if (!effectiveInteractive && !memberMode) {
-    splitEnv.PI_SUBAGENT_BARRIER = "1";
-  }
-  if (memberMode) {
-    // 成员身份与团队协议目录:team_send 只写 mailbox,roster 父侧独写。
-    splitEnv.PI_SUBAGENT_MEMBER = "1";
-    splitEnv.PI_SUBAGENT_TEAM_DIR = artifactDir;
-    if (agentDefs?.peerSend?.length) {
-      splitEnv.PI_SUBAGENT_PEER_SEND = agentDefs.peerSend.join(",");
-    }
-  }
-  splitEnv.PI_SUBAGENT_SESSION = subagentSessionFile;
-  splitEnv.PI_SUBAGENT_ID = id;
-  splitEnv.PI_SUBAGENT_ACTIVITY_FILE = activityFile;
-  if (launchBehavior.seededSessionMode) {
-    seedSubagentSessionFile({
-      mode: launchBehavior.seededSessionMode,
-      parentSessionFile: sessionFile,
-      childSessionFile: subagentSessionFile,
-      childCwd: targetCwdForSession,
-    });
-  }
-
-  const { inheritsConversationContext } = launchBehavior;
-
-  // Build the task message
-  // Only full-context fork mode inherits prior conversation state.
-  // Blank-session modes need the wrapper instructions and artifact-backed handoff.
-  const modeHint = memberMode
-    ? "You are a PERSISTENT TEAM MEMBER running your CURRENT round. Complete this round autonomously, then simply stop — your process stays alive for the next dispatched round (never call shutdown yourself). Follow-up work arrives as new messages; teammate fire-and-forget notes arrive prefixed with [team message from …]."
-    : effectiveAutoExit
-    ? "Complete your task autonomously. When you are finished, simply stop — your session ends automatically."
-    : "Complete your task. The user can interact with you at any time, and the session ends when the user exits the pane.";
-  const summaryInstruction = memberMode
-    ? "Your FINAL assistant message of THIS round is delivered to the orchestrator as the round's result — make it a complete, self-contained summary."
-    : effectiveAutoExit
-    ? "Your FINAL assistant message should summarize what you accomplished."
-    : "Your FINAL assistant message (before the user exits) should summarize what you accomplished.";
-  const identity = agentDefs?.body ?? null;
-  const systemPromptMode = agentDefs?.systemPromptMode;
-  const identityInSystemPrompt = systemPromptMode && identity;
-  const roleBlock = identity && !identityInSystemPrompt ? `\n\n${identity}` : "";
-  const fullTask = inheritsConversationContext
-    ? params.task
-    : `${roleBlock}\n\n${modeHint}\n\n${params.task}\n\n${summaryInstruction}`;
-  // ── Pi CLI path ──
-
-  // Build pi command
-  // pane 路径参数要过 pane 内 shell,统一 shellEscape;headless 路径用纯 argv
-  // 直传子进程,同一数组但 esc 为恒等——两条路径共用同一参数构造,不漂移。
-  const esc = useHeadless ? (value: string) => value : shellEscape;
-  const parts: string[] = ["pi"];
-  parts.push("--session", esc(subagentSessionFile));
-
-  // Load subagent-done extension so the agent can self-terminate if needed
-  const subagentDonePath = join(SUBAGENTS_DIR, "subagent-done.ts");
-  parts.push("-e", esc(subagentDonePath));
-
-  // Keep the profile's tool allowlist while allowing Pi to discover the same
-  // configured extensions as the parent. The loadout still records the
-  // resolved tool policy so resume does not widen callable tools.
-  // member 注入 team_send(profile 不能靠 tools 自授,同 spawning 的授权模型)。
-  const toolAllowlist = buildSubagentToolAllowlist(effectiveTools, {
-    grantSpawning,
-    ...(memberMode ? { grantTeamSend: true } : {}),
-  });
-
-  // Snapshot the fully-resolved sandbox beside the session file so a later
-  // `subagent_message({ name })` resume can replay the same tool policy,
-  // model, identity, and spawn permissions.
-  const loadout: SubagentLoadout = {
-    snapshotVersion: SUBAGENT_LOADOUT_VERSION,
-    agent: params.agent ?? null,
-    toolAllowlist,
-    model: effectiveModel ?? null,
-    thinking: agentDefs?.thinking ?? null,
-    thinkingOverride: params.thinking ?? null,
-    tier: tierResolution.tier,
-    ...(cohortId ? { cohortId } : {}),
-    systemPromptMode: systemPromptMode ?? null,
-    identity: identityInSystemPrompt ? identity : null,
-    spawnable: agentDefs?.subagentAgents ?? null,
-    autoExit: memberMode ? false : effectiveAutoExit,
-    ...(memberMode ? { member: true } : {}),
-    // Store the actual cwd used by the child. For an omitted `cwd`, this is
-    // the parent session cwd rather than the extension host's process.cwd();
-    // resume/headless launches must reproduce that directory exactly.
-    cwd: targetCwdForSession,
-    agentDir: resolvedAgentDir,
-  };
-  writeSubagentLoadout(subagentSessionFile, loadout);
-  // 父侧锚定副本:resume 授权的单一真源(见 session.ts AnchoredSubagentLoadout)。
-  // 写失败不阻断本次 spawn;但新版快照带强制锚定标记,后续 resume 会拒绝
-  // 缺失的父侧副本,不会静默退回 legacy;路径计入 contextFiles,随 retention
-  // 清理一起回收。
-  let anchoredLoadoutFile: string | null = null;
-  try {
-    anchoredLoadoutFile = writeAnchoredLoadout(artifactDir, subagentSessionFile, loadout);
-  } catch (error) {
-    debugLog(`Could not persist anchored loadout for ${surfaceName}`, error);
-  }
-
-  // Apply model, identity, and the tool policy via the shared helper (same
-  // code path resume uses — they can't drift).
-  // 返回值是写入 context/ 的文件路径,记入 running.contextFiles 供 retention
-  // 清理;resume 路径不消费返回值。
-  const contextFiles: string[] = applySandboxToParts(
-    parts,
-    loadout,
-    { artifactDir, name: surfaceName },
-    { escape: esc },
-  );
-  if (anchoredLoadoutFile) contextFiles.push(anchoredLoadoutFile);
-
-  // applySandboxToParts(parts, loadout, ...);
-  // 环境变量已在 createSurface 时经 pane split --env 注入(splitEnv),不再拼 shell 前缀;
-  // PI_SUBAGENT_SURFACE 不再注入:子进程在 herdr pane 内,自带 HERDR_PANE_ID。
-
-  // Pass task and skill prompts to the sub-agent.
-  // Only full-context fork mode gets a direct task argument because it already
-  // inherits the parent conversation. Blank-session modes use artifact-backed
-  // handoff so the wrapper instructions arrive as the initial user message.
-  // RPC/headless mode cannot accept positional file arguments, so the prompt
-  // arguments are kept separate from the base argv and are delivered over
-  // stdin below.
-  const basePartsLength = parts.length;
-  let taskArg: string;
-  if (launchBehavior.taskDelivery === "direct") {
-    taskArg = fullTask;
-  } else {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const safeName = sanitizeSubagentFileName(surfaceName);
-    const artifactName = `context/${safeName || "subagent"}-${timestamp}.md`;
-    const artifactPath = join(artifactDir, artifactName);
-    mkdirSync(dirname(artifactPath), { recursive: true });
-    writeFileSync(artifactPath, fullTask, "utf8");
-    contextFiles.push(artifactPath);
-    taskArg = `@${artifactPath}`;
-  }
-
-  for (const promptArg of buildPiPromptArgs({
-    effectiveSkills,
-    taskDelivery: launchBehavior.taskDelivery,
-    taskArg,
-  })) {
-    parts.push(esc(promptArg));
-  }
-
-  // 创建 pane / 启动 headless 进程延后到所有 session、artifact 和启动参数准备
-  // 完成之后,避免准备阶段失败时留下无法管理的孤儿 pane 或孤儿进程。
-  // 持久成员首轮关联 nonce:初始 prompt 带 marker,首轮 .round 的关联判定
-  // 与后续 team_dispatch 轮同一套语义(见 watchMemberRound)。
-  const memberFirstRoundId = memberMode ? randomUUID() : null;
-  let child: HeadlessChild | null = null;
-  let surface: string;
-  if (useHeadless) {
-    // RPC argv:参数数组直传子进程,不经 shell拼接;初始任务经 stdin prompt
-    // 投递(下方),不进 argv。--mode rpc 必须在最前。
-    // Do not pass buildPiPromptArgs() output here: RPC mode rejects positional
-    // file arguments (including the pane path's @artifact.md handoff). The
-    // complete task and skill prompts are sent as the first stdin prompt below.
-    const rpcArgs = ["--mode", "rpc", ...parts.slice(1, basePartsLength)];
-    const initialPromptId = `initial-${id}`;
-    let initialPromptPending = true;
-    child = spawnHeadlessPi(
-      { args: rpcArgs, cwd: targetCwdForSession, env: splitEnv },
-      (event) => {
-        // Only the first prompt is a launch preflight. A later prompt may
-        // legitimately fail after a steer/reply and must not make the watcher
-        // kill an otherwise live child with a misleading "initial" error.
-        if (
-          initialPromptPending &&
-          event.type === "response" &&
-          event.command === "prompt" &&
-          (event.id === initialPromptId || event.id == null)
-        ) {
-          initialPromptPending = false;
-          if (event.success === false) {
-            child!.promptError = typeof event.error === "string" && event.error
-              ? event.error
-              : "sub-agent rejected its initial prompt";
-          }
-        }
-      },
-    );
-    if (child.pid == null) {
-      child.kill();
-      throw new Error("Failed to spawn headless sub-agent process (check PI_SUBAGENT_PI_ENTRY / pi installation).");
-    }
-    surface = formatHeadlessSurface(child.pid);
-    // headless 初始 prompt:skill 前缀 + 任务全文直接经 stdin 投递。
-    // artifact 文件仍写盘(与 pane 路径一致的 handoff 审计),但 RPC prompt
-    // 不再用 @file 引用——stdin 无 shell 转义问题,发全文更可靠。
-    child.send({
-      id: initialPromptId,
-      type: "prompt",
-      message: memberFirstRoundId
-        ? buildTeamRoundPrompt(memberFirstRoundId, buildHeadlessPrompt(effectiveSkills, fullTask))
-        : buildHeadlessPrompt(effectiveSkills, fullTask),
-    });
-  } else {
-    surface = options?.surface ?? createSurface(surfaceName, { cwd: effectiveCwd ?? undefined, env: splitEnv });
-    if (!surfacePreCreated) {
-      await new Promise<void>((resolve) => setTimeout(resolve, getShellReadyDelayMs()));
-    }
-
-    // herdr:整行命令直发 pane 内 shell。任务与身份都走文件参数,命令行仅含
-    // 固定 flag 与路径,长度可控;cwd 已由 pane split --cwd 设定。sentinel 由
-    // surface.ts 按 pane shell 语法生成(Windows/herdr=PowerShell $LASTEXITCODE,
-    // POSIX=tmux 及 herdr on Linux/macOS 用 $?)。
-    const command = `${parts.join(" ")}${sentinelSuffix(sentinelToken)}`;
-    try {
-      sendCommand(surface, command);
-    } catch (err) {
-      // 命令未能送达:pane 留着只会成为孤儿,关闭并上抛
-      try { closeSurface(surface); } catch (closeError) {
-        debugLog(`Could not close failed launch pane ${surface}`, closeError);
-      }
-      throw err;
-    }
-  }
-
-  const running: RunningSubagent = {
-    id,
-    name: surfaceName,
-    task: params.task,
-    ...(cohortId ? { cohortId } : {}),
-    agent: params.agent,
-    model: effectiveModel ?? null,
-    parentId: process.env.PI_SUBAGENT_ID ?? null,
-    ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
-    waitMode: memberMode ? "member-round" : effectiveInteractive ? "interactive" : "hard-barrier",
-    surface,
-    startTime,
-    sessionFile: subagentSessionFile,
-    activityFile,
-    interactive: effectiveInteractive,
-    sentinelToken,
-    runtimeFile: runtimeRegistryPath(artifactDir),
-    statusState: createStatusState({
-      source: "pi",
-      startTimeMs: startTime,
-    }),
-    kind: useHeadless ? "headless" : "pane",
-    ...(anchoredLoadoutFile ? { anchoredLoadout: true } : {}),
-    contextFiles,
-    ...(memberMode ? { member: true, rosterFile: rosterPath(artifactDir), dispatchedRoundId: memberFirstRoundId! } : {}),
-    ...(child && child.pid != null ? { pid: child.pid, headlessChild: child } : {}),
-  };
-
-  runningSubagents.set(id, running);
-  try {
-    upsertRuntimeRecord(running.runtimeFile, createRuntimeRecord(running));
-  } catch (error) {
-    // 运行态记录失败不应撤销已经启动的子代理；watcher 仍负责当前进程。
-    debugLog(`Could not persist runtime record for ${running.name}`, error);
-  }
-  // member 名册登记:首轮即第一个在途轮次。父进程是 roster 唯一写者。
-  if (memberMode) {
-    try {
-      upsertRosterMember(running.rosterFile!, {
-        name: running.name,
-        ...(running.agent ? { agent: running.agent } : {}),
-        sessionFile: running.sessionFile,
-        ...(running.pid != null ? { pid: running.pid } : {}),
-        status: "dispatched",
-        dispatchedAt: Date.now(),
-      });
-    } catch (error) {
-      debugLog(`Could not register team member ${running.name} in roster`, error);
-    }
-  }
-  return running;
-}
-
-/**
  * Watch a launched subagent until it exits. Polls for completion, extracts
  * the summary from the session file, cleans up the surface,
- * and removes the entry from runningSubagents.
+ * and removes the entry from the runtime registry.
  */
 
 /**
@@ -1711,11 +1093,7 @@ function canReuseMemberName(name: string, artifactDir: string): boolean {
     debugLog(`Could not read team roster for member name reuse of ${normalized}`, error);
     return false;
   }
-  if (Array.from(runningSubagents.values()).some((running) => running.name === normalized)) {
-    return false;
-  }
-  if (reservedNames.has(normalized)) return false;
-  return true;
+  return !runtimeRegistry.isNameTaken(normalized);
 }
 
 /** roster 标记 offline(幂等:重复 upsert 同一 offline 状态无害)。 */
@@ -1733,6 +1111,11 @@ function markMemberOffline(running: RunningSubagent, reason: string): void {
   } catch (error) {
     debugLog(`Could not mark team member ${running.name} offline`, error);
   }
+}
+
+/** 成员终态收尾动作：terminal.ts 的统一实现在此拿到进程/roster/登记三个原语。 */
+function memberTerminalActions(): MemberTerminalActions {
+  return { registry: runtimeRegistry, killMemberProcess, markMemberOffline };
 }
 
 /** 认领并注入成员间消息(fire-and-forget;注入文案带来源,不可冒名)。 */
@@ -1849,15 +1232,8 @@ async function finalizeMemberFailure(
   running.dispatchedRoundId = undefined;
   running.pendingRoundSignal = undefined;
   running.roundAssociationAttempts = 0;
-  killMemberProcess(running);
-  markMemberOffline(running, reason);
-  runningSubagents.delete(running.id);
-  removeRuntimeRecord(running.runtimeFile, running.id);
-  settleCompletionFromResult(running.name, {
-    exitCode: 1,
-    errorMessage,
-    sessionFile: running.sessionFile,
-  });
+  takeMemberOffline(running, reason, memberTerminalActions());
+  settleCompletionFromResult(running.name, failureSettlement(running, errorMessage));
   updateWidget();
   if (hadRound) {
     running.roundEntryBaseline = baseline;
@@ -1964,10 +1340,7 @@ async function watchMemberRound(running: RunningSubagent, signal: AbortSignal): 
     if (combined.aborted) return; // stop/session_shutdown 入口已负责 kill+offline
     const moduleWasReplaced = (globalThis as any)[MODULE_INSTANCE_KEY] !== moduleInstanceId;
     if (moduleWasReplaced) {
-      killMemberProcess(running);
-      markMemberOffline(running, "host-reload");
-      runningSubagents.delete(running.id);
-      removeRuntimeRecord(running.runtimeFile, running.id);
+      takeMemberOffline(running, "host-reload", memberTerminalActions());
       return;
     }
 
@@ -2003,9 +1376,7 @@ async function watchMemberRound(running: RunningSubagent, signal: AbortSignal): 
       running.pendingRoundSignal = undefined;
       running.roundAssociationAttempts = 0;
 
-      markMemberOffline(running, "process-exited");
-      runningSubagents.delete(running.id);
-      removeRuntimeRecord(running.runtimeFile, running.id);
+      takeMemberOffline(running, "process-exited", memberTerminalActions(), { kill: false });
       if (unfinishedRound) {
         running.roundEntryBaseline = baseline;
         await deliverMemberRoundResult(running, {
@@ -2202,8 +1573,7 @@ async function watchHeadlessSubagent(
   running: RunningSubagent,
   signal: AbortSignal,
 ): Promise<SubagentResult> {
-  const { name, task, startTime, sessionFile } = running;
-  const cohortDetails = running.cohortId ? { cohortId: running.cohortId } : {};
+  const { startTime, sessionFile } = running;
 
   try {
     const result = await waitForHeadlessExit(running, AbortSignal.any([signal, getModuleAbortSignal()]));
@@ -2211,8 +1581,7 @@ async function watchHeadlessSubagent(
 
     const extracted = await extractSubagentResult(sessionFile, result);
 
-    runningSubagents.delete(running.id);
-    removeRuntimeRecord(running.runtimeFile, running.id);
+    runtimeRegistry.remove(running.id);
     // 进程通常已自行退出;降级/竞态残留的句柄 best-effort 回收。
     try {
       running.headlessChild?.kill();
@@ -2220,18 +1589,14 @@ async function watchHeadlessSubagent(
       debugLog(`Could not dispose completed headless child ${running.surface}`, error);
     }
 
-    return {
-      name,
-      task,
+    return buildWatcherTerminal(running, {
+      kind: "completed",
       summary: extracted.summary,
-      sessionFile,
-      ...cohortDetails,
-      ...(extracted.sessionId ? { sessionId: extracted.sessionId } : {}),
       exitCode: result.exitCode,
-      elapsed,
+      ...(extracted.sessionId ? { sessionId: extracted.sessionId } : {}),
       ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
       ...(extracted.stats ? { stats: extracted.stats } : {}),
-    };
+    }, elapsed);
   } catch (err: any) {
     const moduleWasReplaced = (globalThis as any)[MODULE_INSTANCE_KEY] !== moduleInstanceId;
     const failureKind = classifyWatcherFailure({
@@ -2239,26 +1604,15 @@ async function watchHeadlessSubagent(
       moduleAbortAborted: getModuleAbortSignal().aborted,
       watcherSignalAborted: signal.aborted,
     });
-    runningSubagents.delete(running.id);
+    runtimeRegistry.remove(running.id, { keepRecord: true });
     if (failureKind === "reload-handoff" || failureKind === "session-detach") {
       // /reload 移交或宿主会话关闭:进程还在跑,保留 runtime record 交给
       // 恢复逻辑接管。绝不伪造 cancelled/failed 结果,显式 handed-off 语义:
       // 调用方只报“已移交,真实结果稍后回注”,不重复回注。
-      return {
-        name,
-        task,
-        summary:
-          failureKind === "reload-handoff"
-            ? "Subagent handed off to recovery after host reload; it is still running and " +
-              "its real result will be delivered when it finishes."
-            : "Subagent detached because the host session was closed or switched away; it is " +
-              "still running and its real result will be recovered when this session returns.",
-        exitCode: 0,
-        elapsed: Math.floor((Date.now() - startTime) / 1000),
-        sessionFile,
-        ...cohortDetails,
-        handedOff: true,
-      };
+      return buildWatcherTerminal(running, {
+        kind: "handed-off",
+        reason: failureKind === "reload-handoff" ? "host-reload" : "session-detach",
+      }, Math.floor((Date.now() - startTime) / 1000));
     }
     // cancelled(显式 stop)与 error:headless 全是自动子代理,两种都要
     // 终止进程并移除 runtime record;区别只在结果语义。
@@ -2273,28 +1627,11 @@ async function watchHeadlessSubagent(
     } catch (error) {
       debugLog(`Could not kill ${failureKind === "cancelled" ? "stopped" : "failed"} headless child ${running.surface}`, error);
     }
-    removeRuntimeRecord(running.runtimeFile, running.id);
+    runtimeRegistry.removeRecord(running.runtimeFile, running.id);
     if (failureKind === "cancelled") {
-      return {
-        name,
-        task,
-        summary: "Subagent stopped.",
-        exitCode: 1,
-        elapsed: Math.floor((Date.now() - startTime) / 1000),
-        sessionFile,
-        ...cohortDetails,
-        stopped: true,
-      };
+      return buildWatcherTerminal(running, { kind: "cancelled" }, Math.floor((Date.now() - startTime) / 1000));
     }
-    return {
-      name,
-      task,
-      summary: `Subagent error: ${err?.message ?? String(err)}`,
-      exitCode: 1,
-      elapsed: Math.floor((Date.now() - startTime) / 1000),
-      ...cohortDetails,
-      errorMessage: err?.message ?? String(err),
-    };
+    return buildWatcherTerminal(running, { kind: "failed", error: err }, Math.floor((Date.now() - startTime) / 1000));
   }
 }
 
@@ -2303,8 +1640,7 @@ async function watchSubagent(
   signal: AbortSignal,
 ): Promise<SubagentResult> {
   if (running.kind === "headless") return watchHeadlessSubagent(running, signal);
-  const { name, task, surface, startTime, sessionFile } = running;
-  const cohortDetails = running.cohortId ? { cohortId: running.cohortId } : {};
+  const { surface, startTime, sessionFile } = running;
 
   try {
     const result = await pollForExit(surface, AbortSignal.any([signal, getModuleAbortSignal()]), {
@@ -2324,8 +1660,7 @@ async function watchSubagent(
     const stats = extracted.stats;
     const subagentSessionId = extracted.sessionId;
 
-    runningSubagents.delete(running.id);
-    removeRuntimeRecord(running.runtimeFile, running.id);
+    runtimeRegistry.remove(running.id);
     // 结果已经从 session 文件取得，pane 清理失败不应覆盖真实结果。用户
     // 直接关闭 pane(user_closed)时 closeSurface 抛错是预期路径,同样不影响。
     try {
@@ -2337,30 +1672,17 @@ async function watchSubagent(
 
     // 显式停止后 pane 消失:按显式 cancelled 终态处理,不误报 user_closed。
     if (running.stopRequested && result.reason === "user_closed") {
-      return {
-        name,
-        task,
-        summary: "Subagent stopped.",
-        exitCode: 1,
-        elapsed,
-        sessionFile,
-        ...cohortDetails,
-        stopped: true,
-      };
+      return buildWatcherTerminal(running, { kind: "cancelled" }, elapsed);
     }
-    return {
-      name,
-      task,
+    return buildWatcherTerminal(running, {
+      kind: "completed",
       summary,
-      sessionFile,
-      ...cohortDetails,
-      ...(subagentSessionId ? { sessionId: subagentSessionId } : {}),
       exitCode: result.exitCode,
-      elapsed,
+      ...(subagentSessionId ? { sessionId: subagentSessionId } : {}),
       ...(result.reason === "user_closed" ? { userClosed: true } : {}),
       ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
       ...(stats ? { stats } : {}),
-    };
+    }, elapsed);
   } catch (err: any) {
     const moduleWasReplaced = (globalThis as any)[MODULE_INSTANCE_KEY] !== moduleInstanceId;
     const failureKind = classifyWatcherFailure({
@@ -2368,25 +1690,14 @@ async function watchSubagent(
       moduleAbortAborted: getModuleAbortSignal().aborted,
       watcherSignalAborted: signal.aborted,
     });
-    runningSubagents.delete(running.id);
+    runtimeRegistry.remove(running.id, { keepRecord: true });
     if (failureKind === "reload-handoff" || failureKind === "session-detach") {
       // /reload 移交或宿主会话关闭:pane 与 runtime record 全保留,交给恢复
       // 逻辑接管;不伪造 cancelled/failed,也不在此回注,显式 handed-off。
-      return {
-        name,
-        task,
-        summary:
-          failureKind === "reload-handoff"
-            ? "Subagent handed off to recovery after host reload; it is still running and " +
-              "its real result will be delivered when it finishes."
-            : "Subagent detached because the host session was closed or switched away; it is " +
-              "still running and its real result will be recovered when this session returns.",
-        exitCode: 0,
-        elapsed: Math.floor((Date.now() - startTime) / 1000),
-        sessionFile,
-        ...cohortDetails,
-        handedOff: true,
-      };
+      return buildWatcherTerminal(running, {
+        kind: "handed-off",
+        reason: failureKind === "reload-handoff" ? "host-reload" : "session-detach",
+      }, Math.floor((Date.now() - startTime) / 1000));
     }
     // cancelled(显式 stop)与 error:自动 pane 由 watcher 统一关闭并移除
     // record;交互式 pane 归用户驱动——但 subagent_stop 的显式停止已在 stop
@@ -2399,301 +1710,206 @@ async function watchSubagent(
       }
     }
     if (!(signal.aborted && running.interactive)) {
-      removeRuntimeRecord(running.runtimeFile, running.id);
+      runtimeRegistry.removeRecord(running.runtimeFile, running.id);
     }
     if (failureKind === "cancelled") {
-      return {
-        name,
-        task,
-        summary: "Subagent stopped.",
-        exitCode: 1,
-        elapsed: Math.floor((Date.now() - startTime) / 1000),
-        sessionFile,
-        ...cohortDetails,
-        stopped: true,
-      };
+      return buildWatcherTerminal(running, { kind: "cancelled" }, Math.floor((Date.now() - startTime) / 1000));
     }
-    return {
-      name,
-      task,
-      summary: `Subagent error: ${err?.message ?? String(err)}`,
-      exitCode: 1,
-      elapsed: Math.floor((Date.now() - startTime) / 1000),
-      ...cohortDetails,
-      errorMessage: err?.message ?? String(err),
-    };
+    return buildWatcherTerminal(running, { kind: "failed", error: err }, Math.floor((Date.now() - startTime) / 1000));
   }
 }
 
-/** 重载后从运行态记录恢复 watcher，避免同一 session 被重复启动。 */
+/** 重载后从运行态记录恢复 watcher，避免同一 session 被重复启动。
+ *  进程/表面的重建与 watcher 启动归启动模块（startup.recover）；这里只做
+ *  结果提取、完成记录落定与回注——结果提取与呈现不是启动职责。 */
 async function recoverRuntimeSubagents(
   ctx: { sessionManager: { getSessionId(): string; getSessionDir(): string } },
   pi: ExtensionAPI,
+  startup: SubagentStartup,
 ): Promise<void> {
-  const runtimeFile = runtimeRegistryPath(
-    getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId()),
-  );
-  for (const record of readRuntimeRecords(runtimeFile)) {
-    if (runningSubagents.has(record.id)) continue;
-    // 单条隔离:某条记录恢复失败(如 pane adoptSurface 在无复用器环境下
-    // 抛错、或会话文件损坏)只跳过该记录,不中断后续记录的恢复。
-    try {
-
-    if ((record.kind ?? "pane") === "headless") {
-      // headless 恢复:/reload 后 RPC stdin 已丢失,无法重新接管——这是显式
-      // 降级边界。进程已退出:直接提取结果回注;仍在运行:标记 stdinLost,
-      // watcher 轮询 PID 直到进程消失,期间 steer 与 ask 回复不可达(报错提示)。
-      const pid = record.pid ?? parseHeadlessSurface(record.surface);
-      // 持久成员:stdin 无法重接(常驻进程不退出,PID 轮询会永久空转)——
-      // 诚实降级:终止进程、移除运行态、roster 标记 offline,session 保留
-      // 供显式 resume(subagent_message)或重新 spawn(member: true)。
-      if (record.member) {
-        if (pid != null && isPidAlive(pid)) {
-          terminateHeadlessProcess(pid);
-        }
-        try {
-          const memberRosterFile = rosterPath(dirname(runtimeFile));
-          const existingRoster = findRosterMember(memberRosterFile, record.name);
-          const offlineReason =
-            existingRoster?.status === "offline" &&
-            existingRoster.sessionFile === record.sessionFile &&
-            existingRoster.offlineReason
-              ? existingRoster.offlineReason
-              : "host-reload";
-          upsertRosterMember(memberRosterFile, {
-            name: record.name,
-            ...(record.agent ? { agent: record.agent } : {}),
-            sessionFile: record.sessionFile,
-            ...(pid != null ? { pid } : {}),
-            status: "offline",
-            offlineReason,
-          });
-        } catch (error) {
-          debugLog(`Could not mark recovered member ${record.name} offline`, error);
-        }
-        removeRuntimeRecord(runtimeFile, record.id);
-        continue;
-      }
-      if (pid == null || !isPidAlive(pid)) {
-        removeRuntimeRecord(runtimeFile, record.id);
-        const exit = readExitSidecar(record.sessionFile) ?? { reason: "done" as const, exitCode: 0 };
-        const routeModel = readSubagentLoadout(record.sessionFile)?.model ?? null;
-        try {
-          const extracted = await extractSubagentResult(
-            record.sessionFile,
-            { exitCode: exit.exitCode, ...(exit.errorMessage ? { errorMessage: exit.errorMessage } : {}) },
-          );
-          const elapsedForRecord = Math.max(0, Math.floor((Date.now() - record.startTime) / 1000));
-          const exitResult = {
-            summary: extracted.summary,
-            sessionFile: record.sessionFile,
-            ...(record.cohortId ? { cohortId: record.cohortId } : {}),
-            ...(extracted.sessionId ? { sessionId: extracted.sessionId } : {}),
-            exitCode: exit.exitCode,
-            elapsed: elapsedForRecord,
-            ...(exit.errorMessage ? { errorMessage: exit.errorMessage } : {}),
-            ...(extracted.stats ? { stats: extracted.stats } : {}),
-          };
-          const routeException = routeExceptionFromResult(exitResult, routeModel);
-          // reload 前登记的完成记录(若有等待者)在此兑为终态。
-          settleCompletionFromResult(record.name, exitResult);
-          const presentation = resolveResultPresentation(exitResult, record.name);
-          pi.sendMessage(
-            {
-              customType: "subagent_result",
-              content: presentation,
-              display: true,
-              details: {
-                name: record.name,
-                task: record.task,
-                agent: record.agent,
-                exitCode: exit.exitCode,
-                elapsed: elapsedForRecord,
-                sessionFile: record.sessionFile,
-                ...(record.cohortId ? { cohortId: record.cohortId } : {}),
-                recovered: "headless-exited",
-                ...(extracted.sessionId ? { sessionId: extracted.sessionId } : {}),
-                ...(exit.errorMessage ? { errorMessage: exit.errorMessage } : {}),
-                ...(extracted.stats ? { stats: extracted.stats } : {}),
-                ...(routeException ? { routeException } : {}),
-              },
-            },
-            { triggerTurn: true, deliverAs: "steer" },
-          );
-        } catch (error) {
-          debugLog(`Could not recover finished headless subagent ${record.name}`, error);
-        }
-        continue;
-      }
-      const running: RunningSubagent = {
-        id: record.id,
-        name: record.name,
-        task: record.task,
-        ...(record.cohortId ? { cohortId: record.cohortId } : {}),
-        agent: record.agent,
-        model: readSubagentLoadout(record.sessionFile)?.model ?? null,
-        parentId: record.parentId ?? null,
-        ...(record.timeoutMs != null ? { timeoutMs: record.timeoutMs } : {}),
-        ...(record.waitReleased ? { waitReleased: record.waitReleased } : {}),
-        waitMode: "recovered",
-        surface: record.surface,
-        startTime: record.startTime,
-        sessionFile: record.sessionFile,
-        activityFile: record.activityFile ?? getSubagentActivityFile(dirname(runtimeFile), record.id),
-        interactive: record.interactive,
-        sentinelToken: record.sentinelToken,
-        runtimeFile,
-        statusState: createStatusState({ source: "pi", startTimeMs: record.startTime }),
-        kind: "headless",
-        pid,
-        stdinLost: true,
-      };
-      runningSubagents.set(running.id, running);
-      const watcherAbort = new AbortController();
-      running.abortController = watcherAbort;
-      watchSubagent(running, watcherAbort.signal)
-        .then((result) => {
-          updateWidget();
-          settleCompletionFromResult(running.name, result);
-          // 恢复 watcher 自己又赶上 /reload:再次移交,真实结果由更新后的
-          // 模块在下次 session_start 恢复接管,本次不回注,避免伪造/重复结果。
-          if (result.handedOff) return;
-          const routeException = routeExceptionFromResult(result, running.model);
-          const presentation = resolveResultPresentation(result, running.name);
-          pi.sendMessage(
-            {
-              customType: "subagent_result",
-              content: presentation,
-              display: true,
-              details: {
-                name: running.name,
-                task: running.task,
-                agent: running.agent,
-                exitCode: result.exitCode,
-                elapsed: result.elapsed,
-                sessionFile: result.sessionFile,
-                ...(running.cohortId ? { cohortId: running.cohortId } : {}),
-                recovered: "headless-degraded",
-                ...(result.sessionId ? { sessionId: result.sessionId } : {}),
-                ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
-                ...(result.stats ? { stats: result.stats } : {}),
-                ...(routeException ? { routeException } : {}),
-              },
-            },
-            { triggerTurn: true, deliverAs: "steer" },
-          );
-        })
-        .catch((error) => {
-          updateWidget();
-          settleCompletionFromResult(running.name, { exitCode: 1, errorMessage: error?.message ?? String(error) });
-          pi.sendMessage(
-            {
-              customType: "subagent_result",
-              content: `Recovered headless sub-agent "${running.name}" error: ${error?.message ?? String(error)}`,
-              display: true,
-              details: {
-                name: running.name,
-                task: running.task,
-                ...(running.cohortId ? { cohortId: running.cohortId } : {}),
-                error: error?.message,
-              },
-            },
-            { triggerTurn: true, deliverAs: "steer" },
-          );
-        });
+  for (const outcome of await startup.recover(ctx, pi)) {
+    if (outcome.kind === "exited") {
+      await deliverRecoveredExit(outcome.record, outcome.exit, pi);
       continue;
     }
-
-    if (!adoptSurface(record.surface)) {
-      removeRuntimeRecord(runtimeFile, record.id);
-      continue;
+    if (outcome.kind === "running") {
+      if (outcome.recovered === "pane") {
+        deliverRecoveredPane(outcome.run, pi);
+      } else {
+        deliverRecoveredHeadless(outcome.run, pi);
+      }
     }
-    const running: RunningSubagent = {
-      id: record.id,
-      name: record.name,
-      task: record.task,
-      ...(record.cohortId ? { cohortId: record.cohortId } : {}),
-      agent: record.agent,
-      model: readSubagentLoadout(record.sessionFile)?.model ?? null,
-      parentId: record.parentId ?? null,
-      ...(record.timeoutMs != null ? { timeoutMs: record.timeoutMs } : {}),
-      ...(record.waitReleased ? { waitReleased: record.waitReleased } : {}),
-      waitMode: "recovered",
-      surface: record.surface,
-      startTime: record.startTime,
+  }
+}
+
+/** 已退出的重载记录：提取真实结果、落定完成记录并按恢复语义回注一次。 */
+async function deliverRecoveredExit(
+  record: RuntimeRecord,
+  exit: { exitCode: number; errorMessage?: string },
+  pi: ExtensionAPI,
+): Promise<void> {
+  const routeModel = readSubagentLoadout(record.sessionFile)?.model ?? null;
+  try {
+    const extracted = await extractSubagentResult(
+      record.sessionFile,
+      { exitCode: exit.exitCode, ...(exit.errorMessage ? { errorMessage: exit.errorMessage } : {}) },
+    );
+    const elapsedForRecord = Math.max(0, Math.floor((Date.now() - record.startTime) / 1000));
+    const exitResult = {
+      summary: extracted.summary,
       sessionFile: record.sessionFile,
-      activityFile: record.activityFile ?? getSubagentActivityFile(dirname(runtimeFile), record.id),
-      interactive: record.interactive,
-      sentinelToken: record.sentinelToken,
-      runtimeFile,
-      statusState: createStatusState({ source: "pi", startTimeMs: record.startTime }),
+      ...(record.cohortId ? { cohortId: record.cohortId } : {}),
+      ...(extracted.sessionId ? { sessionId: extracted.sessionId } : {}),
+      exitCode: exit.exitCode,
+      elapsed: elapsedForRecord,
+      ...(exit.errorMessage ? { errorMessage: exit.errorMessage } : {}),
+      ...(extracted.stats ? { stats: extracted.stats } : {}),
     };
-    runningSubagents.set(running.id, running);
-    const watcherAbort = new AbortController();
-    running.abortController = watcherAbort;
-    watchSubagent(running, watcherAbort.signal)
-      .then((result) => {
-        updateWidget();
-        // 用户直接关闭 pane 是稳定终态(user_closed),同样要 settle 依赖
-        // 记录(按 cancelled 语义),等待者不永久挂起。
-        settleCompletionFromResult(running.name, result, {
-          ...(result.userClosed ? { status: "cancelled" as const } : {}),
-        });
-        // 恢复 watcher 自己又赶上 /reload:再次移交,本次不回注(同 headless 分支)。
-        if (result.handedOff) return;
-        const routeException = routeExceptionFromResult(result, running.model);
-        const presentation = resolveResultPresentation(result, running.name);
-        pi.sendMessage(
-          {
-            customType: "subagent_result",
-            content: presentation,
-            display: true,
-            details: {
-              name: running.name,
-              task: running.task,
-              agent: running.agent,
-              exitCode: result.exitCode,
-              elapsed: result.elapsed,
-              sessionFile: result.sessionFile,
-              ...(running.cohortId ? { cohortId: running.cohortId } : {}),
-              recovered: "pane",
-              ...(result.userClosed ? { userClosed: true } : {}),
-              ...(result.sessionId ? { sessionId: result.sessionId } : {}),
-              ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
-              ...(result.stats ? { stats: result.stats } : {}),
-              ...(routeException ? { routeException } : {}),
-            },
+    const routeException = routeExceptionFromResult(exitResult, routeModel);
+    // reload 前登记的完成记录(若有等待者)在此兑为终态。
+    settleCompletionFromResult(record.name, exitResult);
+    const presentation = resolveResultPresentation(exitResult, record.name);
+    pi.sendMessage(
+      {
+        customType: "subagent_result",
+        content: presentation,
+        display: true,
+        details: {
+          name: record.name,
+          task: record.task,
+          agent: record.agent,
+          exitCode: exit.exitCode,
+          elapsed: elapsedForRecord,
+          sessionFile: record.sessionFile,
+          ...(record.cohortId ? { cohortId: record.cohortId } : {}),
+          recovered: "headless-exited",
+          ...(extracted.sessionId ? { sessionId: extracted.sessionId } : {}),
+          ...(exit.errorMessage ? { errorMessage: exit.errorMessage } : {}),
+          ...(extracted.stats ? { stats: extracted.stats } : {}),
+          ...(routeException ? { routeException } : {}),
+        },
+      },
+      { triggerTurn: true, deliverAs: "steer" },
+    );
+  } catch (error) {
+    debugLog(`Could not recover finished headless subagent ${record.name}`, error);
+  }
+}
+
+/** 仍在跑的 headless 降级记录：watcher 已由启动模块挂上，这里只落定与回注。 */
+function deliverRecoveredHeadless(run: StartedRun, pi: ExtensionAPI): void {
+  const running = run.running;
+  run.watch
+    .then((result) => {
+      const terminal = result as SubagentResult;
+      updateWidget();
+      settleCompletionFromResult(running.name, terminal);
+      // 恢复 watcher 自己又赶上 /reload:再次移交,真实结果由更新后的
+      // 模块在下次 session_start 恢复接管,本次不回注,避免伪造/重复结果。
+      if (terminal.handedOff) return;
+      const routeException = routeExceptionFromResult(terminal, running.model);
+      const presentation = resolveResultPresentation(terminal, running.name);
+      pi.sendMessage(
+        {
+          customType: "subagent_result",
+          content: presentation,
+          display: true,
+          details: {
+            name: running.name,
+            task: running.task,
+            agent: running.agent,
+            exitCode: terminal.exitCode,
+            elapsed: terminal.elapsed,
+            sessionFile: terminal.sessionFile,
+            ...(running.cohortId ? { cohortId: running.cohortId } : {}),
+            recovered: "headless-degraded",
+            ...(terminal.sessionId ? { sessionId: terminal.sessionId } : {}),
+            ...(terminal.errorMessage ? { errorMessage: terminal.errorMessage } : {}),
+            ...(terminal.stats ? { stats: terminal.stats } : {}),
+            ...(routeException ? { routeException } : {}),
           },
-          { triggerTurn: true, deliverAs: "steer" },
-        );
-      })
-      .catch((error) => {
-        updateWidget();
-        settleCompletionFromResult(running.name, { exitCode: 1, errorMessage: error?.message ?? String(error) });
-        pi.sendMessage(
-          {
-            customType: "subagent_result",
-            content: `Recovered sub-agent "${running.name}" error: ${error?.message ?? String(error)}`,
-            display: true,
-            details: {
-              name: running.name,
-              task: running.task,
-              ...(running.cohortId ? { cohortId: running.cohortId } : {}),
-              error: error?.message,
-            },
+        },
+        { triggerTurn: true, deliverAs: "steer" },
+      );
+    })
+    .catch((error) => {
+      updateWidget();
+      settleCompletionFromResult(running.name, { exitCode: 1, errorMessage: error?.message ?? String(error) });
+      pi.sendMessage(
+        {
+          customType: "subagent_result",
+          content: `Recovered headless sub-agent "${running.name}" error: ${error?.message ?? String(error)}`,
+          display: true,
+          details: {
+            name: running.name,
+            task: running.task,
+            ...(running.cohortId ? { cohortId: running.cohortId } : {}),
+            error: error?.message,
           },
-          { triggerTurn: true, deliverAs: "steer" },
-        );
+        },
+        { triggerTurn: true, deliverAs: "steer" },
+      );
+    });
+}
+
+/** 仍在跑的 pane 记录：watcher 已由启动模块挂上，这里只落定与回注。 */
+function deliverRecoveredPane(run: StartedRun, pi: ExtensionAPI): void {
+  const running = run.running;
+  run.watch
+    .then((result) => {
+      const terminal = result as SubagentResult;
+      updateWidget();
+      // 用户直接关闭 pane 是稳定终态(user_closed),同样要 settle 依赖
+      // 记录(按 cancelled 语义),等待者不永久挂起。
+      settleCompletionFromResult(running.name, terminal, {
+        ...(terminal.userClosed ? { status: "cancelled" as const } : {}),
       });
-    } catch (error) {
-      // 单条隔离兑底:该记录的恢复失败被记录并跳过,循环继续处理后续记录。
-      debugLog(`Could not recover runtime subagent record ${record.id} (${record.name})`, error);
-    }
-  }
-  if (runningSubagents.size > 0) {
-    startWidgetRefresh();
-    startStatusRefresh(pi);
-  }
+      // 恢复 watcher 自己又赶上 /reload:再次移交,本次不回注(同 headless 分支)。
+      if (terminal.handedOff) return;
+      const routeException = routeExceptionFromResult(terminal, running.model);
+      const presentation = resolveResultPresentation(terminal, running.name);
+      pi.sendMessage(
+        {
+          customType: "subagent_result",
+          content: presentation,
+          display: true,
+          details: {
+            name: running.name,
+            task: running.task,
+            agent: running.agent,
+            exitCode: terminal.exitCode,
+            elapsed: terminal.elapsed,
+            sessionFile: terminal.sessionFile,
+            ...(running.cohortId ? { cohortId: running.cohortId } : {}),
+            recovered: "pane",
+            ...(terminal.userClosed ? { userClosed: true } : {}),
+            ...(terminal.sessionId ? { sessionId: terminal.sessionId } : {}),
+            ...(terminal.errorMessage ? { errorMessage: terminal.errorMessage } : {}),
+            ...(terminal.stats ? { stats: terminal.stats } : {}),
+            ...(routeException ? { routeException } : {}),
+          },
+        },
+        { triggerTurn: true, deliverAs: "steer" },
+      );
+    })
+    .catch((error) => {
+      updateWidget();
+      settleCompletionFromResult(running.name, { exitCode: 1, errorMessage: error?.message ?? String(error) });
+      pi.sendMessage(
+        {
+          customType: "subagent_result",
+          content: `Recovered sub-agent "${running.name}" error: ${error?.message ?? String(error)}`,
+          display: true,
+          details: {
+            name: running.name,
+            task: running.task,
+            ...(running.cohortId ? { cohortId: running.cohortId } : {}),
+            error: error?.message,
+          },
+        },
+        { triggerTurn: true, deliverAs: "steer" },
+      );
+    });
 }
 
 export default function subagentsExtension(pi: ExtensionAPI, options?: SubagentsExtensionOptions) {
@@ -2710,7 +1926,7 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
     if (!prevAbort || prevAbort.signal.aborted) {
       (globalThis as any)[POLL_ABORT_KEY] = new AbortController();
     }
-    recoverRuntimeSubagents(ctx, pi).catch((error) => {
+    recoverRuntimeSubagents(ctx, pi, startup).catch((error) => {
       debugLog("Runtime subagent recovery failed", error);
     });
   });
@@ -2737,7 +1953,7 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
     }
     const moduleAbort = (globalThis as any)[POLL_ABORT_KEY] as AbortController | undefined;
     if (moduleAbort) moduleAbort.abort();
-    for (const [_id, agent] of runningSubagents) {
+    for (const agent of runtimeRegistry.list()) {
       if (agent.interactive) {
         // 交互式子代理归用户所有,宿主会话关闭时不强杀其 pane,留给用户自行处理。
         continue;
@@ -2747,7 +1963,7 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
         // 留孤儿——安全终止并 roster 标记 offline;session/loadout 保留供显式 resume。
         killMemberProcess(agent);
         markMemberOffline(agent, "host-shutdown");
-        removeRuntimeRecord(agent.runtimeFile, agent.id);
+        runtimeRegistry.remove(agent.id);
         agent.abortController?.abort();
         continue;
       }
@@ -2763,7 +1979,7 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
       // runtime record(不杀不删),交给本会话的恢复路径接管。
       agent.abortController?.abort();
     }
-    runningSubagents.clear();
+    runtimeRegistry.clear();
   });
 
   // The spawning tools are always registered here. Whether a child process can
@@ -2771,90 +1987,69 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
   // by Pi's normal extension discovery in the child's inherited config/cwd
   // (+ explicit -e for parent-registered custom tools). See launchSubagent().
 
-  registerSubagentTool(pi, {
-    allowlist: SUBAGENT_ALLOWLIST,
-    discoverAgents: discoverAgentDefinitions,
-    isMuxAvailable,
-    muxUnavailableResult,
-    resolveSurfaceChoice: (params) => {
-      const agentDefs = params.agent ? loadAgentDefaults(params.agent) : null;
-      const lifecycleError = validateAgentLifecycleConfig(agentDefs);
-      if (lifecycleError) return { error: lifecycleError };
-      const interactive = resolveEffectiveInteractive(params as SubagentParams, agentDefs);
-      return resolveSurfaceChoice(params.surface, interactive);
-    },
+  // 启动事务：三模式（fresh / resume / recover）统一入口。工具侧只保留
+  // 业务层职责（名字保留与查重、dependsOn、结果呈现与投递），启动原语
+  // 全部收在这里注入启动模块。
+  const startup = createSubagentStartup({
+    registry: runtimeRegistry,
+    getAgentConfigDir,
+    loadAgentDefaults,
+    resolveHostTierSources,
     getArtifactDir,
-    runningSubagents,
-    reservedNames,
-    resolveInteractive: (params) => {
-      const agentDefs = params.agent ? loadAgentDefaults(params.agent) : null;
-      return resolveEffectiveInteractive(params as SubagentParams, agentDefs);
-    },
-    uniqueRunningName,
-    launchSubagent,
-    canReuseMemberName: (name: string, artifactDir: string) => canReuseMemberName(name, artifactDir),
+    isMuxAvailable,
+    adoptSurface,
+    isPidAlive,
+    terminateHeadlessProcess,
+    validateResumeTarget,
+    applySandboxToParts,
+    resolveResumeLaunchBehavior,
+    subagentsDir: SUBAGENTS_DIR,
+    getShellReadyDelayMs,
+    spawnHeadlessPi,
+    createSurface,
+    sendCommand,
+    closeSurface,
+    buildHeadlessPrompt,
     startWidgetRefresh,
     startStatusRefresh,
     watchSubagent,
     watchMemberRound,
+  });
+
+  registerSubagentTool(pi, {
+    allowlist: SUBAGENT_ALLOWLIST,
+    discoverAgents: discoverAgentDefinitions,
+    startup,
+    muxUnavailableResult,
+    getArtifactDir,
+    registry: runtimeRegistry,
+    canReuseMemberName: (name: string, artifactDir: string) => canReuseMemberName(name, artifactDir),
     updateWidget,
     resolveResultPresentation,
   });
 
   registerSubagentMessageTool(pi, {
-    isMuxAvailable,
-    muxUnavailableResult,
-    resolveSurfaceChoice: (params) => resolveSurfaceChoice(params.surface, false),
-    spawnHeadlessPi,
-    runningSubagents,
-    reservedNames,
+    startup,
+    registry: runtimeRegistry,
     handleSubagentSteer,
-    getArtifactDir,
-    readNameRegistry,
-    resolveNameInRegistry,
-    getSessionId,
-    readSubagentLoadout,
-    readAnchoredLoadout,
-    getAgentConfigDir,
-    validateResumeTarget,
-    countSessionEntryLines,
-    getSubagentActivityFile,
-    createSurface,
-    shellEscape,
-    subagentsDir: SUBAGENTS_DIR,
-    applySandboxToParts,
-    getShellReadyDelayMs,
-    sendCommand,
-    closeSurface,
-    resolveResumeLaunchBehavior,
-    runtimeRegistryPath,
-    upsertRuntimeRecord,
-    removeRuntimeRecord,
-    startWidgetRefresh,
-    startStatusRefresh,
-    watchSubagent,
-    updateWidget,
     extractSubagentResult,
     resolveResultPresentation,
+    updateWidget,
   });
 
   registerSubagentsListTool(pi, {
     discoverAgents: discoverAgentDefinitions,
     getArtifactDir,
-    runningSubagents,
+    registry: runtimeRegistry,
     readNameRegistry,
     readSubagentLoadout,
-    readRuntimeRecords,
-    runtimeRegistryPath,
   });
   registerSubagentInspectTool(pi, {
-    runningSubagents,
+    registry: runtimeRegistry,
     observeRunningSubagent,
     getArtifactDir,
     readNameRegistry,
     readSubagentLoadout,
-    readRuntimeRecords,
-    runtimeRegistryPath,
     isPidAlive,
     probeSurface,
     readRosterMember: (name, artifactDir) => {
@@ -2876,7 +2071,7 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
   }
   registerSubagentRenderers(pi);
   registerSubagentStopTool(pi, {
-    resolveRunningByName,
+    resolveRunningByName: (name: string) => runtimeRegistry.resolveName(name),
     closeSurface,
     updateWidget,
     stopMember: (running) => {
@@ -2884,13 +2079,12 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
       // 并移除运行态登记;session/loadout/roster 保留(offline 状态)供追溯。
       killMemberProcess(running);
       markMemberOffline(running, "stopped");
-      runningSubagents.delete(running.id);
-      removeRuntimeRecord(running.runtimeFile, running.id);
+      runtimeRegistry.remove(running.id);
       running.abortController?.abort();
     },
   });
   registerTeamDispatchTool(pi, {
-    runningSubagents,
+    registry: runtimeRegistry,
     getArtifactDir,
     rosterPath,
     findRosterMember,

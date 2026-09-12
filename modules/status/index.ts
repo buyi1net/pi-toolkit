@@ -24,8 +24,8 @@ export {
 } from "./api.ts";
 
 export function createStatusModule(options: StatusModuleOptions = {}): ModuleDefinition {
-	// 菜单写盘后要让状态中枢重新读盘，并让模块按新段位重建控制器
-	const runtime: StatusMenuRuntime = { reload: async () => {}, reapply: () => {} };
+	// 菜单保存走 kit 的配置写入事务（补丁 → 落盘 → 重载 → reapply）：模块只留控制器重建动作
+	const runtime: StatusMenuRuntime = { reapply: () => {} };
 
 	return {
 		id: STATUS_MODULE_ID,

@@ -10,14 +10,15 @@
 
 import type { SettingItem } from "@earendil-works/pi-tui";
 import type { Translator } from "../../i18n/index.ts";
+import type { ConfigWriteHooks } from "../../kit/config-transaction.ts";
 import { ChoicePicker, type ChoiceOption } from "../../kit/menu/panels.ts";
 import type { MenuTheme } from "../../kit/menu/theme.ts";
-import type { ModuleMenuContext } from "../../kit/module.ts";
+import type { ModuleConfigRecord, ModuleMenuContext } from "../../kit/module.ts";
 import type { StatusMenuRuntime } from "./mod.ts";
 import {
 	STATUS_PRESET_NAMES,
 	readStatusSection,
-	saveStatusSection,
+	statusSectionPatch,
 	type StatusPresetName,
 	type StatusSectionUpdate,
 } from "./status-config.ts";
@@ -53,30 +54,25 @@ function describeError(error: unknown): string {
 interface StatusPanelOptions {
 	readonly t: Translator;
 	readonly theme: MenuTheme;
-	readonly agentDir: string;
 	readonly runtime: StatusMenuRuntime;
+	/** 结构化配置写入事务（由菜单层注入，重绘请求也由它带） */
+	readonly saveConfig: (patch: ModuleConfigRecord, hooks?: ConfigWriteHooks) => Promise<void>;
 	readonly requestRender: () => void;
 	readonly getSection: () => Record<string, unknown>;
 	readonly notify?: (message: string, type: "error") => void;
 }
 
-/** 写本节点 → 重载状态中枢 → 重建控制器；返回结果供 UI 判定 */
+/** 保存补丁 → 事务（落盘 → 内存重载 → 重建控制器）；返回结果供 UI 判定 */
 async function persistStatusSection(
 	options: StatusPanelOptions,
 	update: StatusSectionUpdate,
 ): Promise<SaveOutcome> {
 	try {
-		await saveStatusSection(update, { agentDir: options.agentDir });
-	} catch (error) {
-		return { ok: false, error: describeError(error) };
-	}
-	try {
-		await options.runtime.reload();
-	} catch {
-		// 内存副本落后不影响磁盘已写入的事实；下一次读盘会跟上
-	}
-	try {
-		options.runtime.reapply();
+		await options.saveConfig(statusSectionPatch(update), {
+			reapply: () => {
+				options.runtime.reapply();
+			},
+		});
 	} catch (error) {
 		return { ok: false, error: describeError(error) };
 	}
@@ -133,8 +129,8 @@ export function buildStatusMenuItems(
 	const panel: StatusPanelOptions = {
 		t,
 		theme: context.theme,
-		agentDir: context.agentDir,
 		runtime,
+		saveConfig: (patch, hooks) => context.saveConfig(patch, hooks),
 		requestRender: () => context.requestRender(),
 		getSection: () => context.getConfig(),
 		notify: (message, type) => context.context.ui.notify(message, type),

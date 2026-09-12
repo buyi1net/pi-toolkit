@@ -20,13 +20,12 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { getToolkitConfigPath } from "../../kit/config.ts";
 import { enabledField, type ModuleContext, type ModuleDefinition } from "../../kit/module.ts";
 import { SUBAGENTS_MODULE_ID } from "./config.ts";
-import { buildSubagentsMenuItems, type SubagentsMenuRuntime } from "./menu.ts";
+import { buildSubagentsMenuItems } from "./menu.ts";
 import subagentsExtension, {
-  listRunningSubagents,
-  runtimeRegistryPathForSession,
+  subagentsRunningView,
   type SubagentsHostSection,
 } from "./mod.ts";
-import { readRuntimeRecords, type RuntimeRecord } from "./runtime-registry.ts";
+import type { RuntimeRecord } from "./registry.ts";
 
 export { SUBAGENTS_MODULE_ID } from "./config.ts";
 
@@ -43,12 +42,10 @@ export interface SubagentsService {
   runtimeRecords(sessionDir: string, sessionId: string): RuntimeRecord[];
 }
 
-function registerSubagents(context: ModuleContext, runtime: SubagentsMenuRuntime): void {
-  runtime.reload = () => context.reloadConfig();
-
+function registerSubagents(context: ModuleContext): void {
   // 宿主注入：本节点就是 pi-toolkit.json 的 `modules.subagents` 节。
   // getConfig() 返回状态中枢解析后的本模块配置（schema 默认值 + 磁盘取值），
-  // 非 schema 键原样透传，因此 models / status 直接可用；写盘后由 reloadConfig 刷新。
+  // 非 schema 键原样透传，因此 models / status 直接可用；写盘由菜单保存的配置写入事务重载。
   subagentsExtension(context.pi, {
     registerCommand: false,
     readHostSection: (): SubagentsHostSection => ({
@@ -59,17 +56,12 @@ function registerSubagents(context: ModuleContext, runtime: SubagentsMenuRuntime
 
   context.services.register(SUBAGENTS_SERVICE_NAME, {
     id: "subagents",
-    runningCount: () => listRunningSubagents().length,
-    runningNames: () => listRunningSubagents().map((running) => running.name),
-    runtimeRecords: (sessionDir, sessionId) =>
-      readRuntimeRecords(runtimeRegistryPathForSession(sessionDir, sessionId)),
+    // 登记表只读投影：count/names 取内存实时态，records 取会话磁盘记录。
+    ...subagentsRunningView,
   } satisfies SubagentsService);
 }
 
 export function createSubagentsModule(): ModuleDefinition {
-  // 菜单写盘后要让状态中枢重新读盘，否则 getConfig() 还是旧副本
-  const runtime: SubagentsMenuRuntime = { reload: async () => {} };
-
   return {
     id: SUBAGENTS_MODULE_ID,
     labelKey: "module.subagents.label",
@@ -81,10 +73,10 @@ export function createSubagentsModule(): ModuleDefinition {
       enabled: enabledField("module.subagents.enabled.label", "module.subagents.enabled.description"),
     },
     register(context): void {
-      registerSubagents(context, runtime);
+      registerSubagents(context);
     },
     menuItems(context): ReturnType<typeof buildSubagentsMenuItems> {
-      return buildSubagentsMenuItems(context, runtime);
+      return buildSubagentsMenuItems(context);
     },
   };
 }

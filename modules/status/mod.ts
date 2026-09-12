@@ -3,8 +3,8 @@
 // 分工（工单 07 定案 2 + 定案 7）：
 // - 控制器在模块装配时创建、随会话绑定重建；注册句柄后 tui lifecycle 只从句柄取快照；
 // - 取数策略（什么时候刷 git / 运行时、哪些段位启用）留在本模块；
-// - 重绘节奏属于 tui：控制器的 requestRender 传空操作，tui 侧按自己的心跳读快照重绘
-//   （句柄契约只有 snapshot/refresh，变更通知由消费方自己的事件与心跳驱动）。
+// - 重绘节奏属于 tui（工单 18）：控制器不持重绘回调；句柄快照带变更序号（内容变化时递增），
+//   tui 心跳按序号变化重绘（句柄契约仍只有 snapshot/refresh）。
 //
 // 事件接线：session_start 绑定会话并按段位创建控制器；session_shutdown 释放；
 // 回合计时与遥测由 turn/agent 事件驱动。工具执行后的数据刷新由消费方
@@ -19,11 +19,15 @@ import {
 	STATUS_TELEMETRY_SERVICE_NAME,
 	STATUS_TIMER_SERVICE_NAME,
 	STATUS_WORKSPACE_SERVICE_NAME,
+	type ProjectStatusSnapshot,
+	type SessionStatusSnapshot,
+	type SnapshotRevision,
 	type StatusCompactionService,
 	type StatusSessionService,
 	type StatusTelemetryService,
 	type StatusTimerService,
 	type StatusWorkspaceService,
+	type TurnTimerSnapshot,
 } from "./api.ts";
 import { AutoCompactionStatusController, watchAgentSettings } from "./auto-compaction.ts";
 import { ProjectStatusController, createGitStatusQuery } from "./project-status.ts";
@@ -37,6 +41,24 @@ import {
 import { TurnTelemetryController, readLatestTurnDuration } from "./turn-telemetry.ts";
 import { TurnTimerController } from "./turn-timer.ts";
 
+/**
+ * 快照变更序号的读取器（工单 18 / 决策 9）：内容与上次读取不同就递增序号，随快照带出。
+ * 序号只在读取时按内容比较维护，控制器无需感知重绘；计时 working 期间的毫秒级变化也由此体现。
+ */
+function createRevisionReader<T extends object>(): (value: T | undefined) => (T & SnapshotRevision) | undefined {
+	let revision = 0;
+	let signature: string | undefined;
+	let hasSignature = false;
+	return (value) => {
+		if (value === undefined) return undefined;
+		const next = JSON.stringify(value);
+		if (hasSignature && next !== signature) revision += 1;
+		signature = next;
+		hasSignature = true;
+		return { ...value, revision };
+	};
+}
+
 export interface StatusModuleOptions {
 	/** pi 的配置目录（settings.json 在这里，自动压缩开关从它读）；默认 getAgentDir() */
 	readonly agentDir?: string;
@@ -48,10 +70,8 @@ export interface StatusModuleOptions {
 	readonly watchAutoCompactionSettings?: (agentDir: string, onChange: () => void) => () => void;
 }
 
-/** 菜单写盘后要触发的模块侧动作（模块装配时填入，菜单行闭包持用） */
+/** 菜单保存后要触发的模块侧动作（模块装配时填入，菜单行闭包持用） */
 export interface StatusMenuRuntime {
-	/** 重载状态中枢的内存副本，让 getConfig() 跟上磁盘 */
-	reload: () => Promise<void>;
 	/** 段位设置变化后重建控制器（纯数据侧，不碰 UI） */
 	reapply: () => void;
 }
@@ -59,7 +79,7 @@ export interface StatusMenuRuntime {
 export function registerStatus(
 	context: ModuleContext,
 	options: StatusModuleOptions = {},
-	menuRuntime: StatusMenuRuntime = { reload: async () => {}, reapply: () => {} },
+	menuRuntime: StatusMenuRuntime = { reapply: () => {} },
 ): void {
 	const agentDir = options.agentDir ?? getAgentDir();
 	const env = options.env ?? process.env;
@@ -82,6 +102,11 @@ export function registerStatus(
 
 	const currentConfig = () => context.getConfig();
 	const currentSettings = (): ResolvedStatusSettings => statusSettingsFromSection(currentConfig(), env);
+	// 快照变更序号（工单 18）：workspace / session / timer 三条按内容变化在句柄层维护；
+	// compaction 的值是布尔，序号由控制器自己维护（见 auto-compaction.ts）。
+	const readWorkspaceRevision = createRevisionReader<ProjectStatusSnapshot>();
+	const readSessionRevision = createRevisionReader<SessionStatusSnapshot>();
+	const readTimerRevision = createRevisionReader<TurnTimerSnapshot>();
 
 	const telemetry = new TurnTelemetryController({
 		isEnabled: () => readStatusSection(currentConfig()).config.telemetry,
@@ -132,8 +157,6 @@ export function registerStatus(
 		}
 		if (settings.editorLeft.includes("duration")) {
 			timer = new TurnTimerController(
-				() => {},
-				1_000,
 				Date.now,
 				readLatestTurnDuration(ctx.sessionManager?.getEntries?.() ?? []),
 			);
@@ -142,21 +165,17 @@ export function registerStatus(
 			compaction = new AutoCompactionStatusController(
 				() => readCompactionEnabled(ctx, agentDir),
 				(onChange) => watchSettings(agentDir, onChange),
-				() => {},
 			);
 		}
 	};
 
 	context.services.register(STATUS_WORKSPACE_SERVICE_NAME, {
 		id: "status",
-		snapshot: () => {
-			if (!sessionContext) return undefined;
-			return {
-				...(git?.getSnapshot() ?? { cwd: sessionContext.cwd, branch: null }),
-				runtime: runtimeStatus?.getSnapshot(),
-				duration: timer?.getSnapshot(),
-			};
-		},
+		snapshot: () => (sessionContext ? readWorkspaceRevision({
+			...(git?.getSnapshot() ?? { cwd: sessionContext.cwd, branch: null }),
+			runtime: runtimeStatus?.getSnapshot(),
+			duration: timer?.getSnapshot(),
+		}) : undefined),
 		refresh: async () => {
 			await Promise.all([git?.refresh(), runtimeStatus?.refresh()]);
 		},
@@ -165,13 +184,15 @@ export function registerStatus(
 
 	context.services.register(STATUS_SESSION_SERVICE_NAME, {
 		id: "status",
-		snapshot: () => (sessionContext ? collectSessionStatus(sessionContext.sessionManager) : undefined),
+		snapshot: () => (sessionContext
+			? readSessionRevision(collectSessionStatus(sessionContext.sessionManager))
+			: undefined),
 		refresh: async () => {},
 	} satisfies StatusSessionService);
 
 	context.services.register(STATUS_TIMER_SERVICE_NAME, {
 		id: "status",
-		snapshot: () => timer?.getSnapshot(),
+		snapshot: () => readTimerRevision(timer?.getSnapshot()),
 		refresh: async () => {},
 	} satisfies StatusTimerService);
 
@@ -189,7 +210,6 @@ export function registerStatus(
 		},
 	} satisfies StatusCompactionService);
 
-	menuRuntime.reload = () => context.reloadConfig();
 	menuRuntime.reapply = () => {
 		if (sessionContext) startControllers(sessionContext);
 	};

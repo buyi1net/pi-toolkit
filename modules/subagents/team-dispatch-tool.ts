@@ -4,11 +4,11 @@ import { Text } from "@earendil-works/pi-tui";
 import { randomUUID } from "node:crypto";
 import { normalizeSubagentName } from "./names.ts";
 import { buildTeamRoundPrompt, findRosterMember, rosterPath, upsertRosterMember, type RosterMember } from "./team.ts";
-import type { RunningSubagent } from "./types.ts";
+import type { RuntimeRegistry } from "./registry.ts";
 
 export interface TeamDispatchToolDeps {
-  /** 本进程运行中的子代理(member 查找与在线判定)。 */
-  runningSubagents: Map<string, RunningSubagent>;
+  /** 运行态登记表(member 查找与在线判定)。 */
+  registry: RuntimeRegistry;
   getArtifactDir: (sessionDir: string, sessionId: string) => string;
   rosterPath: (artifactDir: string) => string;
   findRosterMember: (path: string, name: string) => RosterMember | null;
@@ -99,7 +99,7 @@ export function registerTeamDispatchTool(pi: ExtensionAPI, deps: TeamDispatchToo
       }
       const name = normalizeSubagentName(rawName, "");
 
-      const member = Array.from(deps.runningSubagents.values()).find(
+      const member = deps.registry.list().find(
         (running) => running.member === true && running.name === name,
       );
       if (!member) {

@@ -1,8 +1,8 @@
 // status 模块数据源：项目运行时探测（从 tui/status/ 整体迁入，工单 11）。
 //
 // 版本命令探测、目录指纹缓存与刷新控制器都归数据模块；`status.workspace` 快照里
-// 的 runtime 段由本文件的控制器提供。重绘请求由消费方（tui）自己驱动，
-// 控制器的 `requestRender` 参数缺省时只更新快照。
+// 的 runtime 段由本文件的控制器提供。重绘节奏归 tui（工单 18）：控制器不持重绘回调，
+// 数据变化由快照内容比较带出变更序号，tui 心跳按序号变化重绘。
 
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
@@ -239,7 +239,6 @@ export class RuntimeStatusController {
 	private readonly queryRuntimeStatus: RuntimeStatusQuery;
 	private readonly debounceMs: number;
 	private snapshot: RuntimeStatusSnapshot | null = null;
-	private requestRender: (() => void) | undefined;
 	private refreshTimer: ReturnType<typeof setTimeout> | undefined;
 	private refreshInFlight = false;
 	private refreshPending = false;
@@ -252,15 +251,10 @@ export class RuntimeStatusController {
 		this.debounceMs = debounceMs;
 	}
 
-	/** 开始查询；`requestRender` 由消费方决定，缺省时不主动重绘 */
-	connect(requestRender?: () => void): void {
+	/** 开始查询；数据变化由 `status.workspace` 快照的变更序号带出，控制器不触发重绘 */
+	connect(): void {
 		if (this.disposed) return;
-		this.requestRender = requestRender;
 		this.requestRefresh(0);
-	}
-
-	disconnect(): void {
-		this.requestRender = undefined;
 	}
 
 	getSnapshot(): RuntimeStatusSnapshot | null {
@@ -287,10 +281,7 @@ export class RuntimeStatusController {
 		try {
 			const result = await this.queryRuntimeStatus(this.cwd, abortController.signal);
 			if (this.disposed || result === undefined) return;
-			if (JSON.stringify(result) !== JSON.stringify(this.snapshot)) {
-				this.snapshot = result;
-				this.requestRender?.();
-			}
+			this.snapshot = result;
 		} catch {
 			// 查询失败时保留最后一次已识别结果，不让状态行闪烁。
 		} finally {
@@ -309,6 +300,5 @@ export class RuntimeStatusController {
 		this.refreshTimer = undefined;
 		this.abortController?.abort();
 		this.abortController = undefined;
-		this.disconnect();
 	}
 }

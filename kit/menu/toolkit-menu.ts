@@ -5,6 +5,7 @@ import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container } from "@earendil-works/pi-tui";
 import type { LanguageSetting } from "../../i18n/index.ts";
+import { createConfigTransaction } from "../config-transaction.ts";
 import type { ModuleConfigScalar } from "../module.ts";
 import type { Toolkit } from "../toolkit.ts";
 import {
@@ -54,6 +55,12 @@ export class ToolkitMenu extends Container {
   constructor(options: ToolkitMenuOptions) {
     super();
     this.options = options;
+    // 结构化配置写入事务（工单 19）：写盘与内存重载走 kit，重绘请求由菜单层注入（kit 不依赖 tui）
+    const transaction = createConfigTransaction({
+      configPath: options.toolkit.configPath,
+      reload: () => options.toolkit.reloadConfig(),
+      requestRender: () => options.requestRender(),
+    });
     this.build = {
       // 译者始终读当前语言，重建时 label 自然换成新语言
       t: options.toolkit.getTranslator(),
@@ -64,6 +71,8 @@ export class ToolkitMenu extends Container {
       getModuleConfig: (moduleId) => options.toolkit.getModuleConfig(moduleId),
       onChange: options.onChange,
       requestRender: () => options.requestRender(),
+      saveModuleConfig: (moduleId, patch, hooks) =>
+        transaction.write({ modules: { [moduleId]: patch } }, hooks),
       refresh: (selectId) => this.rebuild(selectId),
     };
     this.rebuild();

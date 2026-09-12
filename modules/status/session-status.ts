@@ -2,8 +2,9 @@
 //
 // 采集（collectSessionStatus）与会话快照类型 / 段位 id 归数据模块，从 `status.session`
 // 句柄按需取快照（消费方每帧调用，采集是纯读取，无缓存）。渲染半
-// （buildEditorUsageSegments / renderStatusLineSegments / renderSessionStatusLine）
-// 留在 tui/status/session-status.ts。
+// （buildEditorUsageSegments / renderSessionStatusLine）留在 tui/status/session-status.ts；
+// renderStatusLineSegments 的段位压缩已迁 modules/tui/status/segment-layout.ts（工单 20），
+// 由该模块同时供 editor 两栏与 footer 单行使用。
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { sanitizeSingleLine } from "../../shared/sanitize.ts";

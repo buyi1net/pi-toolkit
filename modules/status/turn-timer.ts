@@ -3,8 +3,8 @@
 // 计时状态归数据模块：控制器由 status 模块装配时创建并经 `status.timer` 句柄透出；
 // 渲染（顶边 duration 段的颜色与排版）留在 tui 侧（status-segments.ts、plugin/editor.ts）。
 //
-// 重绘节奏属于 tui：本文件不再持有 requestRender 的调用权，构造参数保留 `() => void`
-// 只是接口形态（status 模块传空操作），tui 侧按自己的心跳读快照后重绘。
+// 重绘节奏属于 tui（工单 18）：控制器不持重绘回调、也不自带定时器；快照内容（working 期间的
+// 毫秒级 elapsedMs）变化由 `status.timer` 句柄按内容比较体现为变更序号，tui 心跳按序号重绘。
 
 export type TurnTimerState = "idle" | "working" | "done";
 
@@ -14,22 +14,12 @@ export interface TurnTimerSnapshot {
 }
 
 export class TurnTimerController {
-	private readonly requestRender: () => void;
-	private readonly intervalMs: number;
 	private readonly now: () => number;
 	private startedAt: number | undefined;
 	private completedElapsedMs: number | undefined;
-	private interval: ReturnType<typeof setInterval> | undefined;
 	private disposed = false;
 
-	constructor(
-		requestRender: () => void = () => {},
-		intervalMs = 1000,
-		now: () => number = Date.now,
-		completedElapsedMs?: number,
-	) {
-		this.requestRender = requestRender;
-		this.intervalMs = intervalMs;
+	constructor(now: () => number = Date.now, completedElapsedMs?: number) {
 		this.now = now;
 		if (Number.isFinite(completedElapsedMs) && (completedElapsedMs ?? -1) >= 0) {
 			this.completedElapsedMs = completedElapsedMs;
@@ -38,20 +28,14 @@ export class TurnTimerController {
 
 	start(): void {
 		if (this.disposed) return;
-		this.stopInterval();
 		this.startedAt = this.now();
 		this.completedElapsedMs = undefined;
-		this.interval = setInterval(() => this.requestRender(), this.intervalMs);
-		this.interval.unref();
-		this.requestRender();
 	}
 
 	end(): number | undefined {
 		if (this.disposed || this.startedAt === undefined) return undefined;
 		this.completedElapsedMs = Math.max(0, this.now() - this.startedAt);
 		this.startedAt = undefined;
-		this.stopInterval();
-		this.requestRender();
 		return this.completedElapsedMs;
 	}
 
@@ -59,8 +43,6 @@ export class TurnTimerController {
 		if (this.disposed || !Number.isFinite(elapsedMs) || elapsedMs < 0) return;
 		this.startedAt = undefined;
 		this.completedElapsedMs = elapsedMs;
-		this.stopInterval();
-		this.requestRender();
 	}
 
 	getSnapshot(): TurnTimerSnapshot {
@@ -77,13 +59,6 @@ export class TurnTimerController {
 	}
 
 	dispose(): void {
-		if (this.disposed) return;
 		this.disposed = true;
-		this.stopInterval();
-	}
-
-	private stopInterval(): void {
-		if (this.interval) clearInterval(this.interval);
-		this.interval = undefined;
 	}
 }

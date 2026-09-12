@@ -11,8 +11,8 @@ import {
   resolveNameInRegistry,
 } from "./session.ts";
 import { normalizeSubagentName } from "./names.ts";
-import { resolveSurfaceChoice, type SubagentSurfaceChoice } from "./launch-config.ts";
 import { peekExitSidecar } from "./surface.ts";
+import type { StartedRun, SubagentStartup } from "./startup.ts";
 import { debugLog } from "./diagnostics.ts";
 import { routeExceptionFromResult } from "./route-error.ts";
 import {
@@ -28,9 +28,9 @@ import {
   type DependencyException,
   type DependencyOutcome,
 } from "./dependencies.ts";
-import { normalizeCohortId, SubagentParams, validateCohortId } from "./params.ts";
+import { SubagentParams } from "./params.ts";
 import { cleanupSubagentArtifacts, resolveRetentionDecision } from "./retention.ts";
-import { markRuntimeWaitReleased } from "./runtime-registry.ts";
+import type { RuntimeRegistry } from "./registry.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
 
 /** 等待解除原因:Escape 中止或 timeoutMs 超时——都是“只解除工具等待,
@@ -78,45 +78,21 @@ export async function waitForSubagentTerminal(params: {
   });
 }
 
-/** timeoutMs 参数校验(信任边界:模型传参);返回错误文案或 null。 */
-export function validateTimeoutMs(timeoutMs: unknown): string | null {
-  if (timeoutMs == null) return null;
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs < 1000) {
-    return `Invalid timeoutMs: must be an integer >= 1000 (milliseconds); got ${String(timeoutMs)}.`;
-  }
-  return null;
-}
-
-interface SpawnContext {
-  sessionManager: {
-    getSessionFile(): string | null | undefined;
-    getSessionId(): string;
-    getSessionDir(): string;
-  };
-  cwd: string;
-}
+// timeoutMs 参数校验搬到启动模块（启动计划阶段统一执行），此处保留导出名
+// 以兼容既有调用方与测试。
+export { validateTimeoutMs } from "./startup.ts";
 
 export interface SubagentToolDeps {
+  /** 该 spawn 允许的 agent 名单；null 表示允许 discoverAgents() 的全部。 */
   allowlist: Set<string> | null;
   discoverAgents: () => Array<{ name: string }>;
-  isMuxAvailable: () => boolean;
+  /** 启动事务：校验、拼装、进程启动、登记与 watcher 启动都走它。 */
+  startup: SubagentStartup;
+  /** 表面需要复用器而不可用时的宿主提示结果（启动模块判定，工具只呈现）。 */
   muxUnavailableResult: () => any;
-  /** 表面选择(auto/background/pane):pane 需要 mux,headless 不需要。 */
-  resolveSurfaceChoice: (params: { surface?: string; agent?: string }) =>
-    { choice: SubagentSurfaceChoice } | { error: string };
   getArtifactDir: (sessionDir: string, sessionId: string) => string;
-  runningSubagents: Map<string, RunningSubagent>;
-  reservedNames: Set<string>;
-  /** 该 spawn 是否交互式(演示 pane);完成注册表用它拒绝交互式依赖提供者。
-   *  可选:旧测试夹具缺省时按非交互式处理。 */
-  resolveInteractive?: (params: { agent?: string }) => boolean;
-  uniqueRunningName: (base: string, registryNames?: Set<string>) => string;
-  launchSubagent: (params: typeof SubagentParams.static, ctx: SpawnContext) => Promise<RunningSubagent>;
-  startWidgetRefresh: () => void;
-  startStatusRefresh: (pi: ExtensionAPI) => void;
-  watchSubagent: (running: RunningSubagent, signal: AbortSignal) => Promise<SubagentResult>;
-  /** 持久成员的轮次 watcher(fire-and-forget:.round 消费/回注、offline 检测、mailbox 注入)。 */
-  watchMemberRound: (running: RunningSubagent, signal: AbortSignal) => void | Promise<void>;
+  /** 运行态登记表：名字保留/查重与 dependsOn 的运行态查询都走它。 */
+  registry: RuntimeRegistry;
   /** 同名重建判定:member spawn 复用 offline 成员名字(roster 状态为准)。可选:
    *  旧测试夹具缺省时按不可复用处理。 */
   canReuseMemberName?: (name: string, artifactDir: string) => boolean;
@@ -316,11 +292,11 @@ export async function resolveDependsOn(params: {
   ownName: string;
   dependsOn: string[];
   artifactDir: string;
-  runningSubagents: Map<string, RunningSubagent>;
+  registry: RuntimeRegistry;
   signal?: AbortSignal;
   ownRecord?: CompletionRecord;
 }): Promise<DependsOnResolution> {
-  const { ownName, dependsOn, artifactDir, runningSubagents, signal } = params;
+  const { ownName, dependsOn, artifactDir, registry, signal } = params;
   const completed: DependencyOutcome[] = [];
   const seen = new Set<string>();
 
@@ -417,7 +393,7 @@ export async function resolveDependsOn(params: {
 
     // 本进程运行中但无完成记录:典型是 /reload 恢复的子代理(watcher 早已
     // 启动,注册表里没有它的完成 promise)。明确 fail-fast,绝不无限等。
-    const running = Array.from(runningSubagents.values()).find((candidate) => candidate.name === dep);
+    const running = registry.findByName(dep);
     if (running) {
       return blockedResolution({
         kind: "running_without_waiter",
@@ -569,14 +545,6 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
     parameters: SubagentParams,
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const cohortError = validateCohortId(params.cohortId);
-      if (cohortError) {
-        return { content: [{ type: "text", text: cohortError }], details: { error: cohortError } };
-      }
-      const cohortId = normalizeCohortId(params.cohortId);
-      if (cohortId) params.cohortId = cohortId;
-      else delete params.cohortId;
-
       const currentAgent = process.env.PI_SUBAGENT_AGENT;
       if (params.agent && currentAgent && params.agent === currentAgent) {
         return {
@@ -616,61 +584,18 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         };
       }
 
-      // 表面选择:auto → headless(自动)/ pane(交互);background 强制 headless
-      // (交互拒绝);pane 强制可见 pane。仅 pane 需要复用器;headless 在无
-      // herdr/tmux 的环境也能运行。
-      const surfaceChoice = deps.resolveSurfaceChoice(params);
-      if ("error" in surfaceChoice) {
+      // 启动计划（启动事务第一阶段）：入参校验、运行类别与表面解析、路径与
+      // tier 解析都在启动模块内完成；工具只呈现拒绝理由。
+      const planned = deps.startup.planSpawn(params, ctx);
+      if (planned.kind === "error") {
+        if (planned.muxUnavailable) return deps.muxUnavailableResult();
         return {
-          content: [{ type: "text", text: surfaceChoice.error }],
-          details: { error: surfaceChoice.error },
+          content: [{ type: "text", text: planned.error }],
+          details: planned.details ?? { error: planned.error },
         };
       }
-      // timeoutMs 校验与适用性检查(在创建任何 pane/进程之前):非法值直接
-      // 拒绝;交互式(演示)spawn 立即返回、没有可设上限的等待,显式拒绝
-      // 而不是静默忽略——避免调用方误以为有超时保护。
-      const timeoutError = validateTimeoutMs(params.timeoutMs);
-      if (timeoutError) {
-        return {
-          content: [{ type: "text", text: timeoutError }],
-          details: { error: timeoutError },
-        };
-      }
+      const plan = planned.plan;
       const timeoutMs = params.timeoutMs ?? null;
-      if (timeoutMs != null && (deps.resolveInteractive?.(params) ?? false)) {
-        const error =
-          `timeoutMs does not apply to interactive (demo) sub-agents: their spawn returns immediately and ` +
-          `there is no blocking wait to bound. Drop timeoutMs for this spawn.`;
-        return { content: [{ type: "text", text: error }], details: { error } };
-      }
-      // ── 持久团队成员(member)约束(全部在创建任何进程之前拒绝)──
-      // member 是独立生命周期,与硬屏障/依赖/保留策略/超时/pane 语义互斥;
-      // 显式拒绝而非静默降级,不偷偷改变现有自动任务与演示 pane 的默认行为。
-      if (params.member) {
-        const interactiveAgent = deps.resolveInteractive?.(params) ?? false;
-        const violations: string[] = [];
-        if (params.surface === "pane") violations.push('surface "pane" (members are headless-only)');
-        if (interactiveAgent) violations.push("interactive (demo) agents cannot be members");
-        if (params.retention === "discard") violations.push('retention "discard" (member sessions are always preserved)');
-        if (params.timeoutMs != null) violations.push("timeoutMs (members are non-blocking; there is no wait to bound)");
-        if (params.dependsOn?.length) violations.push("dependsOn (members have no process-level terminal state to wait for)");
-        if (violations.length > 0) {
-          const error =
-            `member: true cannot be combined with: ${violations.join("; ")}. ` +
-            `Drop the conflicting options or spawn a regular one-shot sub-agent instead.`;
-          return { content: [{ type: "text", text: error }], details: { error, violations } };
-        }
-      }
-      if (surfaceChoice.choice === "pane" && !deps.isMuxAvailable()) return deps.muxUnavailableResult();
-      if (!ctx.sessionManager.getSessionFile()) {
-        return {
-          content: [{
-            type: "text",
-            text: "Error: no session file. Start pi with a persistent session to use subagents.",
-          }],
-          details: { error: "no session file" },
-        };
-      }
 
       const parentArtifactDir = deps.getArtifactDir(
         ctx.sessionManager.getSessionDir(),
@@ -680,9 +605,9 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       const suppliedName = params.name?.trim();
       if (!suppliedName) {
         const registryNames = new Set(Object.keys(readNameRegistry(parentArtifactDir)));
-        params.name = deps.uniqueRunningName(normalizeSubagentName(params.agent), registryNames);
+        params.name = deps.registry.uniqueName(normalizeSubagentName(params.agent), registryNames);
         reservedName = params.name;
-        deps.reservedNames.add(reservedName);
+        deps.registry.reserveName(reservedName);
       } else {
         params.name = normalizeSubagentName(suppliedName);
         const registeredEntry = resolveNameInRegistry(parentArtifactDir, params.name);
@@ -694,8 +619,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
           !!registeredEntry &&
           (deps.canReuseMemberName?.(params.name, parentArtifactDir) ?? false);
         const clash =
-          deps.reservedNames.has(params.name) ||
-          Array.from(deps.runningSubagents.values()).some((running) => running.name === params.name) ||
+          deps.registry.isNameTaken(params.name) ||
           (Boolean(registeredEntry) && !memberNameReuse);
         if (clash) {
           const reuseHint = registeredEntry && !memberNameReuse
@@ -707,17 +631,18 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
           return { content: [{ type: "text", text: error }], details: { error } };
         }
         reservedName = params.name;
-        deps.reservedNames.add(reservedName);
+        deps.registry.reserveName(reservedName);
       }
 
       let running: RunningSubagent;
+      let started: StartedRun;
       try {
         // 名字已确定:启动前登记完成记录,让同一消息里后执行的 dependsOn
         // 消费者能找到并等待本次 spawn 的终态。与保留名字同段同步执行,
         // 不给“找不到依赖”留窗口。
         const ownRecord = announceCompletion(params.name, {
-          interactive: deps.resolveInteractive?.(params) ?? false,
-          ...(params.member ? { member: true } : {}),
+          interactive: plan.interactive,
+          ...(plan.member ? { member: true } : {}),
         });
         // 真正 launch 之前解析并等待 dependsOn:依赖未到终态就不启动;失败/
         // 取消/无法解析直接返回结构化异常,不创建 pane/进程。没有 dependsOn
@@ -727,7 +652,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             ownName: params.name,
             dependsOn: params.dependsOn,
             artifactDir: parentArtifactDir,
-            runningSubagents: deps.runningSubagents,
+            registry: deps.registry,
             signal,
             ownRecord,
           });
@@ -746,10 +671,11 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             params.task = `${params.task}\n\n${resolution.appendix}`;
           }
         }
-        running = await deps.launchSubagent(params, ctx);
+        started = await deps.startup.spawn(plan, ctx, pi);
         // 工具层负责规范化入参;这里再写回运行态,兼容测试/宿主注入的
-        // launchSubagent 实现,确保后续 registry、inspect 和结果详情同源。
-        if (cohortId) running.cohortId = cohortId;
+        // 启动实现,确保后续 registry、inspect 和结果详情同源。
+        running = started.running;
+        if (plan.cohortId) running.cohortId = plan.cohortId;
       } catch (error: any) {
         // launch 失败必须释放/拒绝:完成记录兑成失败终态,等待者不挂死;
         // 名字保留照旧在 finally 释放,异常按原语义向宿主上抛。
@@ -759,7 +685,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         }, { source: "launch-failure" });
         throw error;
       } finally {
-        if (reservedName) deps.reservedNames.delete(reservedName);
+        if (reservedName) deps.registry.releaseName(reservedName);
       }
 
       registerName(parentArtifactDir, running.name, {
@@ -769,10 +695,8 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         ...(running.anchoredLoadout ? { anchored: true } : {}),
       });
 
-      const watcherAbort = new AbortController();
-      running.abortController = watcherAbort;
-      deps.startWidgetRefresh();
-      deps.startStatusRefresh(pi);
+      // watcher 已由启动事务按运行类别启动（成员轮 / watchSubagent 内部再分
+      // pane、headless）；工具侧只负责等待解除、结果呈现与投递。
 
       // ── 持久团队成员(member):立即 ack,不走硬屏障。──
       // 成员是常驻 headless 进程:首轮任务照常经 stdin 投递,轮次结束时
@@ -783,7 +707,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         running.roundEntryBaseline = 0;
         // fire-and-forget watcher:成员常驻,轮询循环永不到终态;异常必须
         // 就地兑底(debug 日志),不能变成 unhandled rejection 杀掉宿主。
-        Promise.resolve(deps.watchMemberRound(running, watcherAbort.signal)).catch((error) => {
+        Promise.resolve(started.watch).catch((error) => {
           debugLog(`Team member round watcher failed for ${running.name}`, error);
         });
         return {
@@ -812,7 +736,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       // ── 可见演示子代理(interactive):保持异步立即返回,pane 归用户操作。──
       // watcher 到达终态后经 steer 消息回注,不阻塞主 turn。
       if (running.interactive) {
-        const interactiveWatch = deps.watchSubagent(running, watcherAbort.signal);
+        const interactiveWatch = started.watch as Promise<SubagentResult>;
         running.watchPromise = interactiveWatch;
         interactiveWatch
           .then((result) => {
@@ -912,7 +836,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       // (registerDetachedLateDelivery)送达一次。watcher 自身 signal 的
       // abort 只来自显式停止(subagent_stop),此时 watcher 兑 cancelled
       // 终态并终止进程/关闭 pane,走正常返回路径。
-      const watchPromise = deps.watchSubagent(running, watcherAbort.signal);
+      const watchPromise = started.watch as Promise<SubagentResult>;
       running.watchPromise = watchPromise;
 
       const raced = await waitForSubagentTerminal({
@@ -923,7 +847,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       });
       if (typeof raced === "object" && "kind" in raced) {
         running.waitReleased = raced.kind;
-        markRuntimeWaitReleased(running.runtimeFile, running.id, raced.kind);
+        deps.registry.markWaitReleased(running.runtimeFile, running.id, raced.kind);
         // 主工具等待被解除(Escape 或超时):子代理仍在运行,返回非终态。
         // 不 settle completion(上游仍在跑,dependsOn 等真实终态)、不清理
         // retention、不伪造摘要。迟到回注与 handed-off 移交由同一机制幂等处理。
@@ -979,7 +903,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       // 再转发);此时 watcher 已兑出真实取消终态,走本返回路径。stopped
       // 标志覆盖 mock watcher 直接 resolve 取消终态的场景。
       const userClosed = !!result.userClosed;
-      const cancelled = watcherAbort.signal.aborted || userClosed || !!result.stopped;
+      const cancelled = started.signal.aborted || userClosed || !!result.stopped;
       const failed = result.exitCode !== 0 || !!result.errorMessage;
       const routeException = cancelled ? undefined : routeExceptionFromResult(result, running.model);
       // 硬屏障终态(成功/失败/取消/handed-off)落定完成记录:同一消息或后续

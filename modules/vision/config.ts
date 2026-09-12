@@ -8,7 +8,7 @@
 
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
-import { getToolkitConfigPath, loadToolkitConfig, saveToolkitConfig, TOOLKIT_CONFIG_FILENAME } from "../../kit/config.ts";
+import { getToolkitConfigPath, loadToolkitConfig, TOOLKIT_CONFIG_FILENAME } from "../../kit/config.ts";
 import type { Translator } from "../../i18n/index.ts";
 import type { ModuleConfigRecord, ModuleConfigValue } from "../../kit/module.ts";
 import type { VisionRoutingConfig } from "./chain.ts";
@@ -95,7 +95,8 @@ function cloneModels(models: VisionModelSelection[] | null): VisionModelSelectio
   return models === null ? null : models.map((model) => ({ ...model }));
 }
 
-function cloneRoute(route: VisionRouteConfig): VisionRouteConfig {
+/** 复制一份路由：门面快照与分层合并都靠它隔离调用方对内部状态的写入 */
+export function cloneVisionRoute(route: VisionRouteConfig): VisionRouteConfig {
   return {
     mode: route.mode,
     allowedModels: cloneModels(route.allowedModels),
@@ -104,7 +105,7 @@ function cloneRoute(route: VisionRouteConfig): VisionRouteConfig {
 }
 
 function cloneConfig(config: VisionConfig): VisionConfig {
-  return { route: cloneRoute(config.route) };
+  return { route: cloneVisionRoute(config.route) };
 }
 
 function parseModelSelection(value: unknown, field: string, problems: VisionConfigProblem[]): VisionModelSelection | undefined {
@@ -187,10 +188,10 @@ export function resolveVisionLayers(
   layers: readonly VisionRouteLayer[],
 ): { config: VisionConfig; warnings: VisionConfigWarning[] } {
   const warnings: VisionConfigWarning[] = [];
-  let route = cloneRoute(DEFAULT_VISION_CONFIG.route);
+  let route = cloneVisionRoute(DEFAULT_VISION_CONFIG.route);
 
   for (const layer of layers) {
-    const next = cloneRoute(route);
+    const next = cloneVisionRoute(route);
     if (layer.route.mode !== undefined) next.mode = layer.route.mode;
     if (layer.route.allowedModels !== undefined) next.allowedModels = cloneModels(layer.route.allowedModels);
     if (layer.route.fixedModel !== undefined) next.fixedModel = { ...layer.route.fixedModel };
@@ -301,21 +302,10 @@ function routeForWrite(patch: Partial<VisionRouteConfig>): ModuleConfigValue {
   };
 }
 
-export interface SaveVisionRouteOptions {
-  /** 配置目录；默认 pi 的 agentDir */
-  readonly agentDir?: string;
-}
-
 /**
- * 写视觉路由到 `<agentDir>/pi-toolkit.json`。
- * 走骨架的原子写 + 剥敏感键，另有 `mergeRaw` 深合并：只覆盖 patch 里出现的字段。
+ * 写盘补丁语义（工单 19）：路由补丁 → `modules.vision` 节补丁。
+ * 只带 patch 里出现的字段（深合并交给 kit 的事务），供 ModuleContext.saveConfig 写入。
  */
-export async function saveVisionRoute(
-  patch: Partial<VisionRouteConfig>,
-  options: SaveVisionRouteOptions = {},
-): Promise<void> {
-  const path = getToolkitConfigPath(options.agentDir ?? getAgentDir());
-  await saveToolkitConfig(path, {
-    modules: { [VISION_MODULE_ID]: { backend: { route: routeForWrite(patch) } } },
-  });
+export function visionRoutePatch(patch: Partial<VisionRouteConfig>): ModuleConfigRecord {
+  return { backend: { route: routeForWrite(patch) } };
 }

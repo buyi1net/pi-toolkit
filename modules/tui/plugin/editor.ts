@@ -33,10 +33,9 @@ import { resolveGlyphs, type IconGlyphs } from "../renderer/icons.ts";
 import {
 	durationStatusColor,
 	formatElapsed,
-	layoutEditorStatus,
 	thinkingStatusColor,
-	type StatusSegment,
 } from "../status/status-segments.ts";
+import { layoutEditorStatus, type StatusSegment } from "../status/segment-layout.ts";
 import { buildEditorProviderSegments } from "../status/provider-status.ts";
 import type {
 	EditorLayoutSource,

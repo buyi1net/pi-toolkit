@@ -13,16 +13,18 @@
 import { type ExtensionContext, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { Container, type SettingItem, Text } from "@earendil-works/pi-tui";
 import type { Translator } from "../../i18n/index.ts";
+import type { ConfigWriteHooks } from "../../kit/config-transaction.ts";
 import { ChoicePicker } from "../../kit/menu/panels.ts";
 import { I18nSettingsList } from "../../kit/menu/settings-list.ts";
 import type { MenuTheme } from "../../kit/menu/theme.ts";
-import type { ModuleMenuContext } from "../../kit/module.ts";
+import type { ModuleConfigRecord, ModuleMenuContext } from "../../kit/module.ts";
 import {
   loadEffectiveTierConfig,
   MODEL_TIERS,
   readSubagentsSection,
-  saveStatusEnabled,
-  saveTierModel,
+  statusEnabledPatch,
+  subagentsSectionPath,
+  tierModelPatch,
   tierRouteError,
   type ModelTier,
   type TierConfigLoadResult,
@@ -121,17 +123,13 @@ export function firstTierProblem(
   return undefined;
 }
 
-export interface SubagentsMenuRuntime {
-  /** 写盘后重载状态中枢的内存副本，让 getConfig() 跟上磁盘 */
-  reload: () => Promise<void>;
-}
-
 export interface SubagentsPanelOptions {
   readonly t: Translator;
   readonly theme: MenuTheme;
   readonly context: ExtensionContext;
   readonly agentDir: string;
-  readonly runtime: SubagentsMenuRuntime;
+  /** 结构化配置写入事务（由菜单层注入，重绘请求也由它带） */
+  readonly saveConfig: (patch: ModuleConfigRecord, hooks?: ConfigWriteHooks) => Promise<void>;
   readonly requestRender: () => void;
   /** 读本模块配置节（实时） */
   readonly getSection: () => Record<string, unknown>;
@@ -180,29 +178,27 @@ export interface SaveOutcome {
   readonly error?: string;
 }
 
-/** 写一档 tier 并让状态中枢重载配置；返回结果供 UI 与自测判定 */
+/** 写一档 tier：补丁语义 + 写前校验在本模块，落盘与重载走配置写入事务 */
 export async function saveTier(
   options: SubagentsPanelOptions,
   tier: ModelTier,
   model: string,
 ): Promise<SaveOutcome> {
   try {
-    await saveTierModel(tier, model, { agentDir: options.agentDir });
-    await options.runtime.reload();
+    await options.saveConfig(tierModelPatch(tier, model, subagentsSectionPath(options.agentDir)));
     return { ok: true };
   } catch (error) {
     return { ok: false, error: describeError(error) };
   }
 }
 
-/** 写状态显示开关并让状态中枢重载配置 */
+/** 写状态显示开关：补丁语义在本模块，落盘与重载走配置写入事务 */
 export async function saveStatus(
   options: SubagentsPanelOptions,
   enabled: boolean,
 ): Promise<SaveOutcome> {
   try {
-    await saveStatusEnabled(enabled, { agentDir: options.agentDir });
-    await options.runtime.reload();
+    await options.saveConfig(statusEnabledPatch(enabled));
     return { ok: true };
   } catch (error) {
     return { ok: false, error: describeError(error) };
@@ -353,10 +349,7 @@ export class SubagentsPanel extends Container {
 }
 
 /** 模块的菜单行：一行入口，进去是子代理配置页 */
-export function buildSubagentsMenuItems(
-  context: ModuleMenuContext,
-  runtime: SubagentsMenuRuntime,
-): readonly SettingItem[] {
+export function buildSubagentsMenuItems(context: ModuleMenuContext): readonly SettingItem[] {
   const t = context.t;
   const section = context.getConfig();
   const state = readPanelState(section);
@@ -377,7 +370,7 @@ export function buildSubagentsMenuItems(
           theme: context.theme,
           context: context.context,
           agentDir: context.agentDir,
-          runtime,
+          saveConfig: (patch, hooks) => context.saveConfig(patch, hooks),
           requestRender: () => context.requestRender(),
           getSection: () => context.getConfig(),
           packageStatusEnabled: readPackageStatusEnabled(),

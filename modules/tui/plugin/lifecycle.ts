@@ -18,6 +18,7 @@ import {
 	type LoadedPiTuiConfig,
 } from "./settings-config.ts";
 import { getTerminalTransitionGate, type TerminalTransitionGate } from "./transition-gate.ts";
+import { RepaintRhythm } from "./repaint-rhythm.ts";
 import { ensureFirstPackage } from "./package-order.ts";
 import {
 	flashVisibleScreen,
@@ -77,6 +78,8 @@ export interface PiTuiLifecycleHandle {
  *
  * 工单 11：状态控制器归 status 模块（status.* 句柄），供应商控制器归 providers 模块
  * （providers.usage）；本文件只从句柄取快照、在自己的事件上触发刷新与重绘，不再 new 控制器。
+ * 工单 18：外部变化（git 轮询、设置文件、供应商轮询）由统一重绘节奏（repaint-rhythm.ts）
+ * 每秒检查五条快照的变更序号后补帧，本文件的宿主事件钩子仍是即时重绘那一路。
  */
 export function registerPiTuiLifecycle(
 	pi: ExtensionAPI,
@@ -105,8 +108,6 @@ export function registerPiTuiLifecycle(
 	let statusCompaction: StatusCompactionService | undefined;
 	/** 供应商运行态句柄（providers 模块注册；未装配时为 undefined） */
 	let providerUsage: ProvidersUsageService | undefined;
-	/** 回合计时的重绘心跳：状态归 status 模块，重绘节奏属 tui（句柄无变更通知） */
-	let timerRepaint: ReturnType<typeof setInterval> | undefined;
 	let cleanupSpinner: (() => void) | undefined;
 	let installedTui: TUI | undefined;
 	// 启动守卫：首次消费只触发一次 providers 模块的周期刷新。
@@ -151,20 +152,19 @@ export function registerPiTuiLifecycle(
 	let transitionRevealTimer: ReturnType<typeof setTimeout> | undefined;
 	// Footer 首帧回报：模块级，供揭示门槛读取（installUi 闭包外）。
 	const layoutState = { footerHeight: 0 };
-	// 计时数据归 status 模块，但句柄没有变更通知：tui 以每秒心跳读快照，
-	// 工作状态下请求重绘（等价于迁出前控制器内部定时器触发的重绘）。
-	const startTimerRepaint = (): void => {
-		if (timerRepaint) return;
-		timerRepaint = setInterval(() => {
-			if (statusTimer?.snapshot()?.state === "working") requestStatusRender();
-		}, 1_000);
-		timerRepaint.unref?.();
-	};
-	const stopTimerRepaint = (): void => {
-		if (!timerRepaint) return;
-		clearInterval(timerRepaint);
-		timerRepaint = undefined;
-	};
+	// 统一重绘节奏（工单 18）：一秒一拍检查五条快照的变更序号，有变化才重绘（闸门保护在
+	// requestStatusRender 里）。计时 working、git 轮询与设置文件变化都由此上屏；
+	// 宿主事件驱动的即时重绘照旧保留。
+	const repaintRhythm = new RepaintRhythm({
+		sources: [
+			{ id: STATUS_WORKSPACE_SERVICE_NAME, read: () => statusWorkspace?.snapshot() },
+			{ id: STATUS_SESSION_SERVICE_NAME, read: () => statusSession?.snapshot() },
+			{ id: STATUS_TIMER_SERVICE_NAME, read: () => statusTimer?.snapshot() },
+			{ id: STATUS_COMPACTION_SERVICE_NAME, read: () => statusCompaction?.snapshot() },
+			{ id: PROVIDERS_USAGE_SERVICE_NAME, read: () => providerUsage?.snapshot() },
+		],
+		requestRender: requestStatusRender,
+	});
 	const resetStatusQueries = (): void => {
 		transitionRevealEnabled = false;
 		if (transitionRevealTimer) clearTimeout(transitionRevealTimer);
@@ -211,7 +211,7 @@ export function registerPiTuiLifecycle(
 		cancelModelSwitchRepaint();
 		installedEditorRef?.dispose();
 		installedEditorRef = undefined;
-		stopTimerRepaint();
+		repaintRhythm.stop();
 		resetStatusQueries();
 		providerUsage = undefined;
 		statusWorkspace = undefined;
@@ -273,7 +273,7 @@ export function registerPiTuiLifecycle(
 			getSessionStatus: () => session?.snapshot(),
 			getContextUsage: () => ctx.getContextUsage(),
 			getContextWindow: () => ctx.model?.contextWindow,
-			getAutoCompactionEnabled: () => compaction?.snapshot(),
+			getAutoCompactionEnabled: () => compaction?.snapshot()?.enabled,
 		};
 		const projectSource: ProjectEnvironmentSource = {
 			getProjectStatus: workspace ? () => workspace.snapshot() : undefined,
@@ -378,7 +378,7 @@ export function registerPiTuiLifecycle(
 			}
 		} catch (error) {
 			resetStatusQueries();
-			stopTimerRepaint();
+			repaintRhythm.stop();
 			installedEditor?.dispose();
 			ctx.ui.setWorkingIndicator?.();
 			ctx.ui.setWorkingVisible?.(true);
@@ -403,7 +403,7 @@ export function registerPiTuiLifecycle(
 			throw error;
 		}
 
-		startTimerRepaint();
+		repaintRhythm.start();
 		cleanupEditor = currentConfig.appearance.editor ? () => {
 			installedEditor?.dispose();
 			installedEditor = undefined;
@@ -437,7 +437,7 @@ export function registerPiTuiLifecycle(
 		) return;
 		active = false;
 		cancelModelSwitchRepaint();
-		stopTimerRepaint();
+		repaintRhythm.stop();
 		resetStatusQueries();
 		const restoreFooter = cleanupFooter;
 		const restoreHeader = cleanupHeader;
