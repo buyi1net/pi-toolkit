@@ -116,10 +116,11 @@ function compactModelRef(ref: string): string {
 
 /**
  * 中间模型信息段位（工单 27）：显示实际调用模型与实际思考等级，两段不带
- * 图标标记，靠段位分隔符「 · 」相连（模型 · 等级）。model 可携带 ":level"
- * 自带后缀（显示时剥掉，等级由 thinking 给出——覆盖链解析后的实际生效值）；
- * 两者都缺省时返回空数组（不渲染中间段）。降级重试换候选后调用方传入新的
- * running.model/thinking，状态行即跟随实际模型。
+ * 图标标记，靠段位分隔符「 · 」相连（模型 · 等级）。模型名一律剥供应商前缀
+ * 只显短名（与 TUI 顶边 formatHeaderModel 同规则），不再区分完整/紧凑双形态。
+ * model 可携带 ":level" 自带后缀（显示时剥掉，等级由 thinking 给出——覆盖链
+ * 解析后的实际生效值）；两者都缺省时返回空数组（不渲染中间段）。降级重试
+ * 换候选后调用方传入新的 running.model/thinking，状态行即跟随实际模型。
  */
 export function buildSubagentModelSegments(
   model: string | null | undefined,
@@ -127,12 +128,9 @@ export function buildSubagentModelSegments(
 ): StatusSegment[] {
   const ref = typeof model === "string" ? model.trim() : "";
   if (!ref) return [];
-  const base = baseModelRef(ref);
-  const compact = compactModelRef(base);
   const segments: StatusSegment[] = [{
     id: "model",
-    text: base,
-    ...(compact !== base ? { compactText: compact } : {}),
+    text: compactModelRef(baseModelRef(ref)),
     priority: SUBAGENT_WIDGET_SEGMENT_PRIORITIES.model,
   }];
   const level = typeof thinking === "string" ? thinking.trim() : "";
