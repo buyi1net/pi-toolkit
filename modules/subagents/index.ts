@@ -19,7 +19,14 @@
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { getToolkitConfigPath } from "../../kit/config.ts";
 import { enabledField, type ModuleContext, type ModuleDefinition } from "../../kit/module.ts";
-import { SUBAGENTS_MODULE_ID } from "./config.ts";
+import { USAGE_RECORDER_SERVICE_NAME, type UsageRecorderService } from "../usage/api.ts";
+import { loadEffectiveTierConfig, MODEL_TIERS, SUBAGENTS_MODULE_ID, type ModelTier } from "./config.ts";
+import {
+  createModelErrorJournal,
+  createProvidersHealthGateway,
+  poolBaseRefs,
+  type ModelHealthMap,
+} from "./model-health.ts";
 import { buildSubagentsMenuItems } from "./menu.ts";
 import subagentsExtension, {
   subagentsRunningView,
@@ -28,9 +35,12 @@ import subagentsExtension, {
 import type { RuntimeRecord } from "./registry.ts";
 
 export { SUBAGENTS_MODULE_ID } from "./config.ts";
+export type { ModelHealthMap, ModelRuntimeStatus } from "./model-health.ts";
 
 /** 服务句柄名（注册表要求全小写） */
 export const SUBAGENTS_SERVICE_NAME = "subagents.running";
+/** 工单 28：候选池 + 运行状态只读句柄（模型与用量面板的快照输入） */
+export const SUBAGENTS_MODELS_SERVICE_NAME = "subagents.models";
 
 export interface SubagentsService {
   readonly id: "subagents";
@@ -42,7 +52,35 @@ export interface SubagentsService {
   runtimeRecords(sessionDir: string, sessionId: string): RuntimeRecord[];
 }
 
+/** 单个档位的候选池只读视图（models 已剥思考等级后缀且去重） */
+export interface SubagentsModelPoolView {
+  readonly tier: ModelTier;
+  readonly models: readonly string[];
+}
+
+/**
+ * 候选池与候选运行状态句柄（工单 28）：模型与用量快照据此确定统计范围
+ * （只含当前候选池模型）与编排判定（工单 25/26 的网关口径，含错误观测）。
+ * 只读：不提供写入口，候选池仍只经配置写入事务修改。
+ */
+export interface SubagentsModelsService {
+  readonly id: "subagents";
+  /** 当前生效的候选池（配置链解析后；无配置返回空数组） */
+  pools(cwd?: string): readonly SubagentsModelPoolView[];
+  /** 候选运行状态（未知不在表内，由消费方按 unknown 处理） */
+  health(pool: readonly string[]): ModelHealthMap;
+}
+
 function registerSubagents(context: ModuleContext): void {
+  // 工单 26：模型错误观测日志（会话内内存态）：子代理临时性路由失败分类
+  // 写入，网关读取合并成 unstable/持续不稳定判定；网关与降级重试工具
+  // 共享同一实例（ADR 0007：选择与观测读同一份状态）。session_shutdown 清空。
+  const modelErrorJournal = createModelErrorJournal();
+  // 工单 25：候选池运行状态网关。句柄查找延迟到每次读取时（providers
+  // 在 subagents 之后装配，且可能被禁用）：缺席即空表，选择行为不受影响。
+  // 工单 26：并入错误观测日志。工单 28：同一实例注册成 `subagents.models`
+  // 句柄，用量快照与编排选择读同一份状态（ADR 0007 决策 2）。
+  const modelHealth = createProvidersHealthGateway(context.services, modelErrorJournal);
   // 宿主注入：本节点就是 pi-toolkit.json 的 `modules.subagents` 节。
   // getConfig() 返回状态中枢解析后的本模块配置（schema 默认值 + 磁盘取值），
   // 非 schema 键原样透传，因此 models / status 直接可用；写盘由菜单保存的配置写入事务重载。
@@ -52,6 +90,16 @@ function registerSubagents(context: ModuleContext): void {
       source: `${getToolkitConfigPath(getAgentDir())} (modules.${SUBAGENTS_MODULE_ID})`,
       section: context.getConfig(),
     }),
+    modelHealth,
+    modelErrorJournal,
+    // 工单 28：终态统计写入。usage 模块在 subagents 之后装配（且可禁用），
+    // 句柄延迟查找；缺席时统计不沉淀，子代理行为不变。
+    recordUsage: (event) => {
+      context.services.get<UsageRecorderService>(USAGE_RECORDER_SERVICE_NAME)?.record(event);
+    },
+    // 工单 44：渲染层译者（widget / 状态通知 / 终态行），读实时语言；
+    // 模型侧工具输出不经它（原因码冻结口径不变）。
+    t: context.t,
   });
 
   context.services.register(SUBAGENTS_SERVICE_NAME, {
@@ -59,6 +107,22 @@ function registerSubagents(context: ModuleContext): void {
     // 登记表只读投影：count/names 取内存实时态，records 取会话磁盘记录。
     ...subagentsRunningView,
   } satisfies SubagentsService);
+
+  context.services.register(SUBAGENTS_MODELS_SERVICE_NAME, {
+    id: "subagents",
+    pools(cwd?: string): readonly SubagentsModelPoolView[] {
+      const loaded = loadEffectiveTierConfig({ cwd: cwd ?? process.cwd() });
+      if (loaded.error || !loaded.config) return [];
+      const config = loaded.config;
+      return MODEL_TIERS.flatMap((tier: ModelTier) => {
+        const models = config.models[tier];
+        return models && models.length > 0 ? [{ tier, models: poolBaseRefs(models) }] : [];
+      });
+    },
+    health(pool: readonly string[]): ModelHealthMap {
+      return modelHealth.read(pool);
+    },
+  } satisfies SubagentsModelsService);
 }
 
 export function createSubagentsModule(): ModuleDefinition {

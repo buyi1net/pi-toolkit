@@ -18,7 +18,12 @@ import { registerProviders, type ProvidersModuleOptions } from "./mod.ts";
 /** 模块 id：同时是配置节名与菜单项 id 前缀 */
 export const PROVIDERS_MODULE_ID = "providers";
 
-export { PROVIDERS_USAGE_SERVICE_NAME, type ProvidersUsageService } from "./api.ts";
+export {
+	PROVIDERS_POOL_USAGE_SERVICE_NAME,
+	PROVIDERS_USAGE_SERVICE_NAME,
+	type ProvidersPoolUsageService,
+	type ProvidersUsageService,
+} from "./api.ts";
 export type { ProvidersModuleOptions } from "./mod.ts";
 
 /** schema 取值（字符串码）→ 三语文案键；与 PROVIDER_REFRESH_INTERVALS 一一对应 */

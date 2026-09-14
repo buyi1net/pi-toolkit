@@ -9,6 +9,12 @@ export interface AgentDefaults {
   tools?: string;
   skills?: string;
   thinking?: string;
+  /**
+   * 能力标签要求（工单 24，原始逗号列表，启动时归一校验）：声明本代理
+   * 需要的模型能力（如 vision/reasoning），tier 候选池选择器用它过滤
+   * 候选。词汇表与校验在 model-selector.ts。
+   */
+  capabilities?: string[];
   subagentAgents?: string[];
   /** 持久成员的受限成员间直信 ACL:允许向这些成员名 team_send(空/缺省 = 无权限)。 */
   peerSend?: string[];
@@ -73,6 +79,7 @@ export function parseAgentDefinition(
       systemPromptMode === "replace" || systemPromptMode === "append" ? systemPromptMode : undefined,
     skills: getFrontmatterValue(frontmatter, "skill") ?? getFrontmatterValue(frontmatter, "skills"),
     thinking: getFrontmatterValue(frontmatter, "thinking"),
+    capabilities: parseCommaList(getFrontmatterValue(frontmatter, "capabilities")),
     subagentAgents: parseCommaList(getFrontmatterValue(frontmatter, "subagent_agents")),
     peerSend: parseCommaList(getFrontmatterValue(frontmatter, "peer-send")),
     autoExit: parseOptionalBoolean(getFrontmatterValue(frontmatter, "auto-exit")),

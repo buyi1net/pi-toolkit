@@ -17,6 +17,11 @@ export interface RuntimeRecord {
   activityFile?: string;
   sentinelToken: string;
   interactive: boolean;
+  /**
+   * 发起本次运行的宿主会话 id（工单 32）：/reload 或会话切换后恢复的运行时用它
+   * 把终态统计归回发起会话；缺省（旧记录）按恢复时刻的当前会话处理。
+   */
+  hostSessionId?: string | null;
   /** 运行载体;缺省(旧记录)按 "pane" 处理。 */
   kind?: "pane" | "headless";
   /** headless 运行的子进程 PID,用于 /reload 后探测存活性。 */
@@ -59,6 +64,9 @@ export function createRuntimeRecord(source: RuntimeSource): RuntimeRecord {
     ...(source.activityFile ? { activityFile: source.activityFile } : {}),
     sentinelToken: source.sentinelToken,
     interactive: source.interactive,
+    ...(source.hostSessionId ? { hostSessionId: source.hostSessionId } : {}),
+    // （hostSessionId 的空值统一按缺省落盘：它不需要「显式 null」这一档，缺省即表达未绑定；
+    // parentId 则用 null 表达「顶层子代理」，两者语义不同。）
     ...(source.kind ? { kind: source.kind } : {}),
     ...(source.pid != null ? { pid: source.pid } : {}),
     ...(source.parentId !== undefined ? { parentId: source.parentId } : {}),
@@ -92,6 +100,7 @@ export function readRuntimeRecords(path: string): RuntimeRecord[] {
       Number.isFinite(record.startTime) &&
       typeof record.interactive === "boolean" &&
       (record.agent == null || typeof record.agent === "string") &&
+      (record.hostSessionId == null || typeof record.hostSessionId === "string") &&
       (record.activityFile == null || typeof record.activityFile === "string") &&
       (record.member == null || typeof record.member === "boolean") &&
       (record.pid == null || (typeof record.pid === "number" && Number.isInteger(record.pid) && record.pid > 0)) &&

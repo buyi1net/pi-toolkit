@@ -13,6 +13,7 @@ import {
 	type TurnTimerSnapshot,
 } from "../../status/api.ts";
 import { sanitizeStyledSingleLine } from "../../../shared/sanitize.ts";
+import { deriveSessionShortId } from "../../../shared/short-id.ts";
 import { formatLeadingIcon, resolveGlyphs, type IconGlyphs } from "../renderer/icons.ts";
 import { renderProjectStatusLine } from "../status/project-status.ts";
 import { renderStatusLineSegments } from "../status/segment-layout.ts";
@@ -55,6 +56,7 @@ export class ProjectStatusFooter implements Component {
 	private readonly reportHeight: ((height: number) => void) | undefined;
 	private readonly getTimer: () => TurnTimerSnapshot | undefined;
 	private readonly getSessionStatus: () => SessionStatusSnapshot;
+	private readonly getSessionId: () => string | null;
 	private readonly getContextUsage: () => ContextUsage | undefined;
 	private readonly getContextWindow: () => number | undefined;
 	private readonly getAutoCompactionEnabled: () => boolean;
@@ -83,6 +85,7 @@ export class ProjectStatusFooter implements Component {
 		this.reportHeight = layout.reportHeight;
 		this.getTimer = session.getTimer ?? (() => undefined);
 		this.getSessionStatus = () => session.getSessionStatus?.() ?? EMPTY_SESSION_STATUS;
+		this.getSessionId = session.getSessionId ?? (() => null);
 		this.getContextUsage = session.getContextUsage ?? (() => undefined);
 		this.getContextWindow = session.getContextWindow ?? (() => undefined);
 		this.getAutoCompactionEnabled = () => session.getAutoCompactionEnabled?.() ?? false;
@@ -146,7 +149,16 @@ export class ProjectStatusFooter implements Component {
 				.map(([, status]) => sanitizeStyledSingleLine(status))
 				.filter(Boolean)
 			: [];
-		const lines = projectLine ? [projectLine] : [];
+		// 会话短码段（规格「TUI 显示位」）：会话 id 直读宿主会话管理器（不经 status
+		// 句柄，status 关闭时仍显示）；项目行为空、取不到合法 id 或可用差值不足
+		// 8 列（段 7 列 + 左侧间隔 1 列）时整段隐藏——不截断、不新增行、不挤左侧内容。
+		const sessionId = this.getSessionId();
+		const sessionShortId = sessionId ? deriveSessionShortId(sessionId) : null;
+		const projectLineWidth = visibleWidth(projectLine);
+		const firstLine = projectLine && sessionShortId !== null && contentWidth - projectLineWidth >= 8
+			? `${projectLine}${" ".repeat(contentWidth - projectLineWidth - 7)}${this.theme.fg("muted", `#${sessionShortId}`)}`
+			: projectLine;
+		const lines = firstLine ? [firstLine] : [];
 		if (usageLine) lines.push(usageLine);
 		if (statuses.length > 0) {
 			lines.push(truncateToWidth(statuses.join(" · "), contentWidth, this.theme.fg("dim", "…")));

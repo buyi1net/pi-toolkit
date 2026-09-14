@@ -3,8 +3,16 @@ import { keyHint } from "@earendil-works/pi-coding-agent";
 import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { SessionStats } from "./session.ts";
 import { contextWindowFor, formatContextUsage, formatElapsed, formatUsageSegments } from "./display.ts";
+import { subagentsTableTranslator, type SubagentsTranslate } from "./messages/index.ts";
 
-export function registerSubagentRenderers(pi: ExtensionAPI): void {
+/**
+ * 终态行等显示语汇的取词（工单 44）：mod.ts 装配时注入实时译者；
+ * 缺省回退本模块英文表。名字/时间/图标是数据与符号，不在此翻。
+ */
+export function registerSubagentRenderers(
+  pi: ExtensionAPI,
+  t: SubagentsTranslate = subagentsTableTranslator("en"),
+): void {
   pi.registerMessageRenderer("subagent_result", (message, options, theme) => {
     const details = message.details as any;
     if (!details) return undefined;
@@ -28,18 +36,22 @@ export function registerSubagentRenderers(pi: ExtensionAPI): void {
         const icon = userClosed ? theme.fg("warning", "✕") : failed ? theme.fg("error", "✗") : theme.fg("success", "✓");
         const agentTag = details.agent ? theme.fg("dim", ` (${details.agent})`) : "";
         const modelTag = stats?.model ? theme.fg("dim", ` (${stats.model})`) : "";
-        const lateTag = late ? theme.fg("accent", " (late delivery after detached wait)") : "";
+        const lateTag = late ? theme.fg("accent", ` ${t("module.subagents.widget.result.late")}`) : "";
         const title = `${icon} ${theme.fg("toolTitle", theme.bold(name))}${agentTag}${modelTag} ${theme.fg("dim", "—")} `;
 
         let header: string;
         if (userClosed) {
           // 用户直接关闭 pane:稳定分类,不是 provider/agent 错误。
-          header = `${title}${theme.fg("warning", "closed by user")} ${theme.fg("dim", `· ${elapsed}`)}${lateTag}`;
+          header = `${title}${theme.fg("warning", t("module.subagents.widget.result.closedByUser"))} ${theme.fg("dim", `· ${elapsed}`)}${lateTag}`;
         } else if (failed) {
-          const reason = errorMessage ? "failed (provider/agent error)" : `failed (exit ${exitCode})`;
+          const reason = errorMessage
+            ? t("module.subagents.widget.result.failedProvider")
+            : t("module.subagents.widget.result.failedExit", { code: exitCode });
           header = `${title}${theme.fg("error", reason)} ${theme.fg("dim", `· ${elapsed}`)}${lateTag}`;
         } else {
-          const toolPart = stats ? `${stats.toolCount} tools · ${elapsed}` : elapsed;
+          const toolPart = stats
+            ? `${t("module.subagents.widget.result.tools", { count: stats.toolCount })} · ${elapsed}`
+            : elapsed;
           header = `${title}${theme.fg("dim", toolPart)}${lateTag}`;
         }
 
@@ -107,8 +119,10 @@ export function registerSubagentRenderers(pi: ExtensionAPI): void {
           const elapsed = entry.elapsed != null ? formatElapsed(entry.elapsed) : "?";
           const agentTag = entry.agent ? theme.fg("dim", ` (${entry.agent})`) : "";
           const reason = failed
-            ? (entry.errorMessage ? "failed (provider/agent error)" : `failed (exit ${entry.exitCode})`)
-            : "completed";
+            ? (entry.errorMessage
+              ? t("module.subagents.widget.result.failedProvider")
+              : t("module.subagents.widget.result.failedExit", { code: entry.exitCode }))
+            : t("module.subagents.widget.result.completed");
           contentLines.push(
             `${icon} ${theme.fg("toolTitle", theme.bold(entry.name ?? "subagent"))}${agentTag}` +
               theme.fg(failed ? "error" : "dim", ` — ${reason}`) +
@@ -145,10 +159,12 @@ export function registerSubagentRenderers(pi: ExtensionAPI): void {
       render(width: number): string[] {
         const lineWidth = Math.max(0, width - 6);
         const contentLines = [
-          `${theme.fg("accent", "•")} ${theme.fg("toolTitle", theme.bold("Subagent status"))}`,
+          `${theme.fg("accent", "•")} ${theme.fg("toolTitle", theme.bold(t("module.subagents.widget.aggregate.title")))}`,
           ...lines.map((line: string) => theme.fg("dim", truncateToWidth(line, lineWidth))),
         ];
-        if (overflow > 0) contentLines.push(theme.fg("muted", `+${overflow} more running.`));
+        if (overflow > 0) {
+          contentLines.push(theme.fg("muted", t("module.subagents.widget.aggregate.overflow", { count: overflow })));
+        }
         if (!options.expanded) contentLines.push(theme.fg("muted", keyHint("app.tools.expand", "to expand")));
         const box = new Box(1, 1, (text: string) => theme.bg("customMessageBg", text));
         box.addChild(new Text(contentLines.join("\n"), 0, 0));

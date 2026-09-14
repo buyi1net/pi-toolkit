@@ -16,7 +16,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { debugLog } from "./diagnostics.ts";
-import type { ModelTier } from "./routing.ts";
+import { modelOwnThinkingSuffix, type ModelTier } from "./routing.ts";
 
 export interface SessionEntry {
   type: string;
@@ -113,6 +113,12 @@ export interface SubagentLoadout {
   thinking: string | null;
   /** Spawn 显式指定的思考等级,优先于 frontmatter thinking 与 model 自带后缀。 */
   thinkingOverride?: string | null;
+  /**
+   * 档位解析出的默认思考等级（工单 23，spawn 时快照）。覆盖链低于
+   * frontmatter thinking、高于模型自带 ":level" 后缀；仅作记录与 resume
+   * 重放，不影响已在 thinkingOverride/thinking 里确定的更高优先级。
+   */
+  tierThinking?: string | null;
   /** How the identity text was applied: append/replace, or null. */
   systemPromptMode: "append" | "replace" | null;
   /** The system-prompt/identity text, only when it lived in the system prompt. */
@@ -142,6 +148,17 @@ export interface SubagentLoadout {
 /** Path of the loadout sidecar written next to a subagent session file. */
 export function loadoutSidecarPath(sessionFile: string): string {
   return `${sessionFile}.loadout.json`;
+}
+
+/**
+ * loadout 实际生效的思考等级（工单 27）：与 applySandboxToParts 拼 argv
+ * 的覆盖链同一口径——显式 thinkingOverride > 代理 frontmatter thinking >
+ * 档位默认 tierThinking > 模型自带 ":level" 后缀；全部缺席为 null。
+ * 状态行展示与运行态登记共用本函数，不各自另算一套。
+ */
+export function appliedLoadoutThinking(loadout: SubagentLoadout): string | null {
+  const requested = loadout.thinkingOverride ?? loadout.thinking ?? loadout.tierThinking ?? null;
+  return requested ?? modelOwnThinkingSuffix(loadout.model);
 }
 
 /** Persist a subagent's resolved sandbox loadout beside its session file. */
@@ -233,6 +250,7 @@ const LOADOUT_SECURITY_FIELDS = [
   "model",
   "thinking",
   "thinkingOverride",
+  "tierThinking",
   "systemPromptMode",
   "identity",
   "spawnable",

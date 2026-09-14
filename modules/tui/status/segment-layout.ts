@@ -7,6 +7,8 @@
 // 输出组装保留两种形态，二者共用这里的压缩循环：
 // - editor 左右两栏：layoutEditorStatus；
 // - footer 单行：renderStatusLineSegments。
+// 工单 27：两栏布局的显式预算入口 layoutTwoColumnSegments 供子代理状态行
+// 复用（边框 chrome 2 列），editor 的 chrome 包装保持不变。
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
@@ -125,7 +127,19 @@ export function layoutEditorStatus(
 	right: readonly StatusSegment[],
 	terminalWidth: number,
 ): EditorStatusLayout {
-	const budget = Math.max(0, terminalWidth - EDITOR_STATUS_CHROME_WIDTH);
+	return layoutTwoColumnSegments(left, right, Math.max(0, terminalWidth - EDITOR_STATUS_CHROME_WIDTH));
+}
+
+/**
+ * 两栏段位布局（显式内容预算）：与 layoutEditorStatus 同一套压缩循环与
+ * 截断兑底，只是预算由调用方直接给出（工单 27：子代理状态行的边框 chrome
+ * 是 2 列，与 editor 顶边不同，不重复造宽度算法）。
+ */
+export function layoutTwoColumnSegments(
+	left: readonly StatusSegment[],
+	right: readonly StatusSegment[],
+	budget: number,
+): EditorStatusLayout {
 	const slots: EditorSlot[] = [
 		...left.map((segment, order) => ({
 			...createSlot(segment, order),

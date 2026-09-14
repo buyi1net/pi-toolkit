@@ -5,16 +5,54 @@
 // 消费方（tui）经服务注册表的 `providers.usage` 句柄取快照与触发刷新。
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ProviderAccessOptions, ProviderQueryAccess } from "./kernel/usage-core.ts";
+import type { ProviderAccessOptions, ProviderQueryAccess, UsageSnapshot } from "./kernel/usage-core.ts";
 import type { UsageRuntimeState } from "./kernel/usage-node.ts";
 
 /** 供应商查询内核的校验错误类型（tui 侧消费时按类型区分配置错误） */
 export { ProviderConfigValidationError, sanitizeQuotaWindowLabel } from "./kernel/usage-core.ts";
 export type { ProviderAccess, ProviderAccessOptions, ProviderQueryAccess } from "./kernel/usage-core.ts";
 export type { UsageRuntimeState } from "./kernel/usage-node.ts";
+/** 单次查询成功时的用量快照（余额/额度窗口/时间戳）；供编排侧推导判定 */
+export type { UsageSnapshot } from "./kernel/usage-core.ts";
 
 /** 本模块在服务注册表里的句柄名（工单 07 定案：原 `ui.provider-usage` 正名） */
 export const PROVIDERS_USAGE_SERVICE_NAME = "providers.usage";
+
+/** 候选池用量观测句柄名（工单 25）：编排侧（subagents 模型选择）经注册表取用 */
+export const PROVIDERS_POOL_USAGE_SERVICE_NAME = "providers.pool-usage";
+
+/**
+ * 单个候选的供应商查询原始状态（工单 25）。providers 域只回报观测事实，
+ * 编排判定（可用/额度不足/…）由消费方（subagents/model-health.ts）推导。
+ */
+export type PoolUsageState =
+	| { kind: "ready"; snapshot: UsageSnapshot }
+	| { kind: "unsupported" }
+	| { kind: "no-credential" }
+	| { kind: "failed" }
+	| { kind: "pending" }
+	| { kind: "unresolved" };
+
+/** 候选池单条观测结果 */
+export interface PoolUsageEntry {
+	/** 候选基础引用（已剥思考等级后缀，调用方负责归一后传入） */
+	readonly model: string;
+	readonly state: PoolUsageState;
+}
+
+/**
+ * `providers.pool-usage` 句柄契约（工单 25）：候选池只读观测 + 按需后台刷新。
+ * 只统计调用方（编排）传入的候选池模型，不扫描全部模型（ADR 0007 取舍）。
+ * snapshot 同步无网络；refresh 异步且不抛错——查询失败只影响状态新鲜度，
+ * 绝不阻断调用方，也绝不写任何静态配置。
+ */
+export interface ProvidersPoolUsageService {
+	readonly id: "providers";
+	/** 读取候选池最近已知状态；从未查询过的候选不在返回值里（消费方按未知处理） */
+	snapshot(pool: readonly string[]): readonly PoolUsageEntry[];
+	/** 触发一次后台查询（会话未绑定/退避中/缓存未超龄时自动跳过网络） */
+	refresh(pool: readonly string[]): Promise<void>;
+}
 
 /** 查询目标模型：与 PiProviderUsageController 使用同一个 Pi 宿主模型类型 */
 export type ProviderUsageModel = NonNullable<ExtensionContext["model"]>;

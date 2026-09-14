@@ -20,6 +20,8 @@ import type { IconGlyphs } from "../renderer/icons.ts";
 export interface SessionStatusSource {
 	getTimer?: () => TurnTimerSnapshot | undefined;
 	getSessionStatus?: () => SessionStatusSnapshot | undefined;
+	/** 会话 id：直读宿主会话管理器，不经 status 句柄（status 关闭时短码段仍显示） */
+	getSessionId?: () => string | null;
 	getContextUsage?: () => ContextUsage | undefined;
 	getContextWindow?: () => number | undefined;
 	getAutoCompactionEnabled?: () => boolean | undefined;

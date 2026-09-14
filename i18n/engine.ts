@@ -79,6 +79,15 @@ export function hasMessage(key: string): boolean {
 	return Object.prototype.hasOwnProperty.call(TABLES.en, key);
 }
 
+/**
+ * 按占位符规则格式化一条模板（未登记键回显键名）。
+ * 供没有宿主装配、全局键表未登记的场合（如独立 `-e` 装载的 subagents 模块）
+ * 用自己的模块键表自制兜底译者，与引擎译者共用同一套替换语义。
+ */
+export function formatMessage(template: string | undefined, key: string, vars?: MessageVars): string {
+	return format(template, key, vars);
+}
+
 /** 语言设置对应的显示名键，用于语言选择项（框架表键） */
 export function languageLabelKey(setting: LanguageSetting): FrameworkMessageKey {
 	switch (setting) {

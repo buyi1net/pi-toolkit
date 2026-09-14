@@ -13,6 +13,7 @@ import {
   classifyStatus,
   createStatusState,
   observeStatus,
+  withoutLivenessEvidence,
   type StatusSnapshot,
   type SubagentStatusState,
 } from "./status.ts";
@@ -23,6 +24,7 @@ import {
 } from "./session.ts";
 import { normalizeSubagentName as normalizeName } from "./names.ts";
 import { peekExitSidecar } from "./surface.ts";
+import { modelOwnThinkingSuffix } from "./routing.ts";
 import type { RuntimeRecord, RuntimeRegistry } from "./registry.ts";
 import type { RunningSubagent, SubagentWaitMode, SubagentWaitRelease } from "./types.ts";
 
@@ -150,7 +152,8 @@ interface InspectRecord {
 
 const MAX_TASK_LENGTH = 1200;
 const MAX_QUESTION_LENGTH = 1200;
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+// 工单 23：思考等级词汇表统一由 routing.ts 提供（与配置解析、启动校验同一份），
+// 本文件不再维护本地副本。
 
 function truncate(value: string | null | undefined, maxLength: number): string {
   const normalized = (value ?? "").replace(/\s+/g, " ").trim();
@@ -185,6 +188,7 @@ function activityObservation(activity: SubagentActivityState) {
     sequence: activity.sequence,
     phase: activity.phase,
     active: activity.phase === "active",
+    toolActive: activity.toolActive,
     activeScope: activity.activeScope,
     activeSince: activity.activeSince,
     waitingSince: activity.waitingSince,
@@ -198,6 +202,24 @@ function freshActivity(
 ): ActivityReadResult {
   if (!record.activityFile) return { ok: false, reason: "missing" };
   return readSubagentActivityFile(record.activityFile, record.id);
+}
+
+/**
+ * 模型侧状态标签的冻结口径（工单 37/44）：status.ts 只出码，这里展开成
+ * 工单 44 之前的既有英文文案，保证 subagent_inspect 输出逐字不变、不随
+ * 界面语言变化；渲染层的翻译不走这条路径。
+ */
+function frozenStatusLabel(label: string | null): string | null {
+  return label === "wrong-activity-id" ? "wrong activity id" : label;
+}
+
+/**
+ * 模型侧 kind 冻结（工单 45）：status 字段的词表不含 stale/stale-tool——
+ * 证据已在上游剥掉（无证据口径不会出新档位），这里防御性收窄：万一未来
+ * 有新档位泄入，也回落到该场景无证据时的冻结值 active，不扩协议。
+ */
+function frozenStatusKind(kind: StatusSnapshot["kind"]): SubagentInspection["status"] {
+  return kind === "stale" || kind === "stale-tool" ? "active" : kind;
 }
 
 function statusFromActivity(
@@ -219,10 +241,14 @@ function statusFromActivity(
 }
 
 function resolveThinking(loadout: SubagentLoadout | null, model: string | null): string | null {
+  // 与 applySandboxToParts 同一覆盖链（工单 23，规格 §4）：spawn 显式 >
+  // 代理 frontmatter > 档位默认 > 模型自带后缀。展示的是实际拼进 argv 的
+  // 请求等级；启动前已对已知模型做过支持性拒绝，未知模型无法在父侧核验，
+  // 实际生效值以子会话记录为准。
   if (loadout?.thinkingOverride) return loadout.thinkingOverride;
-  const suffix = model?.match(/:([a-z]+)$/)?.[1];
-  if (suffix && THINKING_LEVELS.has(suffix)) return suffix;
-  return loadout?.thinking ?? null;
+  if (loadout?.thinking) return loadout.thinking;
+  if (loadout?.tierThinking) return loadout.tierThinking;
+  return modelOwnThinkingSuffix(model);
 }
 
 function resolveSurfaceKind(record: Pick<InspectRecord, "kind" | "surface">): "headless" | "pane" {
@@ -440,8 +466,8 @@ function buildInspection(
     source,
     lifecycle,
     phase: statusPhase,
-    status: status?.kind ?? null,
-    statusLabel: status?.statusLabel ?? null,
+    status: status ? frozenStatusKind(status.kind) : null,
+    statusLabel: frozenStatusLabel(status?.statusLabel ?? null),
     surface: record.surface || null,
     surfaceKind: source === "session-registry" ? null : process.kind,
     pid: process.pid,
@@ -517,7 +543,10 @@ export function buildLiveSubagentInspection(
     now,
   );
   running.statusState = freshState;
-  const status = classifyStatus(freshState, now);
+  // 模型侧冻结（工单 45）：inspect 不消费存活证据——新三态（stale /
+  // stale-tool / 证据停滞）只进显示层，这里的判定必须与无证据口径逐字
+  // 一致（回归断言钉住）；证据仍留在 running.statusState 供 widget 消费。
+  const status = classifyStatus(withoutLivenessEvidence(freshState), now);
   const process = inspectProcess(record, "live", deps);
   const loadout = deps.readSubagentLoadout(running.sessionFile);
   const roster = deps.readRosterMember?.(running.name, "") ?? null;

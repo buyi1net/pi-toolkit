@@ -42,6 +42,7 @@ import {
   type HeadlessChild,
 } from "./headless.ts";
 import {
+  appliedLoadoutThinking,
   countSessionEntryLines,
   diffSubagentLoadouts,
   getSessionId,
@@ -60,6 +61,7 @@ import {
   buildPiPromptArgs,
   buildSubagentToolAllowlist,
   getDefaultSessionDirFor,
+  needsEnvProxyForTools,
   resolveEffectiveAutoExit,
   resolveEffectiveInteractive,
   resolveLaunchBehavior,
@@ -67,8 +69,25 @@ import {
   resolveSurfaceChoice,
   validateAgentLifecycleConfig,
 } from "./launch-config.ts";
-import { loadTierRouteConfig, normalizeTier, resolveTierForParams, type ModelTier, type TierRouteInjectedSource } from "./routing.ts";
-import { getSubagentActivityFile } from "./activity.ts";
+import { loadTierRouteConfig, normalizeTier, resolveTierPoolForParams, isThinkingLevel, modelOwnThinkingSuffix, THINKING_LEVELS, type ModelTier, type ThinkingLevel, type TierRouteInjectedSource, type TierConfigLoadResult } from "./routing.ts";
+import {
+  normalizeModelCapability,
+  selectModelCandidate,
+  supportedThinkingLevels,
+  resolveModelThinkingSupport,
+  MODEL_CAPABILITIES,
+  type ModelCandidateSelection,
+  type ModelCapability,
+  type ModelCatalog,
+} from "./model-selector.ts";
+import type { ModelHealthGateway, ModelHealthMap } from "./model-health.ts";
+
+// 工单 24：模型目录类型与思考等级支持性判定移入 model-selector.ts（选择器
+// 与支持性核验共用同一套目录交互）。这里保留导出别名，既有调用方
+// （tests、宿主注入层）从 startup.ts 的导入不变。
+export type SpawnModelCatalog = ModelCatalog;
+export { supportedThinkingLevels, resolveModelThinkingSupport };
+import { getSubagentActivityFile, isTerminalDoneActivity, readSubagentActivityFile } from "./activity.ts";
 import { createStatusState } from "./status.ts";
 import { normalizeSubagentName, sanitizeSubagentFileName } from "./names.ts";
 import { normalizeCohortId, validateCohortId, type SubagentParams } from "./params.ts";
@@ -77,8 +96,6 @@ import type { RuntimeRecord, RuntimeRegistry } from "./registry.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
 import type { AgentDefaults } from "./agents.ts";
 import { debugLog } from "./diagnostics.ts";
-
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 /** timeoutMs 参数校验(信任边界:模型传参);返回错误文案或 null。 */
 export function validateTimeoutMs(timeoutMs: unknown): string | null {
@@ -102,6 +119,12 @@ export interface SpawnContext {
     getSessionDir(): string;
   };
   cwd: string;
+  /**
+   * 宿主模型目录（工单 23/24）：思考等级支持性核验与候选选择器的能力
+   * 过滤都吃它。可省略（测试 stub / 宿主未提供）；目录里查不到目标模型
+   * 时同样跳过核验，不虚构支持性。
+   */
+  readonly modelRegistry?: SpawnModelCatalog;
 }
 
 /** 启动后的句柄：已登记的运行态 + 已按运行类别启动的 watcher。 */
@@ -117,6 +140,17 @@ export interface StartedRun {
 export interface ResumeStartedRun extends StartedRun {
   resumedSessionId: string;
   entryCountBefore: number;
+}
+
+/** planSpawn 的可选输入（工单 26：降级重试）。 */
+export interface SpawnPlanOptions {
+  /**
+   * 本次 spawn 已失败的候选（基础引用集合，剥 ":level" 后缀）：选择器把
+   * 它们排除，按用户配置顺序取下一个未尝试候选。降级重试循环
+   * （subagent-tool.ts）逐次传入单调增长的集合——每个候选至多尝试一次、
+   * 顺序不回绕。非 tier 路径不受影响。
+   */
+  excludeModels?: ReadonlySet<string>;
 }
 
 /**
@@ -136,7 +170,20 @@ export interface SpawnPlan {
   effectiveTools: string | undefined;
   effectiveSkills: string | undefined;
   effectiveThinking: string | undefined;
+  /** 档位解析出的默认思考等级（已计入 effectiveThinking；单独存供 loadout 记录）。 */
+  tierThinking: ThinkingLevel | null;
   tier: ModelTier | null;
+  /**
+   * tier 候选池（工单 26，降级重试的顺序与次数上限依据）：用户配置顺序
+   * 原样。非 tier 路径（无 tier / 显式 model）为 null——显式 model 永不换。
+   */
+  tierPool: readonly string[] | null;
+  /**
+   * 候选选择器结果（工单 24）：tier 路径实际选中的候选与被跳过候选的
+   * 诊断记录。非 tier 路径（无 tier / 显式 model）为 null。effectiveModel
+   * 即 selection.model；启动链据此把实际模型写进 loadout 与运行态。
+   */
+  tierSelection: ModelCandidateSelection | null;
   effectiveAutoExit: boolean;
   /** 运行类别（启动与 watcher 选择的唯一依据）。 */
   interactive: boolean;
@@ -217,6 +264,12 @@ export interface SubagentStartupDeps {
     options: { artifactDir: string; name: string },
     raw?: { escape?: (value: string) => string },
   ) => string[];
+  /**
+   * 工单 29：spawn 前核验 profile 声明的工具都有提供方（fail-fast）。
+   * 入参是最终 --tools 白名单，返回缺失名单（空 = 全部可提供）；缺省时
+   * 跳过核验（旧注入层兼容）。
+   */
+  validateToolProvision?: (toolAllowlist: string) => string[];
   /** resume 的启动行为（当前恒为 autoExit + 非交互）。 */
   resolveResumeLaunchBehavior: () => { autoExit: boolean; interactive: boolean };
   /** 本模块目录（`-e subagent-done.ts` 的定位根）。 */
@@ -236,11 +289,21 @@ export interface SubagentStartupDeps {
   startStatusRefresh: (pi: ExtensionAPI) => void;
   watchSubagent: (running: RunningSubagent, signal: AbortSignal) => Promise<SubagentResult>;
   watchMemberRound: (running: RunningSubagent, signal: AbortSignal) => void | Promise<void>;
+  /**
+   * 候选池运行状态网关（工单 25，可选）：缺席时选择器不带状态输入，
+   * 行为与工单 24 一致（全员状态未知，不停摆）。read 同步无网络；
+   * refresh 是 fire-and-forget 后台刷新，不当轮阻塞。
+   */
+  modelHealth?: ModelHealthGateway;
 }
 
 export interface SubagentStartup {
   /** fresh 第一阶段：校验入参与运行类别，产出启动计划（不启动进程）。 */
-  planSpawn(params: typeof SubagentParams.static, ctx: SpawnContext): PlanOutcome<SpawnPlan>;
+  planSpawn(
+    params: typeof SubagentParams.static,
+    ctx: SpawnContext,
+    options?: SpawnPlanOptions,
+  ): PlanOutcome<SpawnPlan>;
   /** fresh 第二阶段：拼装环境与 argv、启动进程、登记、启动 watcher。 */
   spawn(
     plan: SpawnPlan,
@@ -350,11 +413,14 @@ export function validateResumeTarget(
       return `loadout agentDir does not exist: ${loadout.agentDir}`;
     }
   }
-  if (loadout.thinking != null && !THINKING_LEVELS.has(loadout.thinking)) {
+  if (loadout.thinking != null && !isThinkingLevel(loadout.thinking)) {
     return `loadout thinking level invalid: ${loadout.thinking}`;
   }
-  if (loadout.thinkingOverride != null && !THINKING_LEVELS.has(loadout.thinkingOverride)) {
+  if (loadout.thinkingOverride != null && !isThinkingLevel(loadout.thinkingOverride)) {
     return `loadout thinkingOverride invalid: ${loadout.thinkingOverride}`;
+  }
+  if (loadout.tierThinking != null && !isThinkingLevel(loadout.tierThinking)) {
+    return `loadout tierThinking invalid: ${loadout.tierThinking}`;
   }
   if (
     loadout.systemPromptMode != null &&
@@ -408,6 +474,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
   function planSpawn(
     params: typeof SubagentParams.static,
     ctx: SpawnContext,
+    planOptions?: SpawnPlanOptions,
   ): PlanOutcome<SpawnPlan> {
     const cohortError = validateCohortId(params.cohortId);
     if (cohortError) return { kind: "error", error: cohortError };
@@ -427,6 +494,38 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     }
 
     const agentDefs = params.agent ? deps.loadAgentDefaults(params.agent) : null;
+
+    // ── 选择器输入先校验（工单 24）：思考等级覆盖链上层（任务显式 >
+    // 代理 frontmatter；档位默认来自配置层解析，parseTierConfig 已严格
+    // 校验，无需重查）与代理能力标签都在进候选选择器之前归一/拒绝，
+    // 非法值不能带着进过滤（否则会把“非法等级”误报成“无可用候选”）。
+    const requestedThinking = params.thinking ?? agentDefs?.thinking ?? null;
+    if (requestedThinking != null && !isThinkingLevel(requestedThinking)) {
+      return {
+        kind: "error",
+        error: `Invalid thinking level "${requestedThinking}". Use: ${THINKING_LEVELS.join(", ")}.`,
+      };
+    }
+    const requiredCapabilities: ModelCapability[] = [];
+    for (const raw of agentDefs?.capabilities ?? []) {
+      const capability = normalizeModelCapability(raw);
+      if (!capability) {
+        return {
+          kind: "error",
+          error:
+            `Invalid capabilities in agent profile "${params.agent}": "${raw}". ` +
+            `Use one or more of: ${MODEL_CAPABILITIES.join(", ")}.`,
+          details: {
+            error: "invalid agent capabilities",
+            agent: params.agent,
+            invalid: raw,
+            supported: [...MODEL_CAPABILITIES],
+          },
+        };
+      }
+      if (!requiredCapabilities.includes(capability)) requiredCapabilities.push(capability);
+    }
+
     // Resolve the target before tier lookup so a project-local
     // .pi/agent/pi-subagents.json is honored when the caller selected a
     // different cwd. The concrete model is then captured in the loadout below,
@@ -441,20 +540,109 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     // tier 解析先于 loadout 写入:显式 params.model 优先 tier;tier 无法归一化
     // 或缺映射时直接拒绝启动,绝不静默换模型。loadout.model 存具体模型,
     // tier 仅作记录,resume 不随配置漂移。
-    const tierResolution = resolveTierForParams(params, () =>
-      loadTierRouteConfig({
+    // 对象包裹：闭包内赋值 + 外部读取时绕开 TS 控制流把 let 变量窄化成 null。
+    const tierLoadRef: { value: TierConfigLoadResult | null } = { value: null };
+    const tierPool = resolveTierPoolForParams(params, () => {
+      tierLoadRef.value = loadTierRouteConfig({
         cwd: targetCwdForSession,
         agentConfigDir: effectiveAgentDir,
         injected: deps.resolveHostTierSources(),
-      }));
-    if ("error" in tierResolution) return { kind: "error", error: tierResolution.error };
-    const effectiveModel = params.model ?? tierResolution.model ?? agentDefs?.model;
-    const effectiveThinking = params.thinking ?? agentDefs?.thinking;
-    if (effectiveThinking != null && !THINKING_LEVELS.has(effectiveThinking)) {
-      return {
-        kind: "error",
-        error: `Invalid thinking level "${effectiveThinking}". Use: ${[...THINKING_LEVELS].join(", ")}.`,
-      };
+      });
+      return tierLoadRef.value;
+    });
+    if ("error" in tierPool) return { kind: "error", error: tierPool.error };
+
+    // ── 候选选择器（工单 24 + 工单 25 运行状态边界 + 工单 26 降级重试）──
+    // tier 候选池按用户配置顺序逐个过能力标签与思考等级兼容性过滤，再排除
+    // 硬阻断的运行状态（额度不足/模型下线，工单 25）与持续不稳定（错误
+    // 观测 persistent 窗口内反复临时故障，工单 26），取首个存活候选（首选
+    // 未被过滤时仍是首选，与既有行为一致）。降级重试路径由调用方传入
+    // excludeModels（本次 spawn 已失败候选）——每个候选至多尝试一次，顺序
+    // 不回绕。目录缺席或候选查不到时无法核验，候选保留（不虚构支持性）。
+    // 运行状态同步读最近已知快照（无网络）：状态未知/未配置/不稳定不排除
+    // 候选——查询失败绝不让整个编排停摆；同时 fire-and-forget 触发后台
+    // 刷新，下一轮 spawn 受益。全池被过滤时返回结构化可诊断错误，不静默换档。
+    let tierSelection: ModelCandidateSelection | null = null;
+    let modelHealth: ModelHealthMap | undefined;
+    if (tierPool.pool !== undefined && deps.modelHealth) {
+      modelHealth = deps.modelHealth.read(tierPool.pool);
+      deps.modelHealth.refresh(tierPool.pool);
+    }
+    if (tierPool.pool !== undefined) {
+      const outcome = selectModelCandidate(
+        tierPool.pool,
+        {
+          ...(requiredCapabilities.length > 0 ? { capabilities: requiredCapabilities } : {}),
+          thinking: requestedThinking ?? tierPool.thinking ?? null,
+        },
+        ctx.modelRegistry,
+        modelHealth,
+        planOptions?.excludeModels,
+      );
+      if ("failure" in outcome) {
+        const source = tierLoadRef.value?.sourcePath ?? "the pi-subagents config";
+        const rejections = outcome.failure.rejections
+          .map((rejection) => `  - ${rejection.model}: ${rejection.reason}`)
+          .join("\n");
+        const statusSkipped = outcome.failure.rejections.some((rejection) => rejection.kind === "status");
+        return {
+          kind: "error",
+          error:
+            `No usable model candidate for tier "${tierPool.tier}": every configured candidate ` +
+            `was filtered out (pool: ${outcome.failure.pool.join(", ")}).\n${rejections}\n` +
+            `Adjust models.${tierPool.tier} in ${source}, the thinking level, ` +
+            `or the agent capability requirements.` +
+            (statusSkipped
+              ? "\nNote: status-based skips use the last known runtime status (quota exhausted / offline) " +
+                "and refresh in the background; the static pool config is unchanged."
+              : ""),
+          details: {
+            error: "no usable model candidate",
+            tier: tierPool.tier,
+            pool: [...outcome.failure.pool],
+            requirements: {
+              ...(requiredCapabilities.length > 0 ? { capabilities: [...requiredCapabilities] } : {}),
+              thinking: requestedThinking ?? tierPool.thinking ?? null,
+            },
+            rejections: outcome.failure.rejections.map((rejection) => ({ ...rejection })),
+          },
+        };
+      }
+      tierSelection = outcome.selection;
+    }
+    const effectiveModel = params.model ?? tierSelection?.model ?? agentDefs?.model;
+    // 思考等级覆盖链（工单 23，规格 §4）：任务显式值 > 代理 frontmatter 默认 >
+    // 档位默认。档位默认只在 tier 真正解析出模型时参与（显式 model 胜出时
+    // tier 仅作记录，不把档位思考等级带到另一个模型上）。上层值已在进
+    // 选择器前校验，档位值由 parseTierConfig 严格保证，这里不再重复校验。
+    const tierThinking = tierPool.thinking ?? null;
+    const effectiveThinking = params.thinking ?? agentDefs?.thinking ?? tierThinking ?? undefined;
+    // 工单 23：不静默声称不支持的目标模型已使用指定思考等级。实际会拼进
+    // argv 的等级（显式/代理/档位，或模型自带后缀）在宿主目录里可查时必须
+    // 被模型支持——宿主对不支持的等级会静默钳制到就近支持值，这里在启动前
+    // 显式拒绝，避免父侧记录与子进程实际生效值不一致。目录查不到（自定义
+    // provider/目录过期/裸 id 歧义）时无法核验，维持原样交给子进程，由子会
+    // 话记录实际生效值：不虚构支持性，也不假设不支持。
+    // （工单 24 起 tier 路径的不支持候选已在选择器里被换掉，这里主要拦显式
+    // model / 代理默认 model 路径，并对选中候选做最后一道一致性核验。）
+    const appliedThinking = effectiveThinking ?? modelOwnThinkingSuffix(effectiveModel) ?? null;
+    if (appliedThinking != null && effectiveModel && ctx.modelRegistry) {
+      const supported = resolveModelThinkingSupport(effectiveModel, ctx.modelRegistry);
+      if (supported != null && !supported.includes(appliedThinking)) {
+        return {
+          kind: "error",
+          error:
+            `Model "${effectiveModel}" does not support thinking level "${appliedThinking}" ` +
+            `(supported: ${supported.join(", ")}). Adjust the thinking parameter, the agent profile, ` +
+            `or the tier default thinking configuration.`,
+          details: {
+            error: "unsupported thinking level",
+            model: effectiveModel,
+            requested: appliedThinking,
+            supported: [...supported],
+          },
+        };
+      }
     }
     const lifecycleError = validateAgentLifecycleConfig(agentDefs);
     if (lifecycleError) return { kind: "error", error: lifecycleError };
@@ -466,6 +654,34 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     // 工具层已拒绝 pane/interactive/discard/timeoutMs/dependsOn 组合;这里
     // 强制 headless 表面,不改变非 member 的任何默认行为。
     const memberMode = params.member === true;
+
+    // ── 工单 29：工具装载核验（创建任何 pane/进程之前）──
+    // pi 会静默丢弃 --tools 白名单里没有注册者的工具名，声明与实际不一致
+    // 只会在子代理跑到任务中途才暴露。这里按最终白名单逐名核验提供方，
+    // 缺失即拒绝启动并给出可操作的修复路径；核验器缺省（旧注入层）时跳过。
+    if (deps.validateToolProvision) {
+      const grantSpawning = !!(agentDefs?.subagentAgents && agentDefs.subagentAgents.length > 0);
+      const toolAllowlist = buildSubagentToolAllowlist(agentDefs?.tools, {
+        grantSpawning,
+        ...(memberMode ? { grantTeamSend: true } : {}),
+      });
+      if (typeof toolAllowlist === "string") {
+        const missing = deps.validateToolProvision(toolAllowlist);
+        if (missing.length > 0) {
+          const error =
+            `Agent profile "${params.agent ?? "(unnamed)"}" declares tools that no extension can provide: ` +
+            `${missing.join(", ")}. The child would silently start WITHOUT them (pi drops unknown ` +
+            `--tools entries without warning). Fix: install the backing extension under ` +
+            `${join(deps.getAgentConfigDir(), "extensions")}, or register it via registerToolExtension, ` +
+            `or edit the agent profile's tools list.`;
+          return {
+            kind: "error",
+            error,
+            details: { error: "unprovidable tools", agent: params.agent ?? null, missing },
+          };
+        }
+      }
+    }
 
     // timeoutMs 适用性检查(在创建任何 pane/进程之前):交互式(演示)spawn
     // 立即返回、没有可设上限的等待,显式拒绝而不是静默忽略。
@@ -552,7 +768,10 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         effectiveTools: agentDefs?.tools,
         effectiveSkills: agentDefs?.skills,
         effectiveThinking,
-        tier: tierResolution.tier,
+        tierThinking,
+        tier: tierPool.tier,
+        tierPool: tierPool.pool ?? null,
+        tierSelection,
         effectiveAutoExit,
         interactive: effectiveInteractive,
         member: memberMode,
@@ -711,6 +930,14 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
       ...(memberMode ? { grantTeamSend: true } : {}),
     });
 
+    // 工单 29：装载捆绑 web 工具（web_search/web_fetch）时，子进程的全局
+    // fetch 只有在 Node >= 24 且 NODE_USE_ENV_PROXY=1 时才走 HTTP(S)_PROXY；
+    // 不装 web 工具的子进程环境不受影响。splitEnv 在 pane/headless 两条
+    // 表面共用，这里改一次两边都生效。
+    if (needsEnvProxyForTools(toolAllowlist)) {
+      splitEnv.NODE_USE_ENV_PROXY = "1";
+    }
+
     // Snapshot the fully-resolved sandbox beside the session file so a later
     // `subagent_message({ name })` resume can replay the same tool policy,
     // model, identity, and spawn permissions.
@@ -721,6 +948,9 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
       model: effectiveModel,
       thinking: agentDefs?.thinking ?? null,
       thinkingOverride: params.thinking ?? null,
+      // 档位默认思考等级（工单 23）：与 frontmatter/显式值分开快照，resume
+      // 按同一覆盖链重放，不随配置漂移。
+      tierThinking: plan.tierThinking,
       tier: plan.tier,
       ...(cohortId ? { cohortId } : {}),
       systemPromptMode: systemPromptMode ?? null,
@@ -735,6 +965,9 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
       agentDir: resolvedAgentDir,
     };
     writeSubagentLoadout(subagentSessionFile, loadout);
+    // 工单 27：运行态携带实际生效思考等级（与拼 argv 的覆盖链同一口径），
+    // 状态行据此显示；降级重试换候选后新运行态自带新值。
+    const appliedThinking = appliedLoadoutThinking(loadout);
     // 父侧锚定副本:resume 授权的单一真源(见 session.ts AnchoredSubagentLoadout)。
     // 写失败不阻断本次 spawn;但新版快照带强制锚定标记,后续 resume 会拒绝
     // 缺失的父侧副本,不会静默退回 legacy;路径计入 contextFiles,随 retention
@@ -837,13 +1070,23 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
       // headless 初始 prompt:skill 前缀 + 任务全文直接经 stdin 投递。
       // artifact 文件仍写盘(与 pane 路径一致的 handoff 审计),但 RPC prompt
       // 不再用 @file 引用——stdin 无 shell 转义问题,发全文更可靠。
-      child.send({
-        id: initialPromptId,
-        type: "prompt",
-        message: memberFirstRoundId
-          ? buildTeamRoundPrompt(memberFirstRoundId, deps.buildHeadlessPrompt(effectiveSkills, fullTask))
-          : deps.buildHeadlessPrompt(effectiveSkills, fullTask),
-      });
+      try {
+        child.send({
+          id: initialPromptId,
+          type: "prompt",
+          message: memberFirstRoundId
+            ? buildTeamRoundPrompt(memberFirstRoundId, deps.buildHeadlessPrompt(effectiveSkills, fullTask))
+            : deps.buildHeadlessPrompt(effectiveSkills, fullTask),
+        });
+      } catch (err) {
+        // prompt 未能投递:进程还停在等 stdin 的状态,留着只会成为孤儿,杀掉并上抛
+        try {
+          child.kill();
+        } catch (closeError) {
+          debugLog(`Could not kill failed headless launch ${surface}`, closeError);
+        }
+        throw err;
+      }
     } else {
       surface = options?.surface ?? deps.createSurface(surfaceName, { cwd: effectiveCwd ?? undefined, env: splitEnv });
       if (!surfacePreCreated) {
@@ -880,12 +1123,17 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         ...(cohortId ? { cohortId } : {}),
         agent: params.agent,
         model: effectiveModel,
+        thinking: appliedThinking,
+        // 工单 28：用量快照的降级口径（启动时快照，不随配置漂移）
+        ...(plan.tier != null ? { tier: plan.tier } : {}),
+        ...(plan.tierPool != null ? { modelPool: plan.tierPool } : {}),
         parentId: process.env.PI_SUBAGENT_ID ?? null,
         ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
         waitMode: memberMode ? "member-round" : effectiveInteractive ? "interactive" : "hard-barrier",
         surface,
         startTime,
         sessionFile: subagentSessionFile,
+        hostSessionId: ctx.sessionManager.getSessionId(),
         activityFile,
         interactive: effectiveInteractive,
         sentinelToken,
@@ -1035,6 +1283,10 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     // checkpoint semantics aligned with initial launches so a resumed child
     // cannot park forever while this tool is awaiting its terminal result.
     if (!interactive) resumeEnv.PI_SUBAGENT_BARRIER = "1";
+    // 工单 29：与首启同口径——loadout 白名单带 web 工具时给子进程开 fetch 代理。
+    if (needsEnvProxyForTools(effectiveLoadout.toolAllowlist)) {
+      resumeEnv.NODE_USE_ENV_PROXY = "1";
+    }
 
     // resume 复用既有 session 文件:清掉上一轮遗留的 .exit/.ask sidecar,
     // 避免旧错误/旧问题污染本次 resume(watcher 会把旧 .exit 当本次失败、
@@ -1121,14 +1373,18 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         task: message,
         ...(cohortId ? { cohortId } : {}),
         // resume 使用 loadout 里的具体 model(tier 已在首次 launch 时解析),
-        // 不重新读配置,不随配置改变漂移。
+        // 不重新读配置,不随配置改变漂移。思考等级同一口径（工单 27）。
         model: effectiveLoadout.model ?? null,
+        thinking: appliedLoadoutThinking(effectiveLoadout),
+        // 工单 28：档位随 loadout 快照重放；候选池未存快照，降级口径保持未知。
+        ...(effectiveLoadout.tier != null ? { tier: effectiveLoadout.tier } : {}),
         parentId: process.env.PI_SUBAGENT_ID ?? null,
         ...(plan.timeoutMs != null ? { timeoutMs: plan.timeoutMs } : {}),
         waitMode: "hard-barrier",
         surface: createdSurface as string,
         startTime,
         sessionFile: sessionPath,
+        hostSessionId: ctx.sessionManager.getSessionId(),
         activityFile,
         interactive,
         sentinelToken,
@@ -1214,7 +1470,14 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
             recovered.push({ kind: "member-offline", name: record.name, reason: offlineReason });
             continue;
           }
-          if (pid == null || !deps.isPidAlive(pid)) {
+          // 状态回收（工单 30）：活动快照已声明终态（done 且超出兜底窗口）时，
+          // 存活的 PID 大概率已被无关进程复用——按已退出恢复（删记录 + 回注），
+          // 不把幽灵行收养进运行态与 widget。快照缺失/未终态时保守返回 false。
+          const headlessActivityFile = record.activityFile
+            ?? getSubagentActivityFile(dirname(runtimeFile), record.id);
+          const headlessActivityRead = readSubagentActivityFile(headlessActivityFile, record.id);
+          const doneDeclared = headlessActivityRead.ok && isTerminalDoneActivity(headlessActivityRead.activity);
+          if (pid == null || !deps.isPidAlive(pid) || doneDeclared) {
             deps.registry.removeRecord(runtimeFile, record.id);
             const exit = readExitSidecar(record.sessionFile) ?? { reason: "done" as const, exitCode: 0 };
             recovered.push({
@@ -1227,13 +1490,17 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
             });
             continue;
           }
+          // 恢复路径：模型与实际思考等级都从 loadout 快照重建（工单 27），
+          // 不随配置漂移；快照缺失时按旧口径回 null。
+          const recoveredLoadout = readSubagentLoadout(record.sessionFile);
           const running: RunningSubagent = {
             id: record.id,
             name: record.name,
             task: record.task,
             ...(record.cohortId ? { cohortId: record.cohortId } : {}),
             agent: record.agent,
-            model: readSubagentLoadout(record.sessionFile)?.model ?? null,
+            model: recoveredLoadout?.model ?? null,
+            thinking: recoveredLoadout ? appliedLoadoutThinking(recoveredLoadout) : null,
             parentId: record.parentId ?? null,
             ...(record.timeoutMs != null ? { timeoutMs: record.timeoutMs } : {}),
             ...(record.waitReleased ? { waitReleased: record.waitReleased } : {}),
@@ -1241,7 +1508,8 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
             surface: record.surface,
             startTime: record.startTime,
             sessionFile: record.sessionFile,
-            activityFile: record.activityFile ?? getSubagentActivityFile(dirname(runtimeFile), record.id),
+            ...(record.hostSessionId ? { hostSessionId: record.hostSessionId } : {}),
+            activityFile: headlessActivityFile,
             interactive: record.interactive,
             sentinelToken: record.sentinelToken,
             runtimeFile,
@@ -1259,13 +1527,16 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
           deps.registry.removeRecord(runtimeFile, record.id);
           continue;
         }
+        // 恢复路径同 headless：模型与思考等级从 loadout 快照重建（工单 27）。
+        const recoveredLoadout = readSubagentLoadout(record.sessionFile);
         const running: RunningSubagent = {
           id: record.id,
           name: record.name,
           task: record.task,
           ...(record.cohortId ? { cohortId: record.cohortId } : {}),
           agent: record.agent,
-          model: readSubagentLoadout(record.sessionFile)?.model ?? null,
+          model: recoveredLoadout?.model ?? null,
+          thinking: recoveredLoadout ? appliedLoadoutThinking(recoveredLoadout) : null,
           parentId: record.parentId ?? null,
           ...(record.timeoutMs != null ? { timeoutMs: record.timeoutMs } : {}),
           ...(record.waitReleased ? { waitReleased: record.waitReleased } : {}),
@@ -1273,6 +1544,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
           surface: record.surface,
           startTime: record.startTime,
           sessionFile: record.sessionFile,
+          ...(record.hostSessionId ? { hostSessionId: record.hostSessionId } : {}),
           activityFile: record.activityFile ?? getSubagentActivityFile(dirname(runtimeFile), record.id),
           interactive: record.interactive,
           sentinelToken: record.sentinelToken,

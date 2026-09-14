@@ -177,6 +177,17 @@ export function buildSubagentToolAllowlist(
   return [...allow].join(",");
 }
 
+/**
+ * 工单 29：子进程装载了捆绑 web 工具（web_search/web_fetch）时，其全局
+ * fetch 只有在 Node >= 24 且 NODE_USE_ENV_PROXY=1 时才走 HTTP(S)_PROXY；
+ * 启动事务据此给子进程环境打上该变量。只看最终 allowlist（与子进程
+ * 实际可见的工具同一口径），不重复解析 profile。
+ */
+export function needsEnvProxyForTools(toolAllowlist: string | null | undefined): boolean {
+  if (!toolAllowlist) return false;
+  return /(^|,)\s*web_(search|fetch)\s*(,|$)/.test(toolAllowlist);
+}
+
 export function buildPiPromptArgs(params: {
   effectiveSkills?: string;
   taskDelivery: "direct" | "artifact";

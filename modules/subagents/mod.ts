@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -43,19 +44,27 @@ import {
 } from "./session.ts";
 import {
   type StatusSnapshot,
+  type StatusLivenessEvidence,
   advanceStatusState,
   capStatusLines,
-  classifyStatus,
   forceStatusAfterInterrupt,
-  formatStatusAggregate,
-  formatTransitionLine,
   observeStatus,
   loadStatusConfig,
 } from "./status.ts";
+import { createSessionFileLivenessProbe } from "./liveness.ts";
 import {
+  activeScopeLabel,
+  formatStatusAggregate,
+  formatTransitionLine,
+  statusLabelText,
+} from "./status-lines.ts";
+import { subagentsTableTranslator, type SubagentsTranslate } from "./messages/index.ts";
+import type { Translator } from "../../i18n/index.ts";
+import {
+  activityDisplayLabel,
+  isTerminalDoneActivity,
   readSubagentActivityFile,
   type ActivityReadResult,
-  type SubagentActivityState,
 } from "./activity.ts";
 import {
   discoverAgentDefinitions as discoverAgents,
@@ -63,8 +72,19 @@ import {
   type AgentDefaults,
 } from "./agents.ts";
 import { normalizeSubagentName, sanitizeSubagentFileName } from "./names.ts";
-import { loadTierRouteConfig, type TierRouteInjectedSource } from "./routing.ts";
-import { routeExceptionFromResult } from "./route-error.ts";
+import {
+  buildFirstLayerOnlySnapshot,
+  createDescendantsTracker,
+  isWithin,
+  type DescendantsTracker,
+  type WidgetSnapshot,
+} from "./descendants.ts";
+import { withUsageRecording } from "./usage-bridge.ts";
+import type { UsageRunEvent } from "../usage/api.ts";
+import { loadTierRouteConfig, MODEL_TIERS, modelOwnThinkingSuffix, type TierRouteInjectedSource } from "./routing.ts";
+import { routeExceptionFromResult, type RouteException } from "./route-error.ts";
+import type { ModelErrorJournal, ModelHealthGateway } from "./model-health.ts";
+import { isFailoverSwitchable } from "./model-failover.ts";
 import { settleCompletionFromResult } from "./dependencies.ts";
 import { extractSubagentResult } from "./result.ts";
 import { registerSubagentRenderers } from "./renderers.ts";
@@ -87,18 +107,26 @@ import {
   resolveSurfaceChoice,
   validateAgentLifecycleConfig,
   SPAWNING_TOOLS,
+  TEAM_TOOLS,
 } from "./launch-config.ts";
 import {
   borderBottom,
   borderLine,
+  borderSegmentLine,
   borderTop,
+  buildSubagentModelSegments,
+  buildSubagentViaSegment,
   contextWindowFor,
   formatContextUsage,
   formatElapsed,
   formatTokens,
   formatUsageSegments,
+  subagentTreePrefix,
+  subagentTreeTier,
+  SUBAGENT_WIDGET_SEGMENT_PRIORITIES,
   widgetIcon,
 } from "./display.ts";
+import { layoutTwoColumnSegments, type StatusSegment } from "../tui/status/segment-layout.ts";
 import { debugLog } from "./diagnostics.ts";
 import { createRuntimeRegistry, type RuntimeRecord } from "./registry.ts";
 import {
@@ -150,8 +178,8 @@ function getModuleAbortSignal(): AbortSignal {
   return ((globalThis as any)[POLL_ABORT_KEY] as AbortController).signal;
 }
 
-/** 思考等级白名单：`--model` 后缀识别与 loadout 校验共用同一集合。 */
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+// 思考等级词汇表（含 ":level" 后缀识别）统一由 routing.ts 提供（工单 23），
+// 与配置解析、启动校验同一份规范集合，不再各自维护本地副本。
 
 // ── 宿主(pi-toolkit)配置注入 ──────────────────────────────────────────
 // 本文件既作为 pi-toolkit 的子代理模块被装配，也作为子进程 `-e` 的独立扩展
@@ -170,6 +198,28 @@ export interface SubagentsExtensionOptions {
   registerCommand?: boolean;
   /** 读 pi-toolkit.json 的 subagents 节（同步、实时）；未装配宿主时省略 */
   readHostSection?: () => SubagentsHostSection | null;
+  /**
+   * 候选池运行状态网关（工单 25，宿主注入）：独立 `-e` 装载（子进程）时
+   * 省略——无状态输入，选择行为与工单 24 一致。缺席时绝不阻断选择。
+   */
+  modelHealth?: ModelHealthGateway;
+  /**
+   * 模型错误观测日志（工单 26，宿主注入）：子代理临时性路由失败分类写入
+   * （工真降级重试与观测共用），网关读取合并成 unstable/持续不稳定判定。
+   * 会话结束清空；缺席时降级重试照常，只是状态不沉淀。
+   */
+  modelErrorJournal?: ModelErrorJournal;
+  /**
+   * 工单 28：用量统计记录器（宿主注入）。每次 watcher 终态（handed-off 除
+   * 外）经它落一条统计；缺席时统计不沉淀，其余行为不变。
+   */
+  recordUsage?: (event: UsageRunEvent) => void;
+  /**
+   * 工单 44：渲染层译者（宿主注入，读实时语言，切换后无需重建）。
+   * 独立 `-e` 装载（子进程）时缺席，状态语汇回落本模块英文表；
+   * 模型侧工具输出不经过它，界面语言不影响工具协议。
+   */
+  t?: Translator;
 }
 
 let hostOptions: SubagentsExtensionOptions = {};
@@ -192,16 +242,33 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** 独立装载时的英文兜底译者：本模块键表自取，不依赖全局登记 */
+const FALLBACK_TRANSLATE = subagentsTableTranslator("en");
+
 /**
- * 宿主 tier 层的注入候选。只有宿主节真的声明了 `models` 对象时才算一个候选层：
- * 否则（用户没在菜单里配过 tier）就让链继续落到包内 config.json / example 兜底。
+ * 渲染层取词（工单 44）：宿主译者优先（读实时语言），独立装载回退英文。
+ * 只服务显示面（widget / 通知句 / 终态行）；模型侧工具输出不经它。
+ */
+const widgetText: SubagentsTranslate = (key, vars) => (hostOptions.t ?? FALLBACK_TRANSLATE)(key, vars);
+
+/**
+ * 宿主 tier 层的注入候选。宿主节声明了 `models` 或 `thinking`（工单 23）任一
+ * 对象时这一层才参与；两者都未声明时让链继续落到包内 config.json / example
+ * 兜底。同层声明的 models 与 thinking 一起注入（层级整体生效，不拆开逐键
+ * 取舍）：仅声明 thinking 的层会以 models:{} 参与链，若更低层本就配了候选池
+ * （如手写的包内 config.json），缺映射会在 spawn 时以指向本节的原版报错
+ * 显式暴露，而不是静默丢掉思考等级配置。
  */
 export function resolveHostTierSources(): TierRouteInjectedSource[] {
   const host = hostSection();
   if (!host) return [];
+  const raw: Record<string, unknown> = {};
   const models = host.section.models;
-  if (!isPlainObject(models) || Object.keys(models).length === 0) return [];
-  return [{ source: host.source, raw: { models } }];
+  const thinking = host.section.thinking;
+  if (isPlainObject(models) && Object.keys(models).length > 0) raw.models = models;
+  if (isPlainObject(thinking) && Object.keys(thinking).length > 0) raw.thinking = thinking;
+  if (Object.keys(raw).length === 0) return [];
+  return [{ source: host.source, raw }];
 }
 
 /** Built-in tools pi provides natively — no extension needs to be loaded. */
@@ -251,6 +318,13 @@ export function registerToolExtension(name: string, extensionPath: string): void
  * registers it. Explicitly passing a backing extension keeps parent-registered
  * custom tools available even when the child has a different discovery root.
  * Returns undefined for built-in tools and for unknown names.
+ *
+ * 工单 29：优先级为 用户安装扩展（agentDir/extensions/…）> 运行时注册表
+ * （registerToolExtension，显式覆盖）> 模块捆绑兜底实现（tools/ 下的
+ * web-search / web-fetch；此前这两个名字只指向用户安装路径，多数机器上
+ * 从未存在，pi 又会静默丢弃 --tools 白名单里没有提供方的名字，子代理
+ * 于是只剩 ask_question）。捆绑兜底让随包 profile（researcher/worker）
+ * 的声明在任何机器上都真实可装载。
  */
 function getToolExtensionPath(tool: string): string | undefined {
   if (BUILTIN_TOOLS.has(tool)) return undefined;
@@ -267,12 +341,77 @@ function getToolExtensionPath(tool: string): string | undefined {
     google_image_search: join(extBase, "google-image-search", "index.ts"),
     safe_bash: join(SUBAGENTS_DIR, "tools", "safe-bash.ts"),
   };
-  // Prefer the built-in path, but fall back to a runtime-registered extension
-  // when that path no longer exists on disk (e.g. a built-in tool extension
-  // was disabled/removed but a project-local extension re-registered it).
+  // Prefer the user-installed path, but fall back to a runtime-registered
+  // extension when that path no longer exists on disk (e.g. a user tool
+  // extension was disabled/removed but a project-local extension re-registered
+  // it), and finally to the module-bundled fallback below.
   const builtin = map[tool];
   if (builtin && existsSync(builtin)) return builtin;
-  return EXTRA_TOOL_EXTENSIONS.get(tool);
+  const registered = EXTRA_TOOL_EXTENSIONS.get(tool);
+  if (registered) return registered;
+  // 捆绑兜底：web_search / web_fetch 有随包实现（tools/web-search.ts /
+  // tools/web-fetch.ts），用户安装版缺席时按模块内路径注入。
+  const bundled: Record<string, string> = {
+    web_search: join(SUBAGENTS_DIR, "tools", "web-search.ts"),
+    web_fetch: join(SUBAGENTS_DIR, "tools", "web-fetch.ts"),
+  };
+  const fallback = bundled[tool];
+  return fallback && existsSync(fallback) ? fallback : undefined;
+}
+
+/**
+ * 工单 29：按最终 `--tools` 白名单逐名判定子进程里是否真有提供方。
+ * pi 会静默丢弃白名单里没有注册者的工具名，所以“声明了但没人提供”
+ * 只有在这里显式判红，spawn 阶段才能拒绝而不是让子代理跑到任务中途
+ * 才发现工具缺失。
+ *
+ * 白名单由 buildSubagentToolAllowlist 构造：spawning 工具与 team_send 只在
+ * 被显式授权（subagent_agents / member spawn）时才会出现在白名单里，
+ * ask_question 则由启动事务无条件 `-e subagent-done.ts` 提供。因此这三类
+ * 在白名单里出现即视为模块提供；其余名字要么是 pi 内置工具，要么必须有
+ * 存在于磁盘的背书扩展（getToolExtensionPath 的任一来源）。
+ */
+export interface ToolProvisionReport {
+  tool: string;
+  kind: "builtin" | "module" | "extension";
+  provider?: string;
+}
+
+export function classifyToolProvisions(allowlist: string): {
+  provided: ToolProvisionReport[];
+  missing: string[];
+} {
+  const provided: ToolProvisionReport[] = [];
+  const missing: string[] = [];
+  for (const raw of allowlist.split(",")) {
+    const tool = raw.trim();
+    if (!tool) continue;
+    if (BUILTIN_TOOLS.has(tool)) {
+      provided.push({ tool, kind: "builtin" });
+      continue;
+    }
+    const isSpawning = (SPAWNING_TOOLS as readonly string[]).includes(tool);
+    const isTeam = (TEAM_TOOLS as readonly string[]).includes(tool);
+    if (isSpawning || isTeam || tool === "ask_question") {
+      provided.push({ tool, kind: "module" });
+      continue;
+    }
+    const provider = getToolExtensionPath(tool);
+    if (provider && existsSync(provider)) {
+      provided.push({ tool, kind: "extension", provider });
+      continue;
+    }
+    missing.push(tool);
+  }
+  return { provided, missing };
+}
+
+/**
+ * 工单 29：spawn 阶段核验 profile 声明的工具全部可提供，返回缺失名单
+ * （空数组 = 全部可提供）。注入 startup 事务做 fail-fast。
+ */
+export function validateToolProvision(allowlist: string): string[] {
+  return classifyToolProvisions(allowlist).missing;
 }
 
 /**
@@ -362,22 +501,38 @@ function isStatusEnabled(): boolean {
 }
 
 function formatWidgetRightLabel(snapshot: StatusSnapshot): string {
-  if (snapshot.kind === "starting") return " starting… ";
-  if (snapshot.kind === "running") return ` running ${snapshot.elapsedText} `;
+  const t = widgetText;
+  if (snapshot.kind === "starting") return ` ${t("module.subagents.widget.status.starting")} `;
+  if (snapshot.kind === "running") return ` ${t("module.subagents.widget.status.running")} ${snapshot.elapsedText} `;
   if (snapshot.kind === "active") {
-    const label = snapshot.activityLabel ?? snapshot.activeScope;
+    const label = activeScopeLabel(t, snapshot);
     const duration = snapshot.activeDurationText ? ` ${snapshot.activeDurationText}` : "";
-    return label ? ` active · ${label}${duration} ` : " active ";
+    return label ? ` ${t("module.subagents.widget.status.active")} · ${label}${duration} ` : ` ${t("module.subagents.widget.status.active")} `;
   }
   if (snapshot.kind === "waiting") {
     const duration = snapshot.waitingDurationText ? ` ${snapshot.waitingDurationText}` : "";
-    const detail = snapshot.statusLabel ? ` · ${snapshot.statusLabel}` : "";
-    return ` waiting${duration}${detail} `;
+    const detail = snapshot.statusLabel ? ` · ${statusLabelText(t, snapshot.statusLabel)}` : "";
+    return ` ${t("module.subagents.widget.status.waiting")}${duration}${detail} `;
   }
 
-  const detail = snapshot.statusLabel ? ` · ${snapshot.statusLabel}` : "";
+  // 工单 45 三态：stale-tool / stale 不冒充 active，证据停滞带证据文字。
+  if (snapshot.kind === "stale-tool") {
+    const duration = snapshot.activeDurationText ?? snapshot.staleDurationText ?? "";
+    return ` ${t("module.subagents.widget.stale.toolRunning", { duration })} `;
+  }
+  if (snapshot.kind === "stale") {
+    const last = activeScopeLabel(t, snapshot) ?? snapshot.latestEvent ?? "—";
+    const duration = snapshot.staleDurationText ?? "";
+    return ` ${t("module.subagents.widget.stale.noActivity", { duration, last })} `;
+  }
+  if (snapshot.stalledWithEvidence) {
+    const duration = snapshot.snapshotProblemText ?? snapshot.staleDurationText ?? "";
+    return ` ${t("module.subagents.widget.stalled.evidence", { duration })} `;
+  }
+
+  const detail = snapshot.statusLabel ? ` · ${statusLabelText(t, snapshot.statusLabel)}` : "";
   const duration = snapshot.snapshotProblemText ? ` ${snapshot.snapshotProblemText}` : "";
-  return ` stalled${detail}${duration} `;
+  return ` ${t("module.subagents.widget.status.stalled")}${detail}${duration} `;
 }
 
 function resolveResultPresentation(
@@ -553,34 +708,107 @@ function formatElapsedMMSS(startTime: number): string {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-function renderSubagentWidgetLines(agents: RunningSubagent[], width: number): string[] {
-  const count = agents.length;
-  const title = "Subagents";
-  const info = `${count} running`;
+/** 后代行显示层名字截断上限（工单 43）；仅作用于后代行的名字与归属名，第一层行维持既有全名展示。 */
+const DESCENDANT_NAME_LIMIT = 16;
 
-  const lines: string[] = [borderTop(title, info, width)];
+/** 孤儿行右标签：父已退出的标记挂在 required 状态段里，任何档位都可见。 */
+function formatRowRightLabel(row: { orphan: boolean; snapshot: StatusSnapshot }): string {
+  if (!isStatusEnabled()) {
+    return row.orphan
+      ? ` ${widgetText("module.subagents.widget.orphan")} `
+      : ` ${widgetText("module.subagents.widget.status.starting")} `;
+  }
+  if (!row.orphan) return formatWidgetRightLabel(row.snapshot);
+  return ` ${widgetText("module.subagents.widget.orphan")} · ${formatWidgetRightLabel(row.snapshot).trim()} `;
+}
 
-  for (const agent of agents) {
-    const elapsed = formatElapsedMMSS(agent.startTime);
-    const agentTag = agent.agent ? ` (${agent.agent})` : "";
-    const snapshot = classifyStatus(agent.statusState, Date.now());
-    const icon = widgetIcon(snapshot.kind);
-    const left = ` ${icon} ${elapsed}  ${agent.name}${agentTag} `;
-    const right = isStatusEnabled()
-      ? formatWidgetRightLabel(snapshot)
-      : " starting… ";
+function renderWidgetSnapshotLines(snapshot: WidgetSnapshot, width: number): string[] {
+  // 标题 Subagents 是用户口径的标识类例外（不翻），计数是状态语汇走 t()；
+  // 同一行里一半冻结一半翻是刻意为之。
+  const lines: string[] = [
+    borderTop("Subagents", widgetText("module.subagents.widget.count.running", { count: snapshot.counts.allCount }), width),
+  ];
+  const tier = subagentTreeTier(width);
 
-    lines.push(borderLine(left, right, width));
+  for (const row of snapshot.rows) {
+    // 前缀是固定 chrome：单独扣减段位预算，不进压缩循环（否则 required 段
+    // 截断兑底时会把前缀一起吃掉）。
+    const prefix = row.depth === 0
+      ? ""
+      : subagentTreePrefix(row.depth, row.lastFlags, row.isLast, tier);
+    const elapsed = formatElapsedMMSS(row.startTime);
+    // 16 列截断只作用于后代行（工单 43）：第一层行的名字与 agent 标签保持
+    // 改动前的原样展示（验收「第一层现有展示不回归」）。
+    const name = row.depth === 0
+      ? row.name
+      : truncateToWidth(row.name, DESCENDANT_NAME_LIMIT, "…");
+    const agentTag = row.agent
+      ? row.depth === 0
+        ? ` (${row.agent})`
+        : ` (${truncateToWidth(row.agent, DESCENDANT_NAME_LIMIT, "…")})`
+      : "";
+    const icon = widgetIcon(row.snapshot.kind);
+    // 工单 27：状态行段位化——左侧身份（required）、中间实际模型与思考等级
+    // （可压缩可隐藏）、右侧运行状态（required）都交给 TUI 段位压缩循环。
+    // 工单 43：后代行只加归属段（via），无 model/thinking（RuntimeRecord 无
+    // 此两字段，明确非目标）。
+    const left: StatusSegment[] = [
+      {
+        id: "identity",
+        text: ` ${icon} ${elapsed}  ${name}${agentTag}`,
+        priority: SUBAGENT_WIDGET_SEGMENT_PRIORITIES.identity,
+        required: true,
+      },
+      ...(row.via != null
+        ? [buildSubagentViaSegment(truncateToWidth(row.via, DESCENDANT_NAME_LIMIT, "…"))]
+        : []),
+      ...(row.depth === 0 ? buildSubagentModelSegments(row.model, row.thinking) : []),
+    ];
+    const right: StatusSegment[] = [{
+      id: "status",
+      text: formatRowRightLabel(row),
+      priority: SUBAGENT_WIDGET_SEGMENT_PRIORITIES.status,
+      required: true,
+    }];
+
+    const budget = Math.max(0, width - 2 - visibleWidth(prefix));
+    const layout = layoutTwoColumnSegments(left, right, budget);
+    lines.push(borderLine(prefix + layout.left, layout.right, width));
+    if (row.collapseAfter != null && row.collapseAfter > 0) {
+      // 组尾折叠提示（chrome 行，不占代理数据行预算）。
+      lines.push(borderLine(` └─ … +${row.collapseAfter} more`, "", width));
+    }
   }
 
+  if (snapshot.counts.globalOverflow > 0) {
+    lines.push(borderLine(` … +${snapshot.counts.globalOverflow} more`, "", width));
+  }
   lines.push(borderBottom(width));
   return lines;
 }
 
+function renderSubagentWidgetLines(agents: RunningSubagent[], width: number): string[] {
+  return renderWidgetSnapshotLines(buildFirstLayerOnlySnapshot(agents, Date.now()), width);
+}
+
+/** 后代快照 tracker（工单 43）：session_start 重建，session_shutdown 丢弃。 */
+let widgetTree: DescendantsTracker | null = null;
+
+/** 最近一次 widget 快照：渲染闭包只读它，零磁盘 IO（工单 43）。 */
+let widgetSnapshot: WidgetSnapshot | null = null;
+
 function updateWidget() {
   if (!latestCtx?.hasUI) return;
 
-  if (runtimeRegistry.list().length === 0) {
+  const firstLayer = runtimeRegistry.list();
+  const snapshot = widgetTree
+    ? widgetTree.snapshot(firstLayer, Date.now())
+    : buildFirstLayerOnlySnapshot(firstLayer, Date.now());
+  widgetSnapshot = snapshot;
+
+  // 存续条件（工单 43）：快照（含孤儿行）为空才撤 widget/停 interval——
+  // 父行消失后孤儿仍要有展示窗口；磁盘清理责任仍在写方，这里只做展示过滤。
+  if (snapshot.counts.allCount === 0) {
     latestCtx.ui.setWidget("subagent-status", undefined);
     if (widgetInterval) {
       clearInterval(widgetInterval);
@@ -596,23 +824,12 @@ function updateWidget() {
       return {
         invalidate() {},
         render(width: number) {
-          return renderSubagentWidgetLines(runtimeRegistry.list(), width);
+          return widgetSnapshot ? renderWidgetSnapshotLines(widgetSnapshot, width) : [];
         },
       };
     },
     { placement: "aboveEditor" },
   );
-}
-
-/** 统一路径形态供包含判定:Windows 大小写不敏感,统一小写;POSIX 下仅极端目录名受影响且偏向保守跳过。 */
-function normalizeForContains(path: string): string {
-  return resolve(path).replace(/[\\/]+/g, "/").toLowerCase();
-}
-
-function isWithin(path: string, root: string): boolean {
-  const p = normalizeForContains(path);
-  const r = normalizeForContains(root);
-  return p === r || p.startsWith(r + "/");
 }
 
 /** 本扩展的完整包名(@scope/name 或 name),从自身 package.json 读取,发布树与开发树同源。 */
@@ -717,16 +934,18 @@ function applySandboxToParts(
   // 本次调用写入 artifactDir/context/ 的文件路径,返回给调用方记入
   // running.contextFiles(retention 清理用);resume 路径忽略返回值。
   if (loadout.model) {
-    // 思考等级优先级:thinkingOverride(spawn 显式参数)> model 自带 ":level" 后缀 >
-    // frontmatter thinking。不无条件追加,避免 "model:max" + frontmatter "low"
-    // 拼成 ":max:low" 导致 max 被覆盖。
+    // 思考等级覆盖链（工单 23，规格 §4）：spawn 显式 thinkingOverride > 代理
+    // frontmatter thinking > 档位默认 tierThinking > 模型自带 ":level" 后缀。
+    // 模型自带后缀是最低层（"模型自身默认值"），任何更高层的等级都会先剥掉
+    // 后缀再拼接，不会拼成 ":max:low" 双后缀。旧快照（无 tierThinking）走同
+    // 一链路，缺省即为 undefined，行为不变。
+    const requested =
+      loadout.thinkingOverride ?? loadout.thinking ?? loadout.tierThinking ?? null;
     let model = loadout.model;
-    const suffixMatch = /^(.+):([a-z]+)$/.exec(model);
-    const modelThinking = suffixMatch && THINKING_LEVELS.has(suffixMatch[2]) ? suffixMatch[2] : null;
-    if (loadout.thinkingOverride) {
-      model = (modelThinking ? suffixMatch![1] : model) + ":" + loadout.thinkingOverride;
-    } else if (!modelThinking && loadout.thinking) {
-      model = model + ":" + loadout.thinking;
+    if (requested != null) {
+      const own = modelOwnThinkingSuffix(model);
+      if (own) model = model.slice(0, model.length - own.length - 1);
+      model = `${model}:${requested}`;
     }
     parts.push("--model", escape(model));
   }
@@ -762,16 +981,18 @@ function applySandboxToParts(
     // 扩展被回装,防止注册表被注入任意路径后把不可信代码带进子代理沙箱。
     const trustedRoots = [resolve(SUBAGENTS_DIR), resolve(join(getAgentConfigDir(), "extensions"))];
     // 子进程保留扩展发现:当子进程 agentDir 的 packages 已注册覆盖本模块
-    // 目录的包时,再 -e 注入本模块会把同一批工具注册两次,子进程以工具名
-    // 冲突拒绝启动(exit 1)。此时跳过本模块的注入,工具由发现路径提供;
-    // 仅当发现路径给不出本模块(-e 开发版启动且未装包)才注入。
+    // 目录的包时,再 -e 注入本模块入口会把同一批工具注册两次,子进程以工具名
+    // 冲突拒绝启动(exit 1)。此时只跳过模块入口本身(spawning 工具映射的
+    // mod.ts),工具由发现路径提供;tools/ 下的独立工具扩展(safe-bash、
+    // web-search、web-fetch)不在包 manifest 里,发现路径给不出来,必须照常
+    // 注入(工单 29:此前按 SUBAGENTS_DIR 树整体豁免,导致 safe_bash 声明了
+    // 却没装载,子代理只剩 ask_question)。
+    const selfEntryPath = resolve(fileURLToPath(import.meta.url));
     const skipSelfInjection = childDiscoversOwnPackage(loadout.agentDir);
     for (const extPath of extPaths) {
       const resolved = resolve(extPath);
       if (!trustedRoots.some((root) => resolved === root || resolved.startsWith(root + sep))) continue;
-      // 注入候选只可能来自本模块树(spawning 工具映射 index.ts、safe_bash 映射
-      // tools/safe-bash.ts),所以按 SUBAGENTS_DIR 树判定落点即可,与包根无关。
-      if (skipSelfInjection && isWithin(resolved, SUBAGENTS_DIR)) continue;
+      if (skipSelfInjection && resolved === selfEntryPath) continue;
       parts.push("-e", escape(resolved));
     }
   }
@@ -787,13 +1008,11 @@ function applySandboxToParts(
   return contextArtifacts;
 }
 
-function activityLabel(activity: SubagentActivityState): string | undefined {
-  if (activity.phase !== "active") return undefined;
-  if (activity.activeScope === "tool") return activity.toolName ?? "tool";
-  if (activity.activeScope === "provider") return "provider";
-  if (activity.activeScope === "streaming") return "streaming";
-  return activity.activeScope;
-}
+/**
+ * 会话文件存活证据探针（工单 45）：第一层运行态每秒观测时采集（指纹变化 +
+ * pid 探活），与后代 tracker 共用 liveness.ts 的采集语义、status.ts 的判定。
+ */
+const sessionLivenessProbe = createSessionFileLivenessProbe();
 
 function observeRunningSubagent(running: RunningSubagent, observedAt = Date.now()) {
   const activityFile = running.activityFile;
@@ -805,6 +1024,19 @@ function observeRunningSubagent(running: RunningSubagent, observedAt = Date.now(
     ? { ok: true }
     : { ok: false, reason: read.reason, error: read.error };
 
+  // 证据采集（IO 在采集侧）：会话指纹 + headless 句柄/pid 探活；pane 派生无 pid。
+  const session = running.sessionFile
+    ? sessionLivenessProbe.probe(running.sessionFile, observedAt)
+    : null;
+  const evidence: StatusLivenessEvidence = {
+    sessionLastChangeAtMs: session?.lastChangeAtMs ?? null,
+    processAlive: running.headlessChild
+      ? !running.headlessChild.exited
+      : running.pid != null
+        ? isPidAlive(running.pid)
+        : null,
+  };
+
   if (read.ok) {
     running.activity = read.activity;
     running.statusState = observeStatus(running.statusState, {
@@ -813,19 +1045,20 @@ function observeRunningSubagent(running: RunningSubagent, observedAt = Date.now(
       sequence: read.activity.sequence,
       phase: read.activity.phase,
       active: read.activity.phase === "active",
+      toolActive: read.activity.toolActive,
       activeScope: read.activity.activeScope,
       activeSince: read.activity.activeSince,
       waitingSince: read.activity.waitingSince,
       latestEvent: read.activity.latestEvent,
-      activityLabel: activityLabel(read.activity),
-    }, observedAt);
+      activityLabel: activityDisplayLabel(read.activity),
+    }, observedAt, evidence);
     return;
   }
 
   running.statusState = observeStatus(running.statusState, {
     snapshot: read.reason,
     snapshotError: read.error,
-  }, observedAt);
+  }, observedAt, evidence);
 }
 
 // 名字保留（reserveName/releaseName/isNameTaken/uniqueName）与按名解析
@@ -965,7 +1198,7 @@ function startStatusRefresh(pi: ExtensionAPI) {
       // working in the subagent's pane, and a steer message here would burn an
       // orchestrator turn on a no-op "still waiting" ping. Widget still updates.
       if (transition && !running.interactive) {
-        transitionLines.push(formatTransitionLine(running.name, snapshot, transition));
+        transitionLines.push(formatTransitionLine(running.name, snapshot, transition, widgetText));
       }
     }
 
@@ -976,7 +1209,7 @@ function startStatusRefresh(pi: ExtensionAPI) {
       pi.sendMessage(
         {
           customType: "subagent_status",
-          content: formatStatusAggregate(transitionLines, statusConfig.lineLimit),
+          content: formatStatusAggregate(transitionLines, statusConfig.lineLimit, widgetText),
           display: true,
           details: { lines: capped.visibleLines, overflow: capped.overflow },
         },
@@ -996,11 +1229,17 @@ function resolveResumeLaunchBehavior(): { autoExit: boolean; interactive: boolea
   return { autoExit: true, interactive: false };
 }
 
+/** 工单 29：launch-config 纯函数再出口（子进程环境打 NODE_USE_ENV_PROXY 用）。 */
+export { needsEnvProxyForTools } from "./launch-config.ts";
+
 export const __test__ = {
   borderLine,
+  borderSegmentLine,
+  buildSubagentModelSegments,
   isStatusEnabled,
   getShellReadyDelayMs,
   renderSubagentWidgetLines,
+  renderWidgetSnapshotLines,
   loadAgentDefaults,
   discoverAgentDefinitions,
   validateResumeTarget,
@@ -1012,6 +1251,8 @@ export const __test__ = {
   validateAgentLifecycleConfig,
   buildSubagentToolAllowlist,
   applySandboxToParts,
+  classifyToolProvisions,
+  validateToolProvision,
   buildPiPromptArgs,
   observeRunningSubagent,
   getToolExtensionPath,
@@ -1035,12 +1276,15 @@ export const __test__ = {
 };
 
 function startWidgetRefresh() {
-  if (widgetInterval) return;
+  // 先立 interval 再首刷：空快照的 teardown 能当场把 interval 撤干净，
+  // 不会留下一个只会重复撤除动作的空转 tick。
+  if (!widgetInterval) {
+    widgetInterval = setInterval(() => {
+      updateWidget();
+    }, 1000);
+    (globalThis as any)[WIDGET_INTERVAL_KEY] = widgetInterval;
+  }
   updateWidget(); // immediate first render
-  widgetInterval = setInterval(() => {
-    updateWidget();
-  }, 1000);
-  (globalThis as any)[WIDGET_INTERVAL_KEY] = widgetInterval;
 }
 
 /**
@@ -1523,6 +1767,17 @@ async function waitForHeadlessExit(
         const sidecar = readExitSidecar(running.sessionFile);
         return sidecar ?? { reason: "done", exitCode: 0 };
       }
+      // 状态回收(工单 30):PID 仍存活但活动快照早已声明终态(done 且超出
+      // 兜底窗口)——记录里的 PID 大概率已被无关进程复用(Windows 进程
+      // churn 下高发)。控制面已 finished,不能永远轮询一个无关进程:按
+      // 正常完成兑终态,让调用方回收运行态、磁盘记录与 widget 行。
+      // running.activity 由循环底部的 observeRunningSubagent 喂数,首轮
+      // 观测后即命中。
+      if (isTerminalDoneActivity(running.activity)) {
+        deliverPendingQuestion(running);
+        const sidecar = readExitSidecar(running.sessionFile);
+        return sidecar ?? { reason: "done", exitCode: 0 };
+      }
     }
 
     observeRunningSubagent(running);
@@ -1918,6 +2173,29 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
   // Capture the UI context for widget updates
   pi.on("session_start", (_event, ctx) => {
     latestCtx = ctx;
+    // 工单 43：后代快照 tracker 随会话重建；有 UI 的会话启动即刷一次
+    // widget——recover 未恢复出第一层运行态时，孤儿扫描也要有展示窗口。
+    // 宿主/测试可能给不带 sessionManager（或只带空对象）的最小 ctx：方法级
+    // 校验后跳过 tracker，updateWidget 自动退回纯内存第一层快照，不影响
+    // 既有生命周期；只判对象存在会把 TypeError 同步抛进 session_start，
+    // 跳过其后的 poll-abort 重装/预热/recover。
+    widgetTree?.dispose();
+    widgetTree = null;
+    const sessionManager = ctx.sessionManager as
+      | { getSessionDir?: () => string; getSessionId?: () => string }
+      | undefined;
+    if (
+      typeof sessionManager?.getSessionDir === "function" &&
+      typeof sessionManager?.getSessionId === "function"
+    ) {
+      widgetTree = createDescendantsTracker({
+        rootArtifactDir: getArtifactDir(sessionManager.getSessionDir(), sessionManager.getSessionId()),
+        rootCwd: ctx.cwd ?? process.cwd(),
+        agentConfigDir: getAgentConfigDir(),
+      });
+    }
+    widgetSnapshot = null;
+    if (ctx.hasUI) startWidgetRefresh();
     // pi runs multiple sessions in one process. A prior session's shutdown
     // aborts the shared module poll-abort controller; install a fresh one so
     // subagents spawned in this session aren't watched against a dead signal.
@@ -1925,6 +2203,22 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
     const prevAbort = (globalThis as any)[POLL_ABORT_KEY] as AbortController | undefined;
     if (!prevAbort || prevAbort.signal.aborted) {
       (globalThis as any)[POLL_ABORT_KEY] = new AbortController();
+    }
+    // 工单 25：候选池运行状态预热（fire-and-forget）。按默认配置链解析全档
+    // 候选并集触发一次后台刷新，首次 tier spawn 大概率已有可读状态。预热
+    // 是尽力而为：配置层缺失/providers 句柄缺席/刷新失败都静默跳过——状态
+    // 未知不影响任何启动行为。
+    const healthGateway = hostOptions.modelHealth;
+    if (healthGateway) {
+      const loaded = loadTierRouteConfig({
+        cwd: ctx.cwd,
+        agentConfigDir: getAgentConfigDir(),
+        injected: resolveHostTierSources(),
+      });
+      const union = loaded.config
+        ? MODEL_TIERS.flatMap((tier) => loaded.config?.models[tier] ?? [])
+        : [];
+      if (union.length > 0) healthGateway.refresh(union);
     }
     recoverRuntimeSubagents(ctx, pi, startup).catch((error) => {
       debugLog("Runtime subagent recovery failed", error);
@@ -1941,6 +2235,9 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
   //   - 交互式演示 pane 归用户所有:一律不动,留给用户自行处理。
   // 工具层的 Escape 中止不经过这里(它只解除工具等待,子代理转 detached)。
   pi.on("session_shutdown", (_event, _ctx) => {
+    widgetTree?.dispose();
+    widgetTree = null;
+    widgetSnapshot = null;
     if (widgetInterval) {
       clearInterval(widgetInterval);
       widgetInterval = null;
@@ -1953,6 +2250,9 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
     }
     const moduleAbort = (globalThis as any)[POLL_ABORT_KEY] as AbortController | undefined;
     if (moduleAbort) moduleAbort.abort();
+    // 工单 26：会话结束清空模型错误观测——下一会话不受本会话的临时故障
+    // 历史（持续不稳定判定）影响。
+    hostOptions.modelErrorJournal?.clear();
     for (const agent of runtimeRegistry.list()) {
       if (agent.interactive) {
         // 交互式子代理归用户所有,宿主会话关闭时不强杀其 pane,留给用户自行处理。
@@ -2002,6 +2302,8 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
     terminateHeadlessProcess,
     validateResumeTarget,
     applySandboxToParts,
+    // 工单 29：spawn 前核验 profile 声明的工具都有提供方（fail-fast）。
+    validateToolProvision,
     resolveResumeLaunchBehavior,
     subagentsDir: SUBAGENTS_DIR,
     getShellReadyDelayMs,
@@ -2012,8 +2314,12 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
     buildHeadlessPrompt,
     startWidgetRefresh,
     startStatusRefresh,
-    watchSubagent,
+    // 工单 28：watcher 终态旁路落一条用量统计（handed-off 由恢复路径的真实
+    // 终态记录）；记录器缺席时行为不变。
+    watchSubagent: (running, signal) =>
+      withUsageRecording(watchSubagent(running, signal), running, hostOptions.recordUsage),
     watchMemberRound,
+    modelHealth: options?.modelHealth,
   });
 
   registerSubagentTool(pi, {
@@ -2026,6 +2332,20 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
     canReuseMemberName: (name: string, artifactDir: string) => canReuseMemberName(name, artifactDir),
     updateWidget,
     resolveResultPresentation,
+    // 工单 26：临时性路由失败写入错误观测日志（供后续候选选择与观测复用；
+    // 日志自身也只收临时性类别，双保险）。
+    ...(hostOptions.modelErrorJournal
+      ? {
+          recordModelError: (model: string, exception: RouteException) => {
+            if (!isFailoverSwitchable(exception.kind)) return;
+            hostOptions.modelErrorJournal!.record(model, {
+              kind: exception.kind,
+              message: exception.message,
+            });
+          },
+        }
+      : {}),
+    t: widgetText,
   });
 
   registerSubagentMessageTool(pi, {
@@ -2035,6 +2355,7 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
     extractSubagentResult,
     resolveResultPresentation,
     updateWidget,
+    t: widgetText,
   });
 
   registerSubagentsListTool(pi, {
@@ -2069,7 +2390,7 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
   if (hostOptions.registerCommand === true) {
     registerSubagentCommand(pi, loadAgentDefaults);
   }
-  registerSubagentRenderers(pi);
+  registerSubagentRenderers(pi, widgetText);
   registerSubagentStopTool(pi, {
     resolveRunningByName: (name: string) => runtimeRegistry.resolveName(name),
     closeSurface,

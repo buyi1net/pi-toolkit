@@ -8,6 +8,7 @@ import { validateTimeoutMs, waitForSubagentTerminal, type WaitRelease } from "./
 import type { RuntimeRegistry } from "./registry.ts";
 import type { ResumeStartedRun, SubagentStartup } from "./startup.ts";
 import type { SubagentResult } from "./types.ts";
+import { subagentsTableTranslator, type SubagentsTranslate } from "./messages/index.ts";
 
 interface MessageContext {
   sessionManager: {
@@ -37,6 +38,8 @@ export interface SubagentMessageToolDeps {
     options?: { sessionPreserved?: boolean },
   ) => string;
   updateWidget: () => void;
+  /** 终态行显示语汇取词（工单 44，可选）：缺席回退本模块英文表；只影响 renderResult 显示。 */
+  t?: SubagentsTranslate;
 }
 
 export function registerSubagentMessageTool(
@@ -154,13 +157,14 @@ export function registerSubagentMessageTool(
       }
       // 硬屏障终态:自动 resume 的结果直接作为 tool result 返回,按状态渲染。
       if (details?.status === "completed" || details?.status === "failed" || details?.status === "cancelled") {
+        const t = deps.t ?? subagentsTableTranslator("en");
         const elapsed = typeof details.elapsed === "number" ? ` · ${details.elapsed}s` : "";
         const reason =
           details.status === "completed"
-            ? theme.fg("dim", `completed${elapsed}`)
+            ? theme.fg("dim", `${t("module.subagents.widget.result.completed")}${elapsed}`)
             : details.status === "cancelled"
-              ? theme.fg("warning", `cancelled${elapsed}`)
-              : theme.fg("error", `failed${elapsed}`);
+              ? theme.fg("warning", `${t("module.subagents.widget.result.cancelled")}${elapsed}`)
+              : theme.fg("error", `${t("module.subagents.widget.result.failed")}${elapsed}`);
         const icon = details.status === "completed" ? theme.fg("success", "✓") : theme.fg("error", "✗");
         return new Text(icon + " " + theme.fg("toolTitle", theme.bold(details.name ?? "Resume")) + " " + reason, 0, 0);
       }

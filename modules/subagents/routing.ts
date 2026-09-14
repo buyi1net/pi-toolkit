@@ -12,6 +12,47 @@ export type ModelTier = "fast" | "balanced" | "deep";
 export const MODEL_TIERS: readonly ModelTier[] = ["fast", "balanced", "deep"];
 
 /**
+ * 规范思考等级（工单 23）：与 Pi 宿主的 ThinkingLevel 全集逐字一致
+ * （cli/args.js 的 VALID_THINKING_LEVELS）。宿主是最终执行方，这里只是
+ * 配置层的同一词汇表；宿主集合变化时必须同步这里。
+ */
+export const THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+/** 严格判定：不做归一化（大小写/空白不宽容），校验入口用它。 */
+export function isThinkingLevel(value: string): value is ThinkingLevel {
+  return (THINKING_LEVELS as readonly string[]).includes(value);
+}
+
+/** 宽容归一化（trim + 小写）；无法识别返回 null，调用方负责报错。 */
+export function normalizeThinkingLevel(input: string): ThinkingLevel | null {
+  const value = input.trim().toLowerCase();
+  return isThinkingLevel(value) ? value : null;
+}
+
+/**
+ * 模型引用自带的 ":level" 思考等级后缀（"模型自身默认值"，覆盖链最低层）。
+ * 仅当后缀是规范思考等级才算（ollama 的 "llama3:8b" 这类冒号 id 不算），
+ * 与启动参数构造层、宿主 parseModelPattern 的识别口径一致。
+ */
+export function modelOwnThinkingSuffix(
+  model: string | null | undefined,
+): ThinkingLevel | null {
+  if (!model) return null;
+  const match = /^(.+):([a-z]+)$/.exec(model);
+  return match && isThinkingLevel(match[2]) ? match[2] : null;
+}
+
+/**
  * tier 别名表:params 与配置键共用,归一化到 canonical。刻意保持最小集合,
  * 不再扩大别名——同一含义多个写法只增加配置歧义。
  */
@@ -31,8 +72,18 @@ export function normalizeTier(input: string): ModelTier | null {
 }
 
 export interface TierRouteConfig {
-  /** tier → 模型 id(可带 ":thinking" 后缀,由启动参数构造层统一处理)。 */
-  models: Partial<Record<ModelTier, string>>;
+  /**
+   * tier → 有序候选池（工单 21）。首选在前,后续元素是备用候选;顺序就是
+   * 用户配置的主备优先级。元素可带 ":thinking" 后缀,由启动参数构造层统一处理。
+   */
+  models: Partial<Record<ModelTier, string[]>>;
+  /**
+   * tier → 档位默认思考等级（工单 23）。覆盖链（规格 §4）：任务显式值 >
+   * 代理 frontmatter > 档位默认 > 模型自带后缀。可与 models 分属不同配置层，
+   * 也允许只配 thinking 不配 models（models 缺档仍按缺映射报错）。
+   * 配置文件里的 null 值是「显式未设置」墓碑，解析时按未设置处理。
+   */
+  thinking: Partial<Record<ModelTier, ThinkingLevel>>;
   /** 配置来源文件路径,用于错误提示定位。 */
   sourcePath: string;
 }
@@ -41,22 +92,33 @@ export type TierConfigParseResult = { config: TierRouteConfig } | { error: strin
 
 /**
  * 严格校验 tier 配置。根对象允许携带其它键(包级 config.json 与 status 配置
- * 共用同一文件,这里只认 models);models 内部从严:未知 tier 键、非字符串、
- * 空串、含空白、同 tier 别名重复都报错。models 缺失视为合法但无映射。
+ * 共用同一文件,这里只认 models 与 thinking);models 内部从严:未知 tier 键、
+ * 档位取值不是有序候选池数组、空候选池、候选元素非字符串/空串/含空白、同
+ * tier 别名重复都报错。models 缺失视为合法但无映射。
+ *
+ * thinking（工单 23）同级从严:非对象、未知 tier 键、别名重复、取值不是规范
+ * 思考等级（null 除外——null 是显式 unset 墓碑,按未设置处理）都报错。
+ * thinking 允许独立存在（不要求该层同时声明 models）。
+ *
+ * 工单 21 裁决:档位取值直接采用候选池数组,不兼容旧的单模型字符串格式——
+ * 字符串取值在这里被拒绝,没有旧格式读取或迁移分支。
  */
 export function parseTierConfig(raw: unknown, source: string): TierConfigParseResult {
   if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
     return { error: `${source}: root must be a JSON object` };
   }
   const root = raw as Record<string, unknown>;
+  const thinking = parseTierThinking(root.thinking, source);
+  if ("error" in thinking) return { error: thinking.error };
   const rawModels = root.models;
   if (rawModels === undefined) {
-    return { config: { models: {}, sourcePath: source } };
+    // models 缺失合法（thinking 可以独立存在）；无映射档在使用时才报错。
+    return { config: { models: {}, thinking: thinking.thinking, sourcePath: source } };
   }
   if (rawModels == null || typeof rawModels !== "object" || Array.isArray(rawModels)) {
     return { error: `${source}: models must be an object` };
   }
-  const models: Partial<Record<ModelTier, string>> = {};
+  const models: Partial<Record<ModelTier, string[]>> = {};
   const aliasOwner = new Map<ModelTier, string>();
   for (const [key, value] of Object.entries(rawModels as Record<string, unknown>)) {
     const tier = normalizeTier(key);
@@ -65,11 +127,24 @@ export function parseTierConfig(raw: unknown, source: string): TierConfigParseRe
         error: `${source}: models has unsupported tier key "${key}" (use ${MODEL_TIERS.join(", ")})`,
       };
     }
-    if (typeof value !== "string" || value.trim() === "") {
-      return { error: `${source}: models.${key} must be a non-empty string` };
+    if (!Array.isArray(value)) {
+      return {
+        error: `${source}: models.${key} must be a non-empty array of model ids (ordered candidate pool)`,
+      };
     }
-    if (/\s/.test(value)) {
-      return { error: `${source}: models.${key} must not contain whitespace` };
+    if (value.length === 0) {
+      return { error: `${source}: models.${key} candidate pool must not be empty` };
+    }
+    const pool: string[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      const candidate = value[index];
+      if (typeof candidate !== "string" || candidate.trim() === "") {
+        return { error: `${source}: models.${key}[${index}] must be a non-empty model id` };
+      }
+      if (/\s/.test(candidate)) {
+        return { error: `${source}: models.${key}[${index}] must not contain whitespace` };
+      }
+      pool.push(candidate);
     }
     const previousKey = aliasOwner.get(tier);
     if (previousKey !== undefined) {
@@ -78,9 +153,46 @@ export function parseTierConfig(raw: unknown, source: string): TierConfigParseRe
       };
     }
     aliasOwner.set(tier, key);
-    models[tier] = value;
+    models[tier] = pool;
   }
-  return { config: { models, sourcePath: source } };
+  return { config: { models, thinking: thinking.thinking, sourcePath: source } };
+}
+
+function parseTierThinking(
+  raw: unknown,
+  source: string,
+): { thinking: Partial<Record<ModelTier, ThinkingLevel>> } | { error: string } {
+  if (raw === undefined) return { thinking: {} };
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { error: `${source}: thinking must be an object` };
+  }
+  const thinking: Partial<Record<ModelTier, ThinkingLevel>> = {};
+  const aliasOwner = new Map<ModelTier, string>();
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const tier = normalizeTier(key);
+    if (!tier) {
+      return {
+        error: `${source}: thinking has unsupported tier key "${key}" (use ${MODEL_TIERS.join(", ")})`,
+      };
+    }
+    const previousKey = aliasOwner.get(tier);
+    if (previousKey !== undefined) {
+      return {
+        error: `${source}: thinking has conflicting entries for tier "${tier}" ("${previousKey}" and "${key}")`,
+      };
+    }
+    aliasOwner.set(tier, key);
+    if (value === null) continue; // 显式 unset 墓碑：按未设置处理
+    if (typeof value !== "string" || !isThinkingLevel(value)) {
+      return {
+        error:
+          `${source}: thinking.${key} must be one of: ${THINKING_LEVELS.join(", ")} ` +
+          `(or null to unset); got ${String(value)}`,
+      };
+    }
+    thinking[tier] = value;
+  }
+  return { thinking };
 }
 
 export interface TierConfigLoadResult {
@@ -185,13 +297,17 @@ export function loadTierRouteConfig(options?: {
   return { config: null, sourcePath: null };
 }
 
-/** tier → 具体模型;缺映射给清晰错误,绝不静默换模型。 */
-export function resolveTierModel(
+/**
+ * tier → 候选池(工单 24:把池子暴露给选择器,不再只给首选)。缺候选池给
+ * 清晰错误,绝不静默换模型;错误文案与 resolveTierModel 保持逐字一致
+ * (菜单侧 tierRouteError 依赖同一文案)。
+ */
+export function tierModelPool(
   tier: ModelTier,
   config: TierRouteConfig | null,
-): { model: string } | { error: string } {
-  const model = config?.models[tier];
-  if (!model) {
+): { pool: string[] } | { error: string } {
+  const pool = config?.models[tier];
+  if (!pool || pool.length === 0) {
     const hint = config
       ? ` Add models.${tier} to ${config.sourcePath}.`
       : " No pi-subagents config was found (looked at $PI_SUBAGENTS_CONFIG, " +
@@ -199,21 +315,43 @@ export function resolveTierModel(
         "and the package config).";
     return { error: `No model configured for tier "${tier}".${hint}` };
   }
-  return { model };
+  return { pool };
+}
+
+/**
+ * tier → 实际模型:取候选池首个(用户配置的首选)。这是无目录、无要求时的
+ * 退化选择(静态首选);带能力/思考等级要求的动态选择由工单 24 的
+ * model-selector.ts 承担,编排发生在启动链(startup.ts)。
+ */
+export function resolveTierModel(
+  tier: ModelTier,
+  config: TierRouteConfig | null,
+): { model: string } | { error: string } {
+  const pool = tierModelPool(tier, config);
+  if ("error" in pool) return { error: pool.error };
+  return { model: pool.pool[0] };
 }
 
 export type TierLaunchResolution =
-  | { tier: ModelTier | null; model?: string }
+  | { tier: ModelTier | null; model?: string; thinking?: ThinkingLevel }
+  | { error: string };
+
+export type TierPoolResolution =
+  | { tier: ModelTier | null; pool?: string[]; thinking?: ThinkingLevel }
   | { error: string };
 
 /**
- * launch 前的 tier 解析:显式 params.model 永远优先 tier(同时给出时不读
- * 配置,tier 仅作 loadout 记录);tier 无法归一化或缺映射时报错,不回退。
+ * launch 前的 tier 候选池解析（工单 24 抽出，供启动链接选择器）：显式
+ * params.model 永远优先 tier（同时给出时不读配置，tier 仅作 loadout 记录，
+ * pool 为 undefined）；tier 无法归一化、配置读失败或缺映射时报错，不回退。
+ *
+ * tier 经配置解析出候选池时，同时带出该档的默认思考等级 thinking；显式
+ * model 胜出时 tier 只是记录，不把档位思考等级带到另一个模型上。
  */
-export function resolveTierForParams(
+export function resolveTierPoolForParams(
   params: { tier?: string; model?: string },
   loadConfig: () => TierConfigLoadResult,
-): TierLaunchResolution {
+): TierPoolResolution {
   const requested = params.tier?.trim();
   if (!requested) return { tier: null };
   const tier = normalizeTier(requested);
@@ -229,7 +367,35 @@ export function resolveTierForParams(
   if (loaded.error) {
     return { error: `Tier "${tier}" could not be resolved: ${loaded.error}` };
   }
-  const resolved = resolveTierModel(tier, loaded.config);
+  const pool = tierModelPool(tier, loaded.config);
+  if ("error" in pool) return { error: pool.error };
+  const tierThinking = loaded.config?.thinking?.[tier] ?? undefined;
+  return { tier, pool: pool.pool, ...(tierThinking ? { thinking: tierThinking } : {}) };
+}
+
+/**
+ * launch 前的 tier 解析:显式 params.model 永远优先 tier(同时给出时不读
+ * 配置,tier 仅作 loadout 记录);tier 无法归一化或缺映射时报错,不回退。
+ *
+ * 工单 23:tier 经配置解析出模型时,同时带出该档的默认思考等级 thinking;
+ * 显式 model 胜出时 tier 只是记录,不把档位思考等级带到另一个模型上
+ * (thinking 为 undefined,由 params/agent 默认与模型自带后缀决定)。
+ *
+ * 工单 24:本函数退化为「无要求的静态首选」（取候选池首个），供菜单侧
+ * 错误文案对齐（config.ts tierRouteError）等不需要选择器的调用方；带
+ * 能力标签与思考等级要求的候选选择走 resolveTierPoolForParams +
+ * model-selector.ts 的 selectModelCandidate（启动链，startup.ts）。
+ */
+export function resolveTierForParams(
+  params: { tier?: string; model?: string },
+  loadConfig: () => TierConfigLoadResult,
+): TierLaunchResolution {
+  const resolved = resolveTierPoolForParams(params, loadConfig);
   if ("error" in resolved) return { error: resolved.error };
-  return { tier, model: resolved.model };
+  if (resolved.pool === undefined) return { tier: resolved.tier };
+  return {
+    tier: resolved.tier,
+    model: resolved.pool[0],
+    ...(resolved.thinking ? { thinking: resolved.thinking } : {}),
+  };
 }

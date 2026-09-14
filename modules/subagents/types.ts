@@ -52,6 +52,21 @@ export interface RunningSubagent {
    * frontmatter)。route_exception 的 provider/model 拆分来源;旧记录/mock 可缺省。
    */
   model?: string | null;
+  /**
+   * 本次运行实际生效的思考等级（工单 27）：覆盖链解析结果——任务显式值 >
+   * 代理 frontmatter > 档位默认 > 模型自带 ":level" 后缀；无等级为 null。
+   * 与 model 一起构成状态行展示的同一口径（显示时剥后缀，等级由此给出）；
+   * 降级重试换候选后随新运行态更新。
+   */
+  thinking?: string | null;
+  /**
+   * 工单 28：本次运行来自的模型档位与启动时的候选池快照（用量统计的
+   * 降级口径——首选=池首，实际不等于首选即降级）。显式 model 运行可能只有
+   * tier 没有池；resume 从 loadout 重放 tier、重连只有 tier 记录，两者都没
+   * 有候选池快照，降级判定保持未知（null）。
+   */
+  tier?: string | null;
+  modelPool?: readonly string[] | null;
   /** 直接父子代理 run id;顶层子代理为 null。 */
   parentId?: string | null;
   /** 本次硬屏障等待上限;未配置时缺省。 */
@@ -63,6 +78,11 @@ export interface RunningSubagent {
   surface: string;
   startTime: number;
   sessionFile: string;
+  /**
+   * 发起本次运行的宿主会话 id（工单 32）：终态可能落在 /reload 或新会话之后，
+   * 用量统计按它归属，不按写入时刻的当前会话。旧记录/测试夹具可缺省。
+   */
+  hostSessionId?: string | null;
   activityFile?: string;
   activity?: SubagentActivityState;
   activityRead?: {

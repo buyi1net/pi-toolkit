@@ -14,7 +14,17 @@ import { normalizeSubagentName } from "./names.ts";
 import { peekExitSidecar } from "./surface.ts";
 import type { StartedRun, SubagentStartup } from "./startup.ts";
 import { debugLog } from "./diagnostics.ts";
-import { routeExceptionFromResult } from "./route-error.ts";
+import { routeExceptionFromResult, type RouteException } from "./route-error.ts";
+import { baseModelRef } from "./model-health.ts";
+import { subagentsTableTranslator, type SubagentsTranslate } from "./messages/index.ts";
+import {
+  aggregateFailoverExhaustion,
+  buildModelRouting,
+  describeModelRouting,
+  shouldFailoverAfterFailure,
+  type ModelFailoverAttempt,
+  type ModelRoutingDetails,
+} from "./model-failover.ts";
 import {
   announceCompletion,
   dependencyExceptionResult,
@@ -102,6 +112,18 @@ export interface SubagentToolDeps {
     name: string,
     options?: { sessionPreserved?: boolean },
   ) => string;
+  /**
+   * 模型错误观测写入（工单 26，可选）：临时性路由失败（限流/过载/超时/
+   * 临时服务错误）写入健康状态日志，供后续 spawn 的候选选择（持续不稳
+   * 定跳过）与观测复用。缺席时降级重试照常，只是状态不沉淀。
+   */
+  recordModelError?: (model: string, exception: RouteException) => void;
+  /**
+   * 终态行显示语汇取词（工单 44，可选）：mod.ts 装配时注入实时译者；
+   * 缺席回退本模块英文表（旧测试夹具兼容）。只影响 renderResult 显示，
+   * 工具 result 内容（模型侧协议）不经它。
+   */
+  t?: SubagentsTranslate;
 }
 
 /** watcher 异常 reject 时的合成失败结果(正常不 reject,兑底保护不丢错误)。 */
@@ -162,6 +184,8 @@ function applyRetentionToRunning(
  * handedOff(再次 /reload 或宿主会话关闭移交)跳过回注,由恢复路径接管,
  * 不伪造、不重复。依赖 completion 不提前 settle——detached 时上游仍在
  * 运行,dependsOn 消费者继续等待真实终态。
+ *
+ * 工单 26:携带该次运行的模型路由记录(首选/实际/降级原因,若为 tier 路径)。
  */
 function registerDetachedLateDelivery(
   pi: ExtensionAPI,
@@ -169,6 +193,7 @@ function registerDetachedLateDelivery(
   running: RunningSubagent,
   watchPromise: Promise<SubagentResult>,
   retentionPolicy: "auto" | "preserve" | "discard",
+  modelRouting?: ModelRoutingDetails | null,
 ): void {
   watchPromise
     .then((late) => {
@@ -215,6 +240,7 @@ function registerDetachedLateDelivery(
             ...(late.errorMessage ? { errorMessage: late.errorMessage } : {}),
             ...(late.stats ? { stats: late.stats } : {}),
             ...(routeException ? { routeException } : {}),
+            ...(modelRouting ? { modelRouting } : {}),
           },
         },
         { triggerTurn: true, deliverAs: "steer" },
@@ -531,11 +557,11 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       "PERSISTENT TEAM MEMBERS (member: true): spawns a long-lived headless team member instead of a one-shot sub-agent. The call returns an immediate ack (no hard barrier); the member stays alive between rounds, receives follow-up rounds via team_dispatch, and each round's result is delivered once as a steer message. Members may fire-and-forget message each other via team_send along the profile's peer-send ACL. Refused combinations: surface 'pane', interactive agents, retention 'discard', timeoutMs, dependsOn. Members cannot be dependsOn targets. Terminate a member explicitly with subagent_stop; host shutdown or /reload terminates members and marks them offline (session preserved for explicit resume). " +
       "surface parameter: 'auto' (default — headless for autonomous, visible pane for interactive), 'background' (force headless; refused for interactive agents), 'pane' (force a visible pane). " +
       "RETENTION parameter: 'auto' (default) | 'preserve' | 'discard' — controls what happens to a headless autonomous sub-agent's session artifacts (session JSONL, .loadout.json, context task/system-prompt files, activity/runtime registration) AFTER this call has settled with the real result. 'auto': successful runs are cleaned up; failed/cancelled/handed-off runs are preserved so you can resume them with subagent_message. 'preserve': always keep everything. 'discard': always clean up after a terminal state, including failures — use when you know you will never resume. Visible pane / demo sub-agents are ALWAYS preserved regardless. Cleanup never affects the tool result." +
-      "tier parameter: 'fast' | 'balanced' | 'deep' preset resolved from the pi-subagents config (models.fast/balanced/deep; aliases quick/balance/standard/strong accepted). An explicit `model` always wins over `tier`; a tier without a configured model fails with a clear error — models are never silently swapped. " +
+      "tier parameter: 'fast' | 'balanced' | 'deep' preset resolved from the pi-subagents config (ordered candidate pools models.fast/balanced/deep — arrays where the first entry is the preferred model; aliases quick/balance/standard/strong accepted). Candidates are tried in configured order: candidates that verifiably lack a capability required by the agent profile (frontmatter `capabilities`) or do not support the resolved thinking level are skipped in favor of later candidates, as are candidates whose provider is known (from the last runtime status refresh) to have exhausted its quota, be offline, or be persistently unstable; unknown/unconfirmed status never blocks a candidate. FAILOVER: if the actually-launched candidate dies on a TRANSIENT route error (rate limit / overload / timeout / temporary 5xx) before doing any work (zero tool calls), the call automatically retries the next untried candidate — each candidate at most once, in configured order, with the overall timeoutMs budget covering all attempts; parameter/credential/quota/context errors are NOT auto-retried. The tool result records the preferred model, the actual model, and the downgrade reason in details.modelRouting; if every candidate fails, a clear aggregated per-attempt error is returned. An explicit `model` always wins over `tier` (and is verified, never swapped — no failover); a tier without a configured candidate pool fails with a clear error — models are never silently swapped. " +
       "DEPENDENCIES (dependsOn): pass `dependsOn: [names]` to make this call WAIT for those same-session subagents to reach a terminal state BEFORE launching — including siblings issued in the SAME assistant message (the dependent call waits on the upstream completion promise; independent siblings still run in parallel). " +
       "When all dependencies completed, a short real-results context block is appended to `task`. If any dependency failed or was cancelled, this call does NOT launch and the tool result details carry a structured `dependencyException` (kind, dependency, upstream error) — no pane/process is created. " +
       "Rejected without launching: this call's own name, unknown names (not running, not announced by a sibling, not in the session registry), running-without-waiter (e.g. after a host reload), and interactive demo subagents (no waitable terminal state). Dependencies finished in an earlier turn are resolved from the session registry. " +
-      "ROUTE FAILURES: when a sub-agent dies on quota/auth/rate-limit/model/context errors, the tool result details carry a structured `route_exception` (kind, retryable, provider/model, suggestedActions) for YOU to decide on — there is no automatic fallback, sibling subagents keep running, and you choose whether to respawn (same or different model) or report to the user. " +
+      "ROUTE FAILURES: when a sub-agent dies on quota/auth/rate-limit/model/context errors, the tool result details carry a structured `route_exception` (kind, retryable, provider/model, suggestedActions) for YOU to decide on. Tier-pool launches auto-switch candidates ONLY for transient errors with zero progress (see the tier parameter); for everything else there is no automatic fallback — sibling subagents keep running, and you choose whether to respawn (same or different model) or report to the user. " +
       "DO NOT write polling loops, sleep/wait commands, tail/watch scripts, or repeatedly read session/log files to detect completion. If you need a deliberate one-time diagnostic snapshot, use subagent_inspect; do not call it repeatedly just to wait. " +
       "DO NOT fabricate, assume, or summarize results you do not yet have. " +
       "PANE SAFETY: you may freely create panes and read from or send keys to panes when the task requires it; but NEVER close or kill a pane you did not create yourself — before terminating any pane, verify it is yours (spawned by you in this session) or ask the user. Panes you did not create may belong to the user or other agents and may hold running work. " +
@@ -734,8 +760,20 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       }
 
       // ── 可见演示子代理(interactive):保持异步立即返回,pane 归用户操作。──
-      // watcher 到达终态后经 steer 消息回注,不阻塞主 turn。
+      // watcher 到达终态后经 steer 消息回注,不阻塞主 turn。演示路径不做
+      // 降级重试(pane 归用户,自动重启会偷换用户正在看的会话);tier 路径
+      // 的回注同样携带模型路由记录(选择期降级可见,工单 26)。
       if (running.interactive) {
+        const interactiveRouting: ModelRoutingDetails | null =
+          plan.tier != null && plan.tierPool != null
+            ? buildModelRouting({
+                tier: plan.tier,
+                pool: plan.tierPool,
+                actual: running.model ?? null,
+                attempts: [],
+                selectionSkips: plan.tierSelection?.skipped ?? [],
+              })
+            : null;
         const interactiveWatch = started.watch as Promise<SubagentResult>;
         running.watchPromise = interactiveWatch;
         interactiveWatch
@@ -774,6 +812,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
                   ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
                   ...(result.stats ? { stats: result.stats } : {}),
                   ...(routeException ? { routeException } : {}),
+                  ...(interactiveRouting ? { modelRouting: interactiveRouting } : {}),
                 },
               },
               { triggerTurn: true, deliverAs: "steer" },
@@ -836,6 +875,44 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       // (registerDetachedLateDelivery)送达一次。watcher 自身 signal 的
       // abort 只来自显式停止(subagent_stop),此时 watcher 兑 cancelled
       // 终态并终止进程/关闭 pane,走正常返回路径。
+      // ── 工单 26：模型降级重试状态（仅 tier 候选池路径；显式 model 永不换）──
+      // 首选候选遇临时性路由故障（限流/过载/超时/临时服务错误）且本次尝试
+      // 零进度（stats.toolCount === 0）时，按用户配置顺序切换下一个未尝试
+      // 候选重启；参数/凭据/额度/上下文类错误不盲目重试；每个候选至多尝试
+      // 一次、顺序不回绕；timeoutMs 覆盖全部尝试的总预算。失败尝试按保留
+      // 策略收尾；完成记录只在最终终态 settle 一次；结果 details.modelRouting
+      // 记录首选/实际/降级原因；全候选耗尽返回聚合错误。判定细节在
+      // model-failover.ts（纯策略），错误观测写入 deps.recordModelError。
+      const retentionPolicy = params.retention ?? "auto";
+      const waitDeadline = timeoutMs != null ? Date.now() + timeoutMs : null;
+      const failoverBase =
+        plan.tier != null && plan.tierPool != null && plan.tierPool.length > 0
+          ? {
+              tier: plan.tier,
+              pool: plan.tierPool,
+              preferred: plan.tierPool[0],
+              initialSkips: plan.tierSelection?.skipped ?? [],
+            }
+          : null;
+      const failoverAttempts: ModelFailoverAttempt[] = [];
+      const failedCandidates = new Set<string>();
+      let activePlan = plan;
+      let attemptIndex = 1;
+      /** 当前尝试的模型路由记录（tier 路径；其他路径 null）。 */
+      const buildAttemptModelRouting = (): ModelRoutingDetails | null =>
+        failoverBase
+          ? buildModelRouting({
+              tier: failoverBase.tier,
+              pool: failoverBase.pool,
+              actual: running.model ?? null,
+              attempts: failoverAttempts,
+              selectionSkips: failoverBase.initialSkips,
+            })
+          : null;
+
+      // 循环体所有路径要么 return（终态/detach/聚合错误）要么 continue
+      //（降级重试）；非 tier 路径首次迭代即走原单次逻辑，行为不变。
+      for (;;) {
       const watchPromise = started.watch as Promise<SubagentResult>;
       running.watchPromise = watchPromise;
 
@@ -843,15 +920,24 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         watchPromise,
         running,
         signal,
-        timeoutMs: timeoutMs ?? undefined,
+        // 工单 26：降级重试的全部尝试共享同一截止时间（首尝试与旧行为等价）。
+        timeoutMs: waitDeadline != null ? Math.max(0, waitDeadline - Date.now()) : undefined,
       });
       if (typeof raced === "object" && "kind" in raced) {
         running.waitReleased = raced.kind;
         deps.registry.markWaitReleased(running.runtimeFile, running.id, raced.kind);
         // 主工具等待被解除(Escape 或超时):子代理仍在运行,返回非终态。
         // 不 settle completion(上游仍在跑,dependsOn 等真实终态)、不清理
-        // retention、不伪造摘要。迟到回注与 handed-off 移交由同一机制幂等处理。
-        registerDetachedLateDelivery(pi, deps, running, watchPromise, params.retention ?? "auto");
+        // retention、不伪造摘要,也不触发降级重试(等待已解除)。迟到回注
+        // 与 handed-off 移交由同一机制幂等处理。
+        registerDetachedLateDelivery(
+          pi,
+          deps,
+          running,
+          watchPromise,
+          retentionPolicy,
+          buildAttemptModelRouting(),
+        );
         if (raced.kind === "timeout") {
           return {
             content: [{
@@ -873,6 +959,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
               elapsed: Math.floor((Date.now() - running.startTime) / 1000),
               timeoutMs,
               status: "timed-out",
+              ...(buildAttemptModelRouting() ?? {}),
             },
           };
         }
@@ -894,10 +981,136 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             sessionFile: running.sessionFile,
             elapsed: Math.floor((Date.now() - running.startTime) / 1000),
             status: "detached",
+            ...(buildAttemptModelRouting() ?? {}),
           },
         };
       }
       const result: SubagentResult = raced;
+
+      // ── 工单 26：临时性路由故障的候选切换判定（仅 tier 候选池路径）──
+      if (failoverBase) {
+        const cancelledNow =
+          started.signal.aborted || !!result.userClosed || !!result.stopped;
+        const routeExceptionNow = cancelledNow
+          ? undefined
+          : routeExceptionFromResult(result, running.model);
+        const untried = failoverBase.pool.filter(
+          (candidate) => !failedCandidates.has(baseModelRef(candidate)),
+        ).length;
+        const decision = shouldFailoverAfterFailure({
+          result: {
+            stopped: !!result.stopped,
+            userClosed: !!result.userClosed,
+            handedOff: !!result.handedOff,
+          },
+          routeException: routeExceptionNow,
+          toolCount: result.stats?.toolCount ?? null,
+          waitBudgetMs: waitDeadline != null ? waitDeadline - Date.now() : null,
+          untriedCandidates: untried,
+        });
+        if (decision.failover) {
+          // 本次尝试按失败收尾：记录降级链、写错误观测（供后续 spawn 的候选
+          // 选择与观测复用）、按保留策略清理工件。完成记录保持 pending——
+          // 依赖等待者只被最终终态唤醒一次，中间尝试失败不单独 settle。
+          const failedModel =
+            running.model ?? activePlan.effectiveModel ?? failoverBase.preferred;
+          failoverAttempts.push({
+            index: attemptIndex,
+            model: failedModel,
+            kind: routeExceptionNow?.kind ?? "unknown",
+            message: result.errorMessage ?? routeExceptionNow?.message ?? "unknown error",
+            elapsedSeconds: result.elapsed,
+          });
+          failedCandidates.add(baseModelRef(failedModel));
+          if (routeExceptionNow && deps.recordModelError) {
+            deps.recordModelError(failedModel, routeExceptionNow);
+          }
+          applyRetentionToRunning(running, retentionPolicy, {
+            cancelled: false,
+            failed: true,
+            handedOff: false,
+          });
+          // 重规划：排除已失败候选，按用户配置顺序取下一个；剩余候选全被
+          // 过滤时 planSpawn 报结构化错误 → 聚合错误返回（全候选不可用）。
+          const replan = deps.startup.planSpawn(params, ctx, { excludeModels: failedCandidates });
+          if (replan.kind === "error") {
+            const aggregated = aggregateFailoverExhaustion({
+              tier: failoverBase.tier,
+              pool: failoverBase.pool,
+              attempts: failoverAttempts,
+              remainingError: replan.error,
+            });
+            settleCompletionFromResult(
+              running.name,
+              {
+                exitCode: 1,
+                summary: aggregated,
+                sessionFile: running.sessionFile,
+                errorMessage: aggregated,
+              },
+              { source: "watcher" },
+            );
+            const finalRetention = applyRetentionToRunning(running, retentionPolicy, {
+              cancelled: false,
+              failed: true,
+              handedOff: false,
+            });
+            const aggregatedRouting = buildAttemptModelRouting();
+            return {
+              content: [{ type: "text", text: aggregated }],
+              details: {
+                id: running.id,
+                name: running.name,
+                task: running.task,
+                agent: running.agent,
+                ...(running.cohortId ? { cohortId: running.cohortId } : {}),
+                sessionFile: running.sessionFile,
+                exitCode: 1,
+                elapsed: result.elapsed,
+                status: "failed",
+                retention: finalRetention,
+                errorMessage: aggregated,
+                ...(result.sessionId ? { sessionId: result.sessionId } : {}),
+                ...(result.stats ? { stats: result.stats } : {}),
+                ...(routeExceptionNow ? { routeException: routeExceptionNow } : {}),
+                ...(aggregatedRouting ? { modelRouting: aggregatedRouting } : {}),
+              },
+            };
+          }
+          activePlan = replan.plan;
+          // 名字同首启规则：spawn 前后短暂保留，防止 sibling 并发抢占。
+          deps.registry.reserveName(running.name);
+          let nextStarted: StartedRun;
+          try {
+            nextStarted = await deps.startup.spawn(activePlan, ctx, pi);
+          } catch (error: any) {
+            // 重试启动失败与首启同语义：完成记录兑成失败终态后上抛。
+            settleCompletionFromResult(
+              running.name,
+              { exitCode: 1, errorMessage: error?.message ?? String(error) },
+              { source: "launch-failure" },
+            );
+            throw error;
+          } finally {
+            deps.registry.releaseName(running.name);
+          }
+          if (activePlan.cohortId) nextStarted.running.cohortId = activePlan.cohortId;
+          // 名字登记指向最新尝试的会话（后续 resume/steer 寻址最新会话）。
+          registerName(parentArtifactDir, nextStarted.running.name, {
+            sessionFile: nextStarted.running.sessionFile,
+            sessionId: getSessionId(nextStarted.running.sessionFile),
+            ...(nextStarted.running.cohortId ? { cohortId: nextStarted.running.cohortId } : {}),
+            ...(nextStarted.running.anchoredLoadout ? { anchored: true } : {}),
+          });
+          running = nextStarted.running;
+          started = nextStarted;
+          attemptIndex += 1;
+          // 工单 27：换候选后实际模型/思考等级已变，立即触发状态行重绘，
+          // 不等 1s 轮询兑底——降级必须尽快可见。
+          deps.updateWidget();
+          continue;
+        }
+      }
 
       // watcherAbort 到此只可能被 sibling subagent_stop 触发(工具 Escape 不
       // 再转发);此时 watcher 已兑出真实取消终态,走本返回路径。stopped
@@ -914,7 +1127,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       // ── 会话保留(retention)──在结果提取(watcher 内)、依赖 settle(上段)、
       // runtime record 清理(watcher 内)全部完成之后才删除工件;删除失败只
       // debug,绝不覆盖已取得的子代理结果。pane/演示与 handed-off 恒保留。
-      const retentionPolicy = params.retention ?? "auto";
+      // retentionPolicy 已在降级重试状态段声明（循环外，工单 26）。
       const retentionDetails = applyRetentionToRunning(running, retentionPolicy, {
         cancelled,
         failed,
@@ -923,6 +1136,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       if (result.handedOff) {
         // /reload 移交:显式 handed-off 语义,不报 cancelled/failed;
         // 真实结果由恢复路径在子代理结束后经 steer 消息回注。
+        const handoffRouting = buildAttemptModelRouting();
         return {
           content: [{
             type: "text",
@@ -941,9 +1155,18 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             elapsed: result.elapsed,
             status: "handed-off",
             retention: retentionDetails,
+            ...(handoffRouting ? { modelRouting: handoffRouting } : {}),
           },
         };
       }
+      // 工单 26：降级说明附在正文末尾（规格 §6：不能让用户误以为调用了首选
+      // 模型）；未降级不附加。取消类终态没有结果，不附加。
+      const modelRouting = buildAttemptModelRouting();
+      const routingNote = modelRouting ? describeModelRouting(modelRouting) : null;
+      const presentation = deps.resolveResultPresentation(result, running.name, {
+        sessionPreserved: retentionDetails.outcome !== "cleaned",
+      });
+      const presentationWithRouting = routingNote ? `${presentation}\n\n${routingNote}` : presentation;
       return {
         content: [{
           type: "text",
@@ -957,9 +1180,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
                 `Its session artifacts were cleaned up (retention: ${retentionPolicy}).`
               : `Sub-agent "${running.name}" was stopped before finishing — no result was produced. ` +
                 `Its session is preserved; resume it with subagent_message({ name: "${running.name}", message: "…" }) if needed.`
-            : deps.resolveResultPresentation(result, running.name, {
-              sessionPreserved: retentionDetails.outcome !== "cleaned",
-            }),
+            : presentationWithRouting,
         }],
         details: {
           id: running.id,
@@ -977,8 +1198,10 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
           ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
           ...(result.stats ? { stats: result.stats } : {}),
           ...(routeException ? { routeException } : {}),
+          ...(modelRouting ? { modelRouting } : {}),
         },
       };
+      } // for(;;)：工单 26 降级重试循环——所有路径在循环体内 return/continue
     },
 
     renderCall(args, theme) {
@@ -1061,13 +1284,14 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       }
       // 硬屏障终态:自动子代理的结果直接作为 tool result 返回,按状态渲染。
       if (details?.status === "completed" || details?.status === "failed" || details?.status === "cancelled") {
+        const t = deps.t ?? subagentsTableTranslator("en");
         const elapsed = typeof details.elapsed === "number" ? ` · ${details.elapsed}s` : "";
         const reason =
           details.status === "completed"
-            ? theme.fg("dim", `completed${elapsed}`)
+            ? theme.fg("dim", `${t("module.subagents.widget.result.completed")}${elapsed}`)
             : details.status === "cancelled"
-              ? theme.fg("warning", `cancelled${elapsed}`)
-              : theme.fg("error", `failed${elapsed}`);
+              ? theme.fg("warning", `${t("module.subagents.widget.result.cancelled")}${elapsed}`)
+              : theme.fg("error", `${t("module.subagents.widget.result.failed")}${elapsed}`);
         const icon = details.status === "completed" ? theme.fg("success", "✓") : theme.fg("error", "✗");
         return new Text(icon + " " + theme.fg("toolTitle", theme.bold(name)) + " " + reason, 0, 0);
       }

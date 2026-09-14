@@ -271,6 +271,7 @@ export function registerPiTuiLifecycle(
 		const sessionSource: SessionStatusSource = {
 			getTimer: () => timer?.snapshot(),
 			getSessionStatus: () => session?.snapshot(),
+			getSessionId: () => ctx.sessionManager.getSessionId(),
 			getContextUsage: () => ctx.getContextUsage(),
 			getContextWindow: () => ctx.model?.contextWindow,
 			getAutoCompactionEnabled: () => compaction?.snapshot()?.enabled,

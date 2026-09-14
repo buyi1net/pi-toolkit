@@ -1,6 +1,6 @@
-// providers 模块实现入口：控制器创建、`providers.usage` 句柄注册、会话绑定与凭据读取。
+// providers 模块实现入口：控制器创建、`providers.usage` / `providers.pool-usage` 句柄注册、会话绑定与凭据读取。
 //
-// 句柄契约见 api.ts（工单 07 定案）。控制器在模块装配时创建并注册：
+// 句柄契约见 api.ts（工单 07 定案；候选池句柄为工单 25 新增）。两个控制器在模块装配时创建并注册：
 // - 上下文经 getContext 延迟取用：装配期还没有会话，session_start 绑定后刷新才生效；
 // - 会话结束 stop() 停掉轮询并清空运行态，句柄与实例保留，下一会话重新开始；
 // - 凭据文件 `<agentDir>/pi-tui.json` 在每次刷新时现读（用户可随时编辑，读取行为与迁出前一致）；
@@ -9,14 +9,17 @@
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ModuleContext } from "../../kit/module.ts";
 import {
+	PROVIDERS_POOL_USAGE_SERVICE_NAME,
 	PROVIDERS_USAGE_SERVICE_NAME,
 	resolveProviderRefreshMs,
+	type ProvidersPoolUsageService,
 	type ProvidersUsageService,
 	type ProvidersUsageSnapshot,
 	type UsageRuntimeState,
 } from "./api.ts";
 import { loadProviderAccessFile } from "./credentials.ts";
 import { PiProviderUsageController } from "./provider-usage.ts";
+import { PoolUsageTracker } from "./pool-usage.ts";
 
 export interface ProvidersModuleOptions {
 	/** pi 的配置目录（只读的 pi-tui.json 在它下面）；默认 getAgentDir() */
@@ -56,6 +59,14 @@ export function registerProviders(context: ModuleContext, options: ProvidersModu
 		},
 	);
 
+	// 候选池观测器（工单 25）：不轮询、只按需刷新；缓存有效期跟着同一份菜单配置。
+	// 句柄缺席（本模块禁用）时编排侧按状态未知处理，不影响选择器行为。
+	const poolTracker = new PoolUsageTracker(
+		() => sessionContext,
+		() => loadProviderAccessFile(agentDir).access ?? {},
+		{ ttlMs: () => resolveProviderRefreshMs(context.getConfig()) },
+	);
+
 	context.services.register(PROVIDERS_USAGE_SERVICE_NAME, {
 		id: "providers",
 		snapshot: () => (sessionContext ? readUsageRevision(controller.getState()) : undefined),
@@ -71,6 +82,12 @@ export function registerProviders(context: ModuleContext, options: ProvidersModu
 		},
 	} satisfies ProvidersUsageService);
 
+	context.services.register(PROVIDERS_POOL_USAGE_SERVICE_NAME, {
+		id: "providers",
+		snapshot: (pool) => poolTracker.snapshot(pool),
+		refresh: (pool) => poolTracker.refresh(pool),
+	} satisfies ProvidersPoolUsageService);
+
 	context.pi.on("session_start", (_event, ctx) => {
 		sessionContext = ctx;
 		// 凭据文件解析异常按迁出前行为逐条提示（只读文件由用户维护）
@@ -83,6 +100,7 @@ export function registerProviders(context: ModuleContext, options: ProvidersModu
 	context.pi.on("session_shutdown", () => {
 		polling = false;
 		controller.stop();
+		poolTracker.stop();
 		sessionContext = undefined;
 	});
 }

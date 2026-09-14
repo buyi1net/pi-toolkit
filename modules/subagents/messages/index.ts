@@ -3,7 +3,8 @@
 // 三语（en / zh-CN / zh-TW）必须同时补齐：ZH_CN / ZH_TW 以 typeof EN 断言，缺键/多键 typecheck 报错；
 // 三语键集合相等与无未翻译值由 tests/pi-toolkit/i18n-messages.test.ts 兜底。
 
-import type { MessageTables } from "../../../i18n/index.ts";
+import { formatMessage } from "../../../i18n/index.ts";
+import type { MessageTables, MessageVars, ResolvedLanguage, Translator } from "../../../i18n/index.ts";
 
 const EN = {
   "module.subagents.label": "Subagents",
@@ -15,13 +16,53 @@ const EN = {
   "module.subagents.menu.value": "{configured}/{total} tiers mapped",
   "module.subagents.status.label": "Status widget",
   "module.subagents.status.description": "Show the status widget while sub-agents run (falls back to the bundled config when unset here)",
-  "module.subagents.tier.label": "{tier} tier model",
+  "module.subagents.tier.name.deep": "Flagship model",
+  "module.subagents.tier.name.balanced": "Balanced model",
+  "module.subagents.tier.name.fast": "Fast model",
   "module.subagents.tier.description": "Model used when a subagent asks for tier \"{tier}\"",
   "module.subagents.tier.unmapped": "Not mapped",
   "module.subagents.tier.authenticated": "authenticated",
   "module.subagents.tier.noAuthRequired": "no authentication configured",
+  "module.subagents.tier.thinking.label": "{tier} · default thinking level",
+  "module.subagents.tier.thinking.description": "Thinking level for {tier} spawns when neither the task nor the agent profile overrides it; unset means the model's own default",
+  "module.subagents.tier.thinking.unset": "Model default",
   "module.subagents.route.label": "Tier routing",
   "module.subagents.route.description": "The tier routing resolved by the six-level config chain (read-only)",
+  // ── 工单 44：状态 widget 与状态通知的状态语汇（显示层文案；状态机只出码）──
+  "module.subagents.widget.status.starting": "starting…",
+  "module.subagents.widget.status.running": "running",
+  "module.subagents.widget.status.active": "active",
+  "module.subagents.widget.status.waiting": "waiting",
+  "module.subagents.widget.status.stalled": "stalled",
+  // ── 工单 45：存活三态文案（判定在 status.ts，这里只落显示词）──
+  "module.subagents.widget.stale.toolRunning": "tool still running {duration} (no new output)",
+  "module.subagents.widget.stale.noActivity": "no new activity {duration} (last: {last})",
+  "module.subagents.widget.stalled.evidence": "stalled {duration} (snapshot and session both silent)",
+  "module.subagents.widget.status.done": "done",
+  "module.subagents.widget.scope.provider": "provider",
+  "module.subagents.widget.scope.streaming": "streaming",
+  "module.subagents.widget.scope.turn": "turn",
+  "module.subagents.widget.scope.agent": "agent",
+  "module.subagents.widget.scope.tool": "tool",
+  "module.subagents.widget.count.running": "{count} running",
+  "module.subagents.widget.orphan": "parent exited",
+  "module.subagents.widget.problem.wrongId": "wrong activity id",
+  "module.subagents.widget.line.starting": "{name} running {elapsed}, starting{detail}.",
+  "module.subagents.widget.line.running": "{name} running {elapsed}.",
+  "module.subagents.widget.line.detail": "{name} running {elapsed}, {detail}.",
+  "module.subagents.widget.line.recovered": "{name} running {elapsed}, recovered; {detail}.",
+  "module.subagents.widget.detail.active": "active ({label}{duration})",
+  "module.subagents.widget.detail.paren": " ({label})",
+  "module.subagents.widget.aggregate.title": "Subagent status",
+  "module.subagents.widget.aggregate.overflow": "+{count} more running.",
+  "module.subagents.widget.result.completed": "completed",
+  "module.subagents.widget.result.cancelled": "cancelled",
+  "module.subagents.widget.result.failed": "failed",
+  "module.subagents.widget.result.closedByUser": "closed by user",
+  "module.subagents.widget.result.failedProvider": "failed (provider/agent error)",
+  "module.subagents.widget.result.failedExit": "failed (exit {code})",
+  "module.subagents.widget.result.late": "(late delivery after detached wait)",
+  "module.subagents.widget.result.tools": "{count} tools",
 } satisfies Record<string, string>;
 
 const ZH_CN: typeof EN = {
@@ -34,13 +75,51 @@ const ZH_CN: typeof EN = {
   "module.subagents.menu.value": "{configured}/{total} 档已配置",
   "module.subagents.status.label": "状态显示",
   "module.subagents.status.description": "子代理运行期间显示状态 widget（此处未设置时回落包内配置）",
-  "module.subagents.tier.label": "{tier} 档模型",
+  "module.subagents.tier.name.deep": "旗舰模型",
+  "module.subagents.tier.name.balanced": "均衡模型",
+  "module.subagents.tier.name.fast": "快速模型",
   "module.subagents.tier.description": "子代理请求 tier \"{tier}\" 时使用的模型",
   "module.subagents.tier.unmapped": "未配置",
   "module.subagents.tier.authenticated": "已认证",
   "module.subagents.tier.noAuthRequired": "未配置认证",
+  "module.subagents.tier.thinking.label": "{tier} · 默认思考等级",
+  "module.subagents.tier.thinking.description": "子代理按 {tier} 档启动且任务与代理都未指定思考等级时使用的等级；未设置时用模型自身默认",
+  "module.subagents.tier.thinking.unset": "模型默认",
   "module.subagents.route.label": "tier 路由状态",
   "module.subagents.route.description": "六级配置链解析出的 tier 路由（只读）",
+  "module.subagents.widget.status.starting": "启动中…",
+  "module.subagents.widget.status.running": "运行中",
+  "module.subagents.widget.status.active": "活跃",
+  "module.subagents.widget.status.waiting": "等待",
+  "module.subagents.widget.status.stalled": "停滞",
+  "module.subagents.widget.stale.toolRunning": "工具仍在跑 {duration}（无新输出）",
+  "module.subagents.widget.stale.noActivity": "无新活动 {duration}（最后：{last}）",
+  "module.subagents.widget.stalled.evidence": "停滞 {duration}（快照与会话均无更新）",
+  "module.subagents.widget.status.done": "已完成",
+  "module.subagents.widget.scope.provider": "供应商",
+  "module.subagents.widget.scope.streaming": "流式",
+  "module.subagents.widget.scope.turn": "回合",
+  "module.subagents.widget.scope.agent": "代理",
+  "module.subagents.widget.scope.tool": "工具",
+  "module.subagents.widget.count.running": "{count} 个运行中",
+  "module.subagents.widget.orphan": "父已退出",
+  "module.subagents.widget.problem.wrongId": "活动 id 不符",
+  "module.subagents.widget.line.starting": "{name} 已运行 {elapsed}，启动中{detail}。",
+  "module.subagents.widget.line.running": "{name} 已运行 {elapsed}。",
+  "module.subagents.widget.line.detail": "{name} 已运行 {elapsed}，{detail}。",
+  "module.subagents.widget.line.recovered": "{name} 已运行 {elapsed}，已恢复；{detail}。",
+  "module.subagents.widget.detail.active": "活跃（{label}{duration}）",
+  "module.subagents.widget.detail.paren": "（{label}）",
+  "module.subagents.widget.aggregate.title": "子代理状态",
+  "module.subagents.widget.aggregate.overflow": "+{count} more 运行中。",
+  "module.subagents.widget.result.completed": "已完成",
+  "module.subagents.widget.result.cancelled": "已取消",
+  "module.subagents.widget.result.failed": "已失败",
+  "module.subagents.widget.result.closedByUser": "用户已关闭",
+  "module.subagents.widget.result.failedProvider": "失败（供应商/代理错误）",
+  "module.subagents.widget.result.failedExit": "失败（退出码 {code}）",
+  "module.subagents.widget.result.late": "（脱离等待后的迟到结果）",
+  "module.subagents.widget.result.tools": "{count} 个工具",
 };
 
 const ZH_TW: typeof EN = {
@@ -53,13 +132,51 @@ const ZH_TW: typeof EN = {
   "module.subagents.menu.value": "{configured}/{total} 檔已設定",
   "module.subagents.status.label": "狀態顯示",
   "module.subagents.status.description": "子代理執行期間顯示狀態 widget（此處未設定時回退套件內設定）",
-  "module.subagents.tier.label": "{tier} 檔模型",
+  "module.subagents.tier.name.deep": "旗艦模型",
+  "module.subagents.tier.name.balanced": "均衡模型",
+  "module.subagents.tier.name.fast": "快速模型",
   "module.subagents.tier.description": "子代理要求 tier \"{tier}\" 時使用的模型",
   "module.subagents.tier.unmapped": "未設定",
   "module.subagents.tier.authenticated": "已認證",
   "module.subagents.tier.noAuthRequired": "未設定認證",
+  "module.subagents.tier.thinking.label": "{tier} · 預設思考等級",
+  "module.subagents.tier.thinking.description": "子代理按 {tier} 檔啟動且任務與代理都未指定思考等級時使用的等級；未設定時用模型自身預設",
+  "module.subagents.tier.thinking.unset": "模型預設",
   "module.subagents.route.label": "tier 路由狀態",
   "module.subagents.route.description": "六級設定鏈解析出的 tier 路由（僅供檢視）",
+  "module.subagents.widget.status.starting": "啟動中…",
+  "module.subagents.widget.status.running": "執行中",
+  "module.subagents.widget.status.active": "活躍",
+  "module.subagents.widget.status.waiting": "等待",
+  "module.subagents.widget.status.stalled": "停滯",
+  "module.subagents.widget.stale.toolRunning": "工具仍在執行 {duration}（無新輸出）",
+  "module.subagents.widget.stale.noActivity": "無新活動 {duration}（最後：{last}）",
+  "module.subagents.widget.stalled.evidence": "停滯 {duration}（快照與會話均無更新）",
+  "module.subagents.widget.status.done": "已完成",
+  "module.subagents.widget.scope.provider": "供應商",
+  "module.subagents.widget.scope.streaming": "串流",
+  "module.subagents.widget.scope.turn": "回合",
+  "module.subagents.widget.scope.agent": "代理",
+  "module.subagents.widget.scope.tool": "工具",
+  "module.subagents.widget.count.running": "{count} 個執行中",
+  "module.subagents.widget.orphan": "父已退出",
+  "module.subagents.widget.problem.wrongId": "活動 id 不符",
+  "module.subagents.widget.line.starting": "{name} 已執行 {elapsed}，啟動中{detail}。",
+  "module.subagents.widget.line.running": "{name} 已執行 {elapsed}。",
+  "module.subagents.widget.line.detail": "{name} 已執行 {elapsed}，{detail}。",
+  "module.subagents.widget.line.recovered": "{name} 已執行 {elapsed}，已恢復；{detail}。",
+  "module.subagents.widget.detail.active": "活躍（{label}{duration}）",
+  "module.subagents.widget.detail.paren": "（{label}）",
+  "module.subagents.widget.aggregate.title": "子代理狀態",
+  "module.subagents.widget.aggregate.overflow": "+{count} more 執行中。",
+  "module.subagents.widget.result.completed": "已完成",
+  "module.subagents.widget.result.cancelled": "已取消",
+  "module.subagents.widget.result.failed": "已失敗",
+  "module.subagents.widget.result.closedByUser": "使用者已關閉",
+  "module.subagents.widget.result.failedProvider": "失敗（供應商/代理錯誤）",
+  "module.subagents.widget.result.failedExit": "失敗（結束碼 {code}）",
+  "module.subagents.widget.result.late": "（脫離等待後的遲到結果）",
+  "module.subagents.widget.result.tools": "{count} 個工具",
 };
 
 /** 本键表：全部模块键表在 modules/index.ts 聚合登记 */
@@ -67,3 +184,15 @@ export const SUBAGENTS_MESSAGES = { en: EN, "zh-CN": ZH_CN, "zh-TW": ZH_TW } sat
 
 /** 模块内使用的键类型（kit/module.ts 的契约字段已收窄为 string） */
 export type SubagentsMessageKey = keyof typeof EN;
+
+/** 模块内取词函数（键收窄到本模块键表）：宿主注入的 toolkit 译者与独立兜底都实现它 */
+export type SubagentsTranslate = (key: SubagentsMessageKey, vars?: MessageVars) => string;
+
+/**
+ * 只读本模块键表的译者（工单 44）：不依赖 modules/index.ts 的全局登记，
+ * 供独立 `-e` 装载（子进程里没有宿主，全局键表从未登记）与测试直接取三语文案。
+ */
+export function subagentsTableTranslator(language: ResolvedLanguage): Translator {
+  const table: Record<string, string> = SUBAGENTS_MESSAGES[language];
+  return (key, vars) => formatMessage(table[key], key, vars);
+}

@@ -22,13 +22,16 @@ import {
 	type UsageRuntimeState,
 } from "./kernel/usage-node.ts";
 
-type AccessResolver = (
+export type AccessResolver = (
 	ctx: ExtensionContext,
 	model: ProviderUsageModel | undefined,
 	config?: PiProviderAccessConfig,
 ) => Promise<ProviderAccess | null>;
 
 const OPENAI_AUTH_CLAIM = "https://api.openai.com/auth";
+
+/** 供应商查询快照缓存的公共根目录：状态栏控制器与候选池查询器（工单 25）共用同一份缓存。 */
+export const USAGE_SNAPSHOT_CACHE_ROOT = join(homedir(), ".pi", "agent", "cache", "pi-tui", "usage");
 
 function extractCodexAccountId(providerId: string, credential: string): string | undefined {
 	if (providerId !== "openai-codex") return undefined;
@@ -105,7 +108,7 @@ export class PiProviderUsageController {
 		this.runtime = options.runtime ?? new UsageRuntime({
 			userAgent: "pi-tui",
 			onChange,
-			cache: new FileUsageSnapshotCache(join(homedir(), ".pi", "agent", "cache", "pi-tui", "usage")),
+			cache: new FileUsageSnapshotCache(USAGE_SNAPSHOT_CACHE_ROOT),
 		});
 	}
 

@@ -1,8 +1,11 @@
-// 内置模块清单：三个源插件 + 从 tui 拆出的 providers 与 status，共五个模块（工单 10 / 11）。
-// 顺序 = 装配与事件钩子注册顺序。tui 放最后，避免它的钩子抢在 vision/subagents/providers/status
+// 内置模块清单：三个源插件 + 从 tui 拆出的 providers 与 status + 工单 28 的 usage + 工单 07 接入的
+// computer + 工单 33 的 peers，共八个模块。
+// 顺序 = 装配与事件钩子注册顺序。tui 放最后，避免它的钩子抢在 vision/subagents/providers/status/usage/computer/peers
 // 的 session_start 之前注册（联调用例按注册顺序取第一个 session_start 处理器）；
-// providers 与 status 在 tui 前，保证 tui 装配时 `providers.usage` 与 `status.*` 句柄
-// 已经注册（且 status 的 session_start 已绑定会话，句柄快照可用）。
+// usage 在 subagents 与 providers 之后、tui 之前：快照句柄的依赖（模型池 / 供应商观测）
+// 在装配顺序上不强制（句柄延迟查找），但面板入口要先于 tui 启动前注册；
+// computer 不注册任何钩子，只是工具面，放在 usage 之后、tui 之前；
+// peers（工单 33 骨架）只注册发现句柄与会话钩子，无命令与工具，装配顺序无隐藏耦合，放 tui 之前。
 //
 // 这里同时是全部模块三语键表的唯一聚合点（工单 09 定案）：新增模块时在本文件的
 // MODULE_MESSAGE_TABLES 里登记一次即可。引擎侧的框架级键表在 i18n/messages.ts，
@@ -15,6 +18,12 @@ import { providersModule } from "./providers/index.ts";
 import { PROVIDERS_MESSAGES } from "./providers/messages/index.ts";
 import { statusModule } from "./status/index.ts";
 import { STATUS_MESSAGES } from "./status/messages/index.ts";
+import { usageModule } from "./usage/index.ts";
+import { USAGE_MESSAGES } from "./usage/messages/index.ts";
+import { computerModule } from "./computer/index.ts";
+import { COMPUTER_MESSAGES } from "./computer/messages/index.ts";
+import { peersModule } from "./peers/index.ts";
+import { PEERS_MESSAGES } from "./peers/messages/index.ts";
 import { subagentsModule } from "./subagents/index.ts";
 import { SUBAGENTS_MESSAGES } from "./subagents/messages/index.ts";
 import { tuiModule } from "./tui/index.ts";
@@ -29,6 +38,9 @@ export const MODULE_MESSAGE_TABLES: Readonly<Record<string, MessageTables>> = {
   providers: PROVIDERS_MESSAGES,
   status: STATUS_MESSAGES,
   subagents: SUBAGENTS_MESSAGES,
+  usage: USAGE_MESSAGES,
+  computer: COMPUTER_MESSAGES,
+  peers: PEERS_MESSAGES,
   tui: TUI_MESSAGES,
 };
 
@@ -41,5 +53,8 @@ export const BUILT_IN_MODULES: readonly ModuleDefinition[] = [
   subagentsModule,
   providersModule,
   statusModule,
+  usageModule,
+  computerModule,
+  peersModule,
   tuiModule,
 ];

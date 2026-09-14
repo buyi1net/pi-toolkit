@@ -53,15 +53,21 @@ export const SubagentParams = Type.Object({
     Type.String({
       description:
         "Model tier preset: 'fast', 'balanced', or 'deep' (aliases quick/balance|standard/strong accepted). " +
-        "Resolved from the pi-subagents config (models.fast/balanced/deep). An explicit `model` always wins over `tier`. " +
-        "A tier without a configured model fails with a clear error — models are never silently swapped.",
+        "Resolved from the pi-subagents config as an ordered candidate pool (models.fast/balanced/deep, arrays; the first configured candidate is the preferred model). " +
+        "Candidates are tried in the configured order: when the host model catalog is available, candidates that verifiably lack a capability the agent profile requires (frontmatter `capabilities`, e.g. vision/reasoning) or do not support the resolved thinking level are skipped in favor of later candidates; " +
+        "a candidate whose provider is known (from the last runtime status refresh) to have exhausted its quota, be offline, or be persistently unstable is also skipped. Unknown/unconfirmed status never blocks a candidate. " +
+        "If the launched candidate then dies on a transient route error (rate limit / overload / timeout / temporary 5xx) before doing any work, the call automatically retries the next untried candidate (each candidate at most once, configured order, one shared timeoutMs budget); parameter/credential/quota/context errors are never auto-retried. " +
+        "The tool result records the preferred model, the actual model, and the downgrade reason; if every candidate fails, a clear aggregated error is returned. " +
+        "An explicit `model` always wins over `tier` (and is verified, never swapped — no failover). A tier without a configured candidate pool fails with a clear error — models are never silently swapped. " +
+        "A default thinking level configured for the tier (thinking.fast/balanced/deep) applies when neither `thinking` nor the agent profile sets one.",
     }),
   ),
   thinking: Type.Optional(
     Type.String({
       description:
         "Thinking level override for this spawn: off, minimal, low, medium, high, xhigh, or max. " +
-        "Takes precedence over the agent's frontmatter thinking and over any ':<thinking>' suffix on the model parameter.",
+        "Priority: this explicit value > the agent's frontmatter thinking > the tier's configured default > the model's own ':<thinking>' suffix. " +
+        "When the target model is known and does not support the resolved level, the spawn fails with a clear error instead of silently running at a different level.",
     }),
   ),
   cwd: Type.Optional(
