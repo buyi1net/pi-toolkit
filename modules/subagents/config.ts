@@ -24,6 +24,7 @@ import {
   THINKING_LEVELS,
   normalizeTier,
   parseTierConfig,
+  parseTierConfigLenient,
   resolveTierForParams,
   loadTierRouteConfig,
   type ModelTier,
@@ -60,31 +61,17 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * 读 `modules.subagents` 节。校验直接复用 routing.ts 的 parseTierConfig
- * （models + thinking 一次解析），保证菜单里看到的判定与 spawn 时的判定
- * 完全一致（同一份严格规则）。
+ * 读 `modules.subagents` 节。逐档宽容解析（工单 47）：一档坏值只丢该档，
+ * 其余合法档照常读出。单档校验规则与错误文案与严格入口逐字一致，
+ * spawn 路径（loadEffectiveTierConfig）仍从严，不静默降级。
  */
 export function readSubagentsSection(section: Record<string, unknown>): SubagentsSectionView {
   const problems: string[] = [];
 
-  const tier: TierMapping = {};
-  const tierThinking: TierThinkingMapping = {};
-  const rawModels = section.models;
-  const rawThinking = section.thinking;
-  if (rawModels !== undefined || rawThinking !== undefined) {
-    const parsed = parseTierConfig(
-      {
-        ...(rawModels !== undefined ? { models: rawModels } : {}),
-        ...(rawThinking !== undefined ? { thinking: rawThinking } : {}),
-      },
-      SECTION_LABEL,
-    );
-    if ("error" in parsed) problems.push(parsed.error);
-    else {
-      Object.assign(tier, parsed.config.models);
-      Object.assign(tierThinking, parsed.config.thinking);
-    }
-  }
+  const lenient = parseTierConfigLenient(section, SECTION_LABEL);
+  const tier: TierMapping = { ...lenient.models };
+  const tierThinking: TierThinkingMapping = { ...lenient.thinking };
+  problems.push(...lenient.problems);
 
   let statusEnabled: boolean | undefined;
   const status = section.status;

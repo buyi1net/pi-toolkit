@@ -31,7 +31,11 @@ export function createStatusModule(options: StatusModuleOptions = {}): ModuleDef
 		id: STATUS_MODULE_ID,
 		labelKey: "module.status.label",
 		descriptionKey: "module.status.description",
-		group: "general",
+		// 工单 46：归 TUI 分组，与 tui 模块共享「外观与状态」二级页（pageId "tui"）；
+		// 一级不出现（topLevel 空数组），行全部收进二级页
+		group: "tui",
+		pageId: "tui",
+		topLevel: () => [],
 		// schema 只放总开关；段位设置（preset / segments / telemetry）是模块自己的
 		// 结构化配置，由本模块的 menu.ts 与 status-config.ts 读写。
 		configSchema: {

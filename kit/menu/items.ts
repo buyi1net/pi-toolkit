@@ -1,7 +1,9 @@
-// 菜单行构造：顶层两组 + 分组页内容（语言、占位行、模块行）。
+// 菜单行构造：一级菜单（分组标题 + 设置行，工单 46）与共享二级页内容（模块行集合）。
 // 设计约定：SettingsList 一行只接受一个字符串，所以取值选择器回传"显示文案"，
 // 这里用同一份 i18n 选项表把文案映射回规范化取值（见 fieldValueFromLabel / languageFromLabel），
 // 因此语言切换后菜单重建即刷新全部显示，无需额外的显示态。
+// 一级结构：问题行 → 每组一个标题行 → 组内模块的顶层行（topLevel 钩子或默认规则）；
+// 需要专用编辑器的模块由 topLevel 入口行打开二级页，页内行集合由 pageId 聚合（buildPageItems）。
 
 import type { SettingItem } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -20,6 +22,7 @@ import {
   normalizeConfigValue,
   type ConfigField,
   type ModuleConfigScalar,
+  type ModuleConfigValue,
   type ModuleConfigRecord,
   type ModuleDefinition,
   type ModuleGroup,
@@ -29,17 +32,13 @@ import { moduleFieldId } from "../assembler.ts";
 import type { ConfigWriteHooks } from "../config-transaction.ts";
 import type { ToolkitProblem } from "../toolkit.ts";
 import type { ServiceRegistry } from "../services.ts";
-import { ChoicePicker, SettingsPanel } from "./panels.ts";
+import { ChoicePicker } from "./panels.ts";
 import type { MenuTheme } from "./theme.ts";
+import type { GroupedSettingItem, HeadingItem } from "./grouped-list.ts";
+import type { ModuleMenuContext } from "../module.ts";
 
 /** 语言行的 id */
 export const ID_LANGUAGE = "language";
-
-const GROUP_ID_PREFIX = "group.";
-
-export function groupItemId(group: ModuleGroup): string {
-  return `${GROUP_ID_PREFIX}${group}`;
-}
 
 export interface MenuState {
   readonly config: ToolkitConfig;
@@ -125,53 +124,85 @@ export function languageFromLabel(t: Translator, label: string): LanguageSetting
   return languageOptions(t).find((option) => option.label === label)?.setting;
 }
 
-export function buildTopLevelItems(build: MenuBuildContext): SettingItem[] {
+export function buildTopLevelItems(build: MenuBuildContext): GroupedSettingItem[] {
   const state = build.getState();
-  const items: SettingItem[] = [];
+  const items: GroupedSettingItem[] = [];
   for (const problem of state.problems) {
     items.push(problemItem(build, problem));
   }
   for (const group of MODULE_GROUPS) {
-    items.push(groupItem(build, group));
+    items.push(groupHeading(build, group));
+    if (group === "general") {
+      items.push(languageItem(build));
+    }
+    for (const active of state.modules) {
+      if (active.definition.group !== group) continue;
+      items.push(...moduleTopItems(build, active.definition));
+    }
   }
   return items;
 }
 
-export function buildGroupItems(build: MenuBuildContext, group: ModuleGroup): SettingItem[] {
-  const items: SettingItem[] = [];
-  if (group === "general") {
-    items.push(languageItem(build));
+function groupHeadingKey(group: ModuleGroup): FrameworkMessageKey {
+  switch (group) {
+    case "general":
+      return "group.general";
+    case "tui":
+      return "group.tui";
+    case "models":
+      return "group.models";
+    case "subagents":
+      return "group.subagents";
   }
-  for (const active of build.getState().modules) {
-    if (active.definition.group !== group) continue;
-    items.push(...moduleItems(build, active.definition));
-  }
-  return items;
 }
 
-function groupLabelKeys(group: ModuleGroup): { label: FrameworkMessageKey; description: FrameworkMessageKey } {
-  return group === "general"
-    ? { label: "group.general", description: "group.general.description" }
-    : { label: "group.subagents", description: "group.subagents.description" };
+function groupHeading(build: MenuBuildContext, group: ModuleGroup): HeadingItem {
+  return { kind: "heading", label: build.t(groupHeadingKey(group)) };
 }
 
-function groupItem(build: MenuBuildContext, group: ModuleGroup): SettingItem {
-  const keys = groupLabelKeys(group);
+/** 模块在一级的行：topLevel 钩子优先，缺省按默认规则（schema 字段行 + menuItems 入口行） */
+function moduleTopItems(build: MenuBuildContext, definition: ModuleDefinition): SettingItem[] {
+  if (definition.topLevel) {
+    return [...definition.topLevel(moduleMenuContext(build, definition))];
+  }
+  return moduleItems(build, definition);
+}
+
+/** 构造传给模块钩子的菜单上下文（menuItems / topLevel 共用） */
+export function moduleMenuContext(
+  build: MenuBuildContext,
+  definition: ModuleDefinition,
+): ModuleMenuContext {
   return {
-    id: groupItemId(group),
-    label: build.t(keys.label),
-    description: build.t(keys.description),
-    currentValue: build.t("group.itemCount", { count: buildGroupItems(build, group).length }),
-    submenu: (_currentValue, done) =>
-      new SettingsPanel({
-        title: build.t(keys.label),
-        items: buildGroupItems(build, group),
-        theme: build.theme,
-        t: build.t,
-        onChange: build.onChange,
-        onClose: () => done(),
-      }),
+    t: build.t,
+    services: build.getState().services,
+    getConfig: () => build.getModuleConfig(definition.id),
+    context: build.context,
+    agentDir: build.agentDir,
+    theme: build.theme,
+    requestRender: () => build.requestRender(),
+    saveConfig: (patch, hooks) => build.saveModuleConfig(definition.id, patch, hooks),
+    onChange: build.onChange,
+    ...(definition.pageId === undefined
+      ? {}
+      : { pageItems: () => buildPageItems(build, definition.pageId!, definition.id) }),
   };
+}
+
+/** 共享二级页行集合：页主模块的行在前，其余同 pageId 模块按装配顺序追加 */
+export function buildPageItems(
+  build: MenuBuildContext,
+  pageId: string,
+  ownerModuleId?: string,
+): SettingItem[] {
+  const members = build
+    .getState()
+    .modules.filter((active) => active.definition.pageId === pageId);
+  const ordered = [
+    ...members.filter((active) => active.definition.id === ownerModuleId),
+    ...members.filter((active) => active.definition.id !== ownerModuleId),
+  ];
+  return ordered.flatMap((active) => moduleItems(build, active.definition));
 }
 
 function problemItem(build: MenuBuildContext, problem: ToolkitProblem): SettingItem {
@@ -216,25 +247,53 @@ function moduleItems(build: MenuBuildContext, definition: ModuleDefinition): Set
   const config = build.getModuleConfig(definition.id);
   const items: SettingItem[] = [];
   for (const [key, field] of Object.entries(definition.configSchema)) {
-    // schema 字段是标量；这里再规范化一次，把类型收成标量（取值非法时回落到默认值）
-    const current = normalizeConfigValue(field, config[key]) ?? field.default;
-    items.push(fieldItem(build, definition, key, field, current));
+    items.push(fieldItem(build, definition, key, field, config[key]));
   }
   if (definition.menuItems) {
-    items.push(
-      ...definition.menuItems({
-        t: build.t,
-        services: build.getState().services,
-        getConfig: () => build.getModuleConfig(definition.id),
-        context: build.context,
-        agentDir: build.agentDir,
-        theme: build.theme,
-        requestRender: () => build.requestRender(),
-        saveConfig: (patch, hooks) => build.saveModuleConfig(definition.id, patch, hooks),
-      }),
-    );
+    items.push(...definition.menuItems(moduleMenuContext(build, definition)));
   }
   return items;
+}
+
+/**
+ * schema 字段行的通用构造（骨架自动行与模块 topLevel 钩子共用，工单 46）：
+ * 当前值在内部规范化（非法取值回落默认值），label / description 缺省从字段键取；
+ * 取值选择器回传显示文案，经列表的统一改动入口（onChange）落盘，模块不需要自己的保存逻辑。
+ */
+export function schemaFieldRow(options: {
+  readonly t: Translator;
+  readonly theme: MenuTheme;
+  readonly id: string;
+  readonly field: ConfigField;
+  readonly label?: string;
+  readonly description?: string;
+  readonly current: ModuleConfigValue;
+}): SettingItem {
+  const { t, theme, field } = options;
+  const current = normalizeConfigValue(field, options.current) ?? field.default;
+  const currentCode = fieldCode(current);
+  const label = options.label ?? t(field.labelKey);
+  const description =
+    options.description ?? (field.descriptionKey === undefined ? undefined : t(field.descriptionKey));
+  return {
+    id: options.id,
+    label,
+    ...(description === undefined ? {} : { description }),
+    currentValue: fieldDisplayValue(t, field, current),
+    submenu: (_currentValue, done) =>
+      new ChoicePicker({
+        title: label,
+        options: fieldOptions(t, field).map((option) => ({
+          value: option.code,
+          label: option.label,
+          ...(option.code === currentCode ? { description: t("common.current") } : {}),
+        })),
+        theme,
+        t,
+        onSelect: (_value, displayLabel) => done(displayLabel),
+        onCancel: () => done(),
+      }),
+  };
 }
 
 function fieldItem(
@@ -242,27 +301,13 @@ function fieldItem(
   definition: ModuleDefinition,
   key: string,
   field: ConfigField,
-  current: ModuleConfigScalar | undefined,
+  current: ModuleConfigValue,
 ): SettingItem {
-  const label = build.t(field.labelKey);
-  const currentCode = fieldCode(current);
-  return {
+  return schemaFieldRow({
+    t: build.t,
+    theme: build.theme,
     id: moduleFieldId(definition.id, key),
-    label,
-    ...(field.descriptionKey === undefined ? {} : { description: build.t(field.descriptionKey) }),
-    currentValue: fieldDisplayValue(build.t, field, current),
-    submenu: (_currentValue, done) =>
-      new ChoicePicker({
-        title: label,
-        options: fieldOptions(build.t, field).map((option) => ({
-          value: option.code,
-          label: option.label,
-          ...(option.code === currentCode ? { description: build.t("common.current") } : {}),
-        })),
-        theme: build.theme,
-        t: build.t,
-        onSelect: (_value, displayLabel) => done(displayLabel),
-        onCancel: () => done(),
-      }),
-  };
+    field,
+    current,
+  });
 }

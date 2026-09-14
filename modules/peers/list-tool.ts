@@ -146,6 +146,12 @@ export function buildPeersListOutput(snapshot: PeersDiscoverySnapshot, identity:
       `PEER DISCOVERY PROBLEM (${snapshot.error.kind}): ${snapshot.error.detail} — the list below is the last successful scan and may be stale.`,
     );
   }
+  // 重码投递口径（工单 51，规格决策 8）：有重码条目才补这一句，说清离线条目不把目标拖成多义
+  if ([...online, ...offline].some((entry) => entry.duplicateShortId)) {
+    lines.push(
+      "DUPLICATE SHORT IDS: a target that matches both live and offline sessions is delivered to the live instance; only multiple live instances are ambiguous.",
+    );
+  }
   if (online.length === 0 && offline.length === 0 && snapshot.error === null) {
     lines.push("No peer sessions found on this machine.");
   } else {
@@ -173,7 +179,8 @@ export function registerPeersListTool(pi: ExtensionAPI, deps: PeersListToolDeps)
       "List peer pi sessions on this machine (same agent directory). " +
       "Two sections: ACTIVE sessions (running instances, with liveness/activity status) and OFFLINE sessions (recently exited, discovered from session files). " +
       "Each entry carries: 6-char short id (like #62nvbt), full session id, instance id (empty for offline), name, working directory, session file path and status. " +
-      "Entries are annotated for: yourself, multiple instances of one session, duplicate short ids, missing session files, and list truncation.",
+      "Entries are annotated for: yourself, multiple instances of one session, duplicate short ids, missing session files, and list truncation. " +
+      "An offline entry never makes a target ambiguous: a target matching both live and offline sessions is delivered to the live instance, and only multiple live instances refuse as ambiguous-address. ",
     promptSnippet:
       "List local peer pi sessions (active/offline) with short id, session id, instance id, name, cwd, file path and status",
     parameters: Type.Object({}),

@@ -43,16 +43,16 @@ export interface StatusSettingsOverride {
 }
 
 const PRESET_SEGMENTS: Readonly<Record<StatusPresetName, readonly StatusSegmentId[]>> = {
-	minimal: ["model", "context", "project", "git"],
-	default: ["provider", "model", "thinking", "balance", "subscription", "tokens", "cache", "context", "project", "git", "duration", "extensions"],
-	full: ["provider", "model", "thinking", "balance", "subscription", "tokens", "cache", "context", "project", "git", "duration", "runtime", "extensions"],
+	minimal: ["model", "context", "project", "session", "git"],
+	default: ["provider", "model", "thinking", "balance", "subscription", "tokens", "cache", "context", "project", "session", "git", "duration", "extensions"],
+	full: ["provider", "model", "thinking", "balance", "subscription", "tokens", "cache", "context", "project", "session", "git", "duration", "runtime", "extensions"],
 };
 
 const VALID_PRESETS = new Set<StatusPresetName>(["minimal", "default", "full"]);
 const VALID_SEGMENTS = new Set<StatusSegmentId>(PRESET_SEGMENTS.full);
 const EDITOR_LEFT = new Set<StatusSegmentId>(["provider", "model", "thinking", "balance", "subscription", "duration"]);
 const FOOTER_USAGE = new Set<StatusSegmentId>(["tokens", "cache", "context"]);
-const FOOTER_PRIMARY = new Set<StatusSegmentId>(["project", "git", "runtime"]);
+const FOOTER_PRIMARY = new Set<StatusSegmentId>(["project", "session", "git", "runtime"]);
 const FOOTER_EXTRA = new Set<StatusSegmentId>(["extensions"]);
 
 export const STATUS_PRESET_NAMES: readonly StatusPresetName[] = ["minimal", "default", "full"];

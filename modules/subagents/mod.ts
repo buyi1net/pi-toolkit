@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   readFileSync,
@@ -505,7 +505,7 @@ function formatWidgetRightLabel(snapshot: StatusSnapshot): string {
   if (snapshot.kind === "starting") return ` ${t("module.subagents.widget.status.starting")} `;
   if (snapshot.kind === "running") return ` ${t("module.subagents.widget.status.running")} ${snapshot.elapsedText} `;
   if (snapshot.kind === "active") {
-    const label = activeScopeLabel(t, snapshot);
+    const label = activeScopeLabel(snapshot);
     const duration = snapshot.activeDurationText ? ` ${snapshot.activeDurationText}` : "";
     return label ? ` ${t("module.subagents.widget.status.active")} · ${label}${duration} ` : ` ${t("module.subagents.widget.status.active")} `;
   }
@@ -521,7 +521,7 @@ function formatWidgetRightLabel(snapshot: StatusSnapshot): string {
     return ` ${t("module.subagents.widget.stale.toolRunning", { duration })} `;
   }
   if (snapshot.kind === "stale") {
-    const last = activeScopeLabel(t, snapshot) ?? snapshot.latestEvent ?? "—";
+    const last = activeScopeLabel(snapshot) ?? snapshot.latestEvent ?? "—";
     const duration = snapshot.staleDurationText ?? "";
     return ` ${t("module.subagents.widget.stale.noActivity", { duration, last })} `;
   }
@@ -846,9 +846,10 @@ function ownPackageName(): string | null {
 /**
  * 从 packages 条目解析包名(去版本/ref):
  * npm:@scope/name@1.2.3 → @scope/name(全名,保留 scope 供精确比对);
- * git:host/path#ref → path 末段;绝对路径 → 末段目录名。
+ * git:host/path#ref → path 末段;其余条目(npm/git 之外 pi 一律按本地路径
+ * 看待,裸名亦然)按 baseDir 解析成绝对路径后取末段目录名。
  */
-function entryPackageName(entry: string): string | null {
+function entryPackageName(entry: string, baseDir: string): string | null {
   if (entry.startsWith("npm:")) {
     let spec = entry.slice("npm:".length);
     if (spec.startsWith("@")) {
@@ -866,19 +867,20 @@ function entryPackageName(entry: string): string | null {
     const pathPart = entry.split("#")[0].replace(/^git:(https?:\/\/)?/, "");
     return pathPart.split("/").filter(Boolean).pop() ?? null;
   }
-  if (isAbsolute(entry)) {
-    return entry.split(/[\\/]/).filter(Boolean).pop() ?? null;
-  }
-  return null;
+  return resolve(baseDir, entry).split(/[\\/]/).filter(Boolean).pop() ?? null;
 }
 
 /**
  * 判定子进程的扩展发现是否会注册与本模块同批的工具(spawning 工具):
- * 读子进程 agentDir 的 settings.json,packages 里任一条目是本包,或绝对
- * 路径条目的安装根覆盖 SUBAGENTS_DIR(本地测试包场景),即成立。
+ * 读子进程 agentDir 的 settings.json,packages 里任一条目是本包,或本地
+ * 路径条目(绝对/相对)的安装根覆盖 SUBAGENTS_DIR(本地测试包场景),即成立。
  * 与“是否同一份拷贝”无关:任何一份 pi-toolkit 被发现都会注册同批工具,
  * 再注入本模块必致工具名冲突。读不到或格式异常按不成立处理(保守保留注入)。
- * 匹配精度:npm 条目带 scope,全名精确匹配;git/绝对路径没有 scope 对应
+ * 相对路径基准是 settings.json 所在目录,不是进程 cwd:pi 包管理器按 scope
+ * 的 base dir 解析本地条目并据此写入相对条目(user scope = agentDir,project
+ * scope = <cwd>/.pi;dist/core/package-manager.js 的 getBaseDirForScope /
+ * resolvePathFromBase,工单 54 探针实测命中 agentDir 基准)。
+ * 匹配精度:npm 条目带 scope,全名精确匹配;git/本地路径没有 scope 对应
  * 关系只能末段名匹配——误命中面仅限“同时装着同名异主的 git 仓/目录”,
  * 后果是少注入一次(工具由那份同名包提供,仍可用),可接受。
  */
@@ -901,10 +903,12 @@ function childDiscoversOwnPackage(agentDir: string | null): boolean {
             ) ?? null
           : null;
       if (!entry) continue;
-      const name = entryPackageName(entry);
+      const isLocalEntry = !entry.startsWith("npm:") && !entry.startsWith("git:");
+      const name = entryPackageName(entry, dir);
       if (own && name === own) return true;
       if (own && !entry.startsWith("npm:") && name === own.split("/").pop()) return true;
-      if (isAbsolute(entry) && isWithin(target, entry)) return true;
+      // 本地条目(含相对路径)解析后覆盖本模块目录 → 子进程必然发现同一批工具
+      if (isLocalEntry && isWithin(target, resolve(dir, entry))) return true;
     }
   } catch {
     return false;

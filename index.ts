@@ -7,7 +7,7 @@ import {
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import { languageLabelKey } from "./i18n/index.ts";
-import { groupItemId } from "./kit/menu/items.ts";
+import { ID_LANGUAGE } from "./kit/menu/items.ts";
 import { createMenuTheme } from "./kit/menu/theme.ts";
 import { applyMenuChange, ToolkitMenu } from "./kit/menu/toolkit-menu.ts";
 import { ENABLED_FIELD } from "./kit/module.ts";
@@ -65,8 +65,8 @@ function registerControlCommand(pi: ExtensionAPI, toolkit: Toolkit): void {
           if (result.kind === "language") {
             const name = t()(languageLabelKey(result.language));
             ctx.ui.notify(t()("notify.languageChanged", { language: name }), "info");
-            // 语言变了要重建菜单，否则列表里的文案还是旧语言
-            menu?.refresh(groupItemId("general"));
+            // 语言变了要重建菜单，否则列表里的文案还是旧语言；选中回到语言行
+            menu?.refresh(ID_LANGUAGE);
             return;
           }
 

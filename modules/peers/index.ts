@@ -18,7 +18,14 @@
 // 通讯端点监听（工单 38）随会话生命周期建立；通讯主链路与 peers_send 归工单 39；
 // 本单验收：模块可安装、可开关、无残留、诊断可观测、句柄快照结构就位。
 
-import { enabledField, type ModuleContext, type ModuleDefinition } from "../../kit/module.ts";
+import {
+  enabledField,
+  type ModuleConfigSchema,
+  type ModuleContext,
+  type ModuleDefinition,
+  type ModuleMenuContext,
+} from "../../kit/module.ts";
+import { schemaFieldRow } from "../../kit/menu/items.ts";
 import { PEERS_INBOUND_POLICIES, PEERS_MODULE_ID, type PeersInboundPolicy } from "./api.ts";
 import { registerPeers, type PeersModuleOptions } from "./mod.ts";
 
@@ -124,6 +131,35 @@ const INBOUND_POLICY_LABEL_KEYS: Readonly<Record<PeersInboundPolicy, string>> = 
   reject: "module.peers.inboundPolicy.reject",
 };
 
+/** 配置 schema：菜单顶层钩子与装配共用同一份定义（工单 46） */
+const PEERS_CONFIG_SCHEMA: ModuleConfigSchema = {
+  enabled: enabledField("module.peers.enabled.label", "module.peers.enabled.description"),
+  inboundPolicy: {
+    default: "accept",
+    values: PEERS_INBOUND_POLICIES,
+    labelKey: "module.peers.inboundPolicy.label",
+    descriptionKey: "module.peers.inboundPolicy.description",
+    valueLabelKeys: INBOUND_POLICY_LABEL_KEYS,
+  },
+};
+
+/**
+ * 顶层行（工单 46）：只放入站策略一行，直接在一级改。
+ * 「关闭跨会话协作」开关按用户决策撤掉（跨会话协作是默认能力），
+ * enabled 字段保留在 schema 里供装配门控，但不再出现在菜单。
+ */
+function peersTopLevel(context: ModuleMenuContext) {
+  return [
+    schemaFieldRow({
+      t: context.t,
+      theme: context.theme,
+      id: `${PEERS_MODULE_ID}.inboundPolicy`,
+      field: PEERS_CONFIG_SCHEMA.inboundPolicy,
+      current: context.getConfig()["inboundPolicy"],
+    }),
+  ];
+}
+
 export function createPeersModule(options: PeersModuleOptions = {}): ModuleDefinition {
   return {
     id: PEERS_MODULE_ID,
@@ -132,16 +168,8 @@ export function createPeersModule(options: PeersModuleOptions = {}): ModuleDefin
     group: "general",
     // 配置契约（规格定案）：菜单 schema 只放 enabled 与入站策略枚举；
     // 阈值类数值参数是模块私有结构化配置，由 config.ts 的解析器校验。
-    configSchema: {
-      enabled: enabledField("module.peers.enabled.label", "module.peers.enabled.description"),
-      inboundPolicy: {
-        default: "accept",
-        values: PEERS_INBOUND_POLICIES,
-        labelKey: "module.peers.inboundPolicy.label",
-        descriptionKey: "module.peers.inboundPolicy.description",
-        valueLabelKeys: INBOUND_POLICY_LABEL_KEYS,
-      },
-    },
+    configSchema: PEERS_CONFIG_SCHEMA,
+    topLevel: peersTopLevel,
     register(context: ModuleContext): void {
       registerPeers(context, options);
     },

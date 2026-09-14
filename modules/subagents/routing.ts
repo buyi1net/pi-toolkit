@@ -90,6 +90,84 @@ export interface TierRouteConfig {
 
 export type TierConfigParseResult = { config: TierRouteConfig } | { error: string };
 
+/** 未知 tier 键检查（models / thinking 共用）：合法返回归一化档位，非法返回错误文案。 */
+function resolveTierKey(
+  kind: "models" | "thinking",
+  key: string,
+  source: string,
+): { tier: ModelTier } | { error: string } {
+  const tier = normalizeTier(key);
+  if (!tier) {
+    return {
+      error: `${source}: ${kind} has unsupported tier key "${key}" (use ${MODEL_TIERS.join(", ")})`,
+    };
+  }
+  return { tier };
+}
+
+/** 同档别名重复检查（models / thinking 共用）：合法时登记键名，非法返回错误文案。 */
+function checkTierAlias(
+  kind: "models" | "thinking",
+  tier: ModelTier,
+  key: string,
+  aliasOwner: Map<ModelTier, string>,
+  source: string,
+): { ok: true } | { error: string } {
+  const previousKey = aliasOwner.get(tier);
+  if (previousKey !== undefined) {
+    return {
+      error: `${source}: ${kind} has conflicting entries for tier "${tier}" ("${previousKey}" and "${key}")`,
+    };
+  }
+  aliasOwner.set(tier, key);
+  return { ok: true };
+}
+
+/** 单档候选池校验：合法返回有序池，非法返回错误文案（严格与宽容入口共用）。 */
+function checkTierPool(
+  key: string,
+  value: unknown,
+  source: string,
+): { pool: string[] } | { error: string } {
+  if (!Array.isArray(value)) {
+    return {
+      error: `${source}: models.${key} must be a non-empty array of model ids (ordered candidate pool)`,
+    };
+  }
+  if (value.length === 0) {
+    return { error: `${source}: models.${key} candidate pool must not be empty` };
+  }
+  const pool: string[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const candidate = value[index];
+    if (typeof candidate !== "string" || candidate.trim() === "") {
+      return { error: `${source}: models.${key}[${index}] must be a non-empty model id` };
+    }
+    if (/\s/.test(candidate)) {
+      return { error: `${source}: models.${key}[${index}] must not contain whitespace` };
+    }
+    pool.push(candidate);
+  }
+  return { pool };
+}
+
+/** 单档思考等级校验：合法返回等级（null 墓碑返回 undefined），非法返回错误文案。 */
+function checkTierThinking(
+  key: string,
+  value: unknown,
+  source: string,
+): { level: ThinkingLevel | undefined } | { error: string } {
+  if (value === null) return { level: undefined };
+  if (typeof value !== "string" || !isThinkingLevel(value)) {
+    return {
+      error:
+        `${source}: thinking.${key} must be one of: ${THINKING_LEVELS.join(", ")} ` +
+        `(or null to unset); got ${String(value)}`,
+    };
+  }
+  return { level: value };
+}
+
 /**
  * 严格校验 tier 配置。根对象允许携带其它键(包级 config.json 与 status 配置
  * 共用同一文件,这里只认 models 与 thinking);models 内部从严:未知 tier 键、
@@ -121,39 +199,13 @@ export function parseTierConfig(raw: unknown, source: string): TierConfigParseRe
   const models: Partial<Record<ModelTier, string[]>> = {};
   const aliasOwner = new Map<ModelTier, string>();
   for (const [key, value] of Object.entries(rawModels as Record<string, unknown>)) {
-    const tier = normalizeTier(key);
-    if (!tier) {
-      return {
-        error: `${source}: models has unsupported tier key "${key}" (use ${MODEL_TIERS.join(", ")})`,
-      };
-    }
-    if (!Array.isArray(value)) {
-      return {
-        error: `${source}: models.${key} must be a non-empty array of model ids (ordered candidate pool)`,
-      };
-    }
-    if (value.length === 0) {
-      return { error: `${source}: models.${key} candidate pool must not be empty` };
-    }
-    const pool: string[] = [];
-    for (let index = 0; index < value.length; index += 1) {
-      const candidate = value[index];
-      if (typeof candidate !== "string" || candidate.trim() === "") {
-        return { error: `${source}: models.${key}[${index}] must be a non-empty model id` };
-      }
-      if (/\s/.test(candidate)) {
-        return { error: `${source}: models.${key}[${index}] must not contain whitespace` };
-      }
-      pool.push(candidate);
-    }
-    const previousKey = aliasOwner.get(tier);
-    if (previousKey !== undefined) {
-      return {
-        error: `${source}: models has conflicting entries for tier "${tier}" ("${previousKey}" and "${key}")`,
-      };
-    }
-    aliasOwner.set(tier, key);
-    models[tier] = pool;
+    const resolved = resolveTierKey("models", key, source);
+    if ("error" in resolved) return { error: resolved.error };
+    const pooled = checkTierPool(key, value, source);
+    if ("error" in pooled) return { error: pooled.error };
+    const alias = checkTierAlias("models", resolved.tier, key, aliasOwner, source);
+    if ("error" in alias) return { error: alias.error };
+    models[resolved.tier] = pooled.pool;
   }
   return { config: { models, thinking: thinking.thinking, sourcePath: source } };
 }
@@ -169,30 +221,97 @@ function parseTierThinking(
   const thinking: Partial<Record<ModelTier, ThinkingLevel>> = {};
   const aliasOwner = new Map<ModelTier, string>();
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    const tier = normalizeTier(key);
-    if (!tier) {
-      return {
-        error: `${source}: thinking has unsupported tier key "${key}" (use ${MODEL_TIERS.join(", ")})`,
-      };
-    }
-    const previousKey = aliasOwner.get(tier);
-    if (previousKey !== undefined) {
-      return {
-        error: `${source}: thinking has conflicting entries for tier "${tier}" ("${previousKey}" and "${key}")`,
-      };
-    }
-    aliasOwner.set(tier, key);
-    if (value === null) continue; // 显式 unset 墓碑：按未设置处理
-    if (typeof value !== "string" || !isThinkingLevel(value)) {
-      return {
-        error:
-          `${source}: thinking.${key} must be one of: ${THINKING_LEVELS.join(", ")} ` +
-          `(or null to unset); got ${String(value)}`,
-      };
-    }
-    thinking[tier] = value;
+    const resolved = resolveTierKey("thinking", key, source);
+    if ("error" in resolved) return { error: resolved.error };
+    const alias = checkTierAlias("thinking", resolved.tier, key, aliasOwner, source);
+    if ("error" in alias) return { error: alias.error };
+    const checked = checkTierThinking(key, value, source);
+    if ("error" in checked) return { error: checked.error };
+    if (checked.level !== undefined) thinking[resolved.tier] = checked.level;
   }
   return { thinking };
+}
+
+/** 宽容解析的结果：合法的档进映射，非法项进 problems（文案与严格入口逐字一致）。 */
+export interface LenientTierView {
+  readonly models: Partial<Record<ModelTier, string[]>>;
+  readonly thinking: Partial<Record<ModelTier, ThinkingLevel>>;
+  readonly problems: readonly string[];
+}
+
+/**
+ * 逐档宽容解析（工单 47）：菜单读侧用。某一档非法只丢该档并记一条 problem，
+ * 不影响同节其它合法档——否则一档坏值会让整节显示为空，用户看到的是「全部
+ * 未配置」，与实际配置和写入轨迹都对不上。
+ *
+ * spawn 路径仍走严格入口 parseTierConfig（配错就直接报错，不静默降级）；
+ * 两边共用同一套单档校验与错误文案，判定标准不会分歧。
+ */
+export function parseTierConfigLenient(raw: unknown, source: string): LenientTierView {
+  const models: Partial<Record<ModelTier, string[]>> = {};
+  const thinking: Partial<Record<ModelTier, ThinkingLevel>> = {};
+  const problems: string[] = [];
+
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { models, thinking, problems: [`${source}: root must be a JSON object`] };
+  }
+  const root = raw as Record<string, unknown>;
+
+  const rawThinking = root.thinking;
+  if (rawThinking !== undefined) {
+    if (rawThinking == null || typeof rawThinking !== "object" || Array.isArray(rawThinking)) {
+      problems.push(`${source}: thinking must be an object`);
+    } else {
+      const aliasOwner = new Map<ModelTier, string>();
+      for (const [key, value] of Object.entries(rawThinking as Record<string, unknown>)) {
+        const resolved = resolveTierKey("thinking", key, source);
+        if ("error" in resolved) {
+          problems.push(resolved.error);
+          continue;
+        }
+        const alias = checkTierAlias("thinking", resolved.tier, key, aliasOwner, source);
+        if ("error" in alias) {
+          problems.push(alias.error);
+          continue;
+        }
+        const checked = checkTierThinking(key, value, source);
+        if ("error" in checked) {
+          problems.push(checked.error);
+          continue;
+        }
+        if (checked.level !== undefined) thinking[resolved.tier] = checked.level;
+      }
+    }
+  }
+
+  const rawModels = root.models;
+  if (rawModels !== undefined) {
+    if (rawModels == null || typeof rawModels !== "object" || Array.isArray(rawModels)) {
+      problems.push(`${source}: models must be an object`);
+    } else {
+      const aliasOwner = new Map<ModelTier, string>();
+      for (const [key, value] of Object.entries(rawModels as Record<string, unknown>)) {
+        const resolved = resolveTierKey("models", key, source);
+        if ("error" in resolved) {
+          problems.push(resolved.error);
+          continue;
+        }
+        const pooled = checkTierPool(key, value, source);
+        if ("error" in pooled) {
+          problems.push(pooled.error);
+          continue;
+        }
+        const alias = checkTierAlias("models", resolved.tier, key, aliasOwner, source);
+        if ("error" in alias) {
+          problems.push(alias.error);
+          continue;
+        }
+        models[resolved.tier] = pooled.pool;
+      }
+    }
+  }
+
+  return { models, thinking, problems };
 }
 
 export interface TierConfigLoadResult {

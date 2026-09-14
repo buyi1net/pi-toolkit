@@ -2,8 +2,8 @@
 //
 // 线协议契约（规格「通讯·线协议契约」）：
 // - 帧 = 4 字节大端长度前缀（负载字节数）+ UTF-8 JSON 负载；协议版本随帧携带；
-// - 请求帧字段：协议版本、消息 id、发送方会话 id + 实例 id、发送方名字、发送方 cwd、
-//   正文、文件引用（相对路径 + 字节大小 + sha256）、时间戳；
+// - 请求帧字段：协议版本、消息 id、被回复消息 id（replyTo，可为 null）、发送方会话 id +
+//   实例 id、发送方名字、发送方 cwd、正文、文件引用（相对路径 + 字节大小 + sha256）、时间戳；
 // - 响应帧：三态结果（accepted / rejected / error）+ 原因码 + 服务端时间；
 // - 超时：连接与写入各设独立超时；单帧设上限（阈值来自 config.ts 的结构化解析器）；
 // - 非法帧 / 未知版本：拒绝并返回协议错误原因码，不崩溃、不挂连接、不误读后续帧。
@@ -68,11 +68,14 @@ export interface PeersFileRef {
   readonly sha256: string;
 }
 
-/** 请求帧：一个待投递的消息（发送方身份字段由接收端对账，展示权威值在注册表侧） */
+/** 请求帧：一个待投递的消息（发送方身份字段由接收端对账，展示权威值在注册表侧）。
+ * replyTo 为被回复消息的完整 id 或 null（内部类型必填：「可选」只指线上旧帧可缺失，
+ * 解码把缺失与 null 都归一为 null；编码器始终输出该键）。 */
 export interface PeersRequestFrame {
   readonly type: "request";
   readonly protocolVersion: number;
   readonly messageId: string;
+  readonly replyTo: string | null;
   readonly sessionId: string;
   readonly instanceId: string;
   readonly name: string | null;
@@ -172,6 +175,14 @@ function optionalText(value: unknown): string | null | undefined {
   return undefined;
 }
 
+/** replyTo 校验（与 messageId 同口径）：缺失与 null 都归一为 null，非空字符串合法；
+ * 空串与其它类型返回 undefined（调用方按非法帧拒绝） */
+function optionalReplyTo(value: unknown): string | null | undefined {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" && value !== "") return value;
+  return undefined;
+}
+
 function requireFiniteNumber(value: unknown, field: string): number | PeersPayloadIssue {
   return typeof value === "number" && Number.isFinite(value)
     ? value
@@ -194,6 +205,8 @@ function validateFileRef(value: unknown): PeersFileRef | PeersPayloadIssue {
 function validateRequest(raw: Record<string, unknown>): PeersRequestFrame | PeersPayloadIssue {
   const messageId = requireText(raw.messageId, "messageId");
   if (typeof messageId !== "string") return messageId;
+  const replyTo = optionalReplyTo(raw.replyTo);
+  if (replyTo === undefined) return { reason: "invalid-frame", detail: "replyTo 必须是 null 或非空字符串" };
   const sessionId = requireText(raw.sessionId, "sessionId");
   if (typeof sessionId !== "string") return sessionId;
   const instanceId = requireText(raw.instanceId, "instanceId");
@@ -215,6 +228,7 @@ function validateRequest(raw: Record<string, unknown>): PeersRequestFrame | Peer
     type: "request",
     protocolVersion: PEERS_PROTOCOL_VERSION,
     messageId,
+    replyTo,
     sessionId,
     instanceId,
     name,
@@ -395,10 +409,20 @@ export interface PeersSendOptions {
   readonly now?: () => number;
 }
 
-/** 发送结果：对端回执的响应帧，或本端判定的失败（原因码 + 说明） */
+/** 发送失败的阶段（规格决策 10）：编排层按它决定是否重试。
+ * 编码超单帧上限发生在连接之前，阶段为 null；connect / write / response 各自对应
+ * 连接建立、帧写入、等待响应三个阶段，只作如实报告，不做原因码反推。 */
+export type PeersSendStage = "connect" | "write" | "response" | null;
+
+/** 发送结果：对端回执的响应帧，或本端判定的失败（阶段 + 原因码 + 说明） */
 export type PeersSendOutcome =
   | { readonly kind: "response"; readonly response: PeersResponseFrame }
-  | { readonly kind: "failure"; readonly reason: PeersReasonCode; readonly detail: string };
+  | {
+      readonly kind: "failure";
+      readonly stage: PeersSendStage;
+      readonly reason: PeersReasonCode;
+      readonly detail: string;
+    };
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -440,15 +464,17 @@ function safeClose(connection: PeersTransportConnection): void {
 
 /**
  * 发送一帧并等待对端响应（一连接一请求一响应，用完即关）。
- * 语义（阈值均来自结构化配置）：
- * - 编码超单帧上限 → 失败 content-too-large（不碰传输）；
- * - 连接在 connectTimeoutMs 内未建立 → 失败 connect-timeout（迟到建立的连接立即关闭）；
- * - 连接被拒 → 失败 offline（对方端点不存在/不可达）；
- * - 写入在 writeTimeoutMs 内未完成 / 失败 → 失败 write-timeout / offline；
- * - 响应帧非法（未知版本、非 JSON、消息 id 不匹配、收到请求帧）→ 失败对应原因码；
+ * 语义（阈值均来自结构化配置；失败结果一律如实带阶段，映射写在各返回点）：
+ * - 编码超单帧上限 → 失败 content-too-large（不碰传输，阶段 null）；
+ * - 连接在 connectTimeoutMs 内未建立 → 失败 connect-timeout（阶段 connect，迟到建立的连接立即关闭）；
+ * - 连接被拒 → 失败 offline（阶段 connect，对方端点不存在/不可达）；
+ * - 写入在 writeTimeoutMs 内未完成 / 失败 → 失败 write-timeout / offline（阶段 write）；
+ * - 响应帧非法（未知版本、非 JSON、消息 id 不匹配、收到请求帧）→ 失败对应原因码（阶段 response）；
  * - 响应等待沿用写入超时预算（规格只设连接/写入两个超时），但为绝对截止时间：
- *   进入响应等待时一次算定，逐字节滴流不能续期，到点即 write-timeout；
- * - 连接在响应到达前关闭 → 失败 offline。
+ *   进入响应等待时一次算定，逐字节滴流不能续期，到点即 write-timeout（阶段 response）；
+ * - 连接在响应到达前关闭 → 失败 offline（阶段 response）。
+ * 阶段是编排层重试策略的唯一依据：按原因码反推会把「可能已写出的帧」再发一遍
+ * （连接被拒、写入失败、响应前关闭都映射成 offline，写入失败时帧可能已写出）。
  */
 export async function sendPeersFrame(
   transport: PeersTransport,
@@ -464,6 +490,7 @@ export async function sendPeersFrame(
   if (!encoded.ok) {
     return {
       kind: "failure",
+      stage: null,
       reason: "content-too-large",
       detail: `帧负载 ${encoded.payloadBytes} 字节超过单帧上限 ${encoded.maxFrameBytes} 字节`,
     };
@@ -477,10 +504,10 @@ export async function sendPeersFrame(
       (late) => safeClose(late),
       () => {},
     );
-    return { kind: "failure", reason: "connect-timeout", detail: `连接 ${connectTimeoutMs}ms 内未建立` };
+    return { kind: "failure", stage: "connect", reason: "connect-timeout", detail: `连接 ${connectTimeoutMs}ms 内未建立` };
   }
   if (connectOutcome.kind === "error") {
-    return { kind: "failure", reason: "offline", detail: `连接失败：${describeError(connectOutcome.error)}` };
+    return { kind: "failure", stage: "connect", reason: "offline", detail: `连接失败：${describeError(connectOutcome.error)}` };
   }
   const connection = connectOutcome.value;
 
@@ -507,11 +534,11 @@ export async function sendPeersFrame(
   if (writeOutcome.kind === "timeout") {
     writePromise.catch(() => {}); // 迟到的失败按已处理消化，不外溢
     safeClose(connection);
-    return { kind: "failure", reason: "write-timeout", detail: `写入 ${writeTimeoutMs}ms 内未完成` };
+    return { kind: "failure", stage: "write", reason: "write-timeout", detail: `写入 ${writeTimeoutMs}ms 内未完成` };
   }
   if (writeOutcome.kind === "error") {
     safeClose(connection);
-    return { kind: "failure", reason: "offline", detail: `写入失败：${describeError(writeOutcome.error)}` };
+    return { kind: "failure", stage: "write", reason: "offline", detail: `写入失败：${describeError(writeOutcome.error)}` };
   }
 
   // 等待首个解码事件：预算沿用写入超时（规格未单设响应超时），但按绝对截止时间执行——
@@ -521,6 +548,7 @@ export async function sendPeersFrame(
     safeClose(connection);
     return {
       kind: "failure",
+      stage: "response",
       reason: "write-timeout",
       detail: `响应在 ${writeTimeoutMs}ms 内未到达（沿用写入超时预算，绝对截止）`,
     };
@@ -531,17 +559,17 @@ export async function sendPeersFrame(
       safeClose(connection);
       if (event.kind === "frame") {
         if (event.frame.type !== "response") {
-          return { kind: "failure", reason: "invalid-frame", detail: "响应通道收到请求帧" };
+          return { kind: "failure", stage: "response", reason: "invalid-frame", detail: "响应通道收到请求帧" };
         }
         if (event.frame.messageId !== frame.messageId) {
-          return { kind: "failure", reason: "invalid-frame", detail: "响应消息 id 与请求不匹配" };
+          return { kind: "failure", stage: "response", reason: "invalid-frame", detail: "响应消息 id 与请求不匹配" };
         }
         return { kind: "response", response: event.frame };
       }
-      return { kind: "failure", reason: event.reason, detail: event.detail };
+      return { kind: "failure", stage: "response", reason: event.reason, detail: event.detail };
     }
     if (closed) {
-      return { kind: "failure", reason: "offline", detail: "连接在响应到达前关闭" };
+      return { kind: "failure", stage: "response", reason: "offline", detail: "连接在响应到达前关闭" };
     }
     const remaining = responseDeadline - now();
     if (remaining <= 0) return responseTimeoutFailure();

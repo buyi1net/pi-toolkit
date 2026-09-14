@@ -31,32 +31,19 @@ export function statusLabelText(t: SubagentsTranslate, code: SubagentStatusLabel
 }
 
 /**
- * 活跃期范围标签：scope 词翻当前语言；tool 档的 label 是工具名（数据，
- * 不翻），只有拿不到工具名时才退 scope 兜底词。scope 缺席但 label 存在的
- * 旧快照按原样展示（不推测它是哪一类）。
+ * 活跃期范围标签：工具名与活动码都是数据（跨语言通用），一律原样展示——
+ * 这里的第二字段是活动标识，不是自然语言（工单 44 后续修正：只有状态词与
+ * 整句句式走三语，标识不翻）。scope 缺席但 label 存在的旧快照同样原样展示
+ * （不推测它是哪一类）。
  */
-export function activeScopeLabel(t: SubagentsTranslate, snapshot: Pick<StatusSnapshot, "activityLabel" | "activeScope">): string | null {
-  const label = snapshot.activityLabel ?? snapshot.activeScope;
-  if (!label) return null;
-  if (snapshot.activeScope === "tool") {
-    return label === "tool" ? t("module.subagents.widget.scope.tool") : label;
-  }
-  switch (snapshot.activeScope) {
-    case "provider":
-      return t("module.subagents.widget.scope.provider");
-    case "streaming":
-      return t("module.subagents.widget.scope.streaming");
-    case "turn":
-      return t("module.subagents.widget.scope.turn");
-    case "agent":
-      return t("module.subagents.widget.scope.agent");
-    default:
-      return label;
-  }
+export function activeScopeLabel(
+  snapshot: Pick<StatusSnapshot, "activityLabel" | "activeScope">,
+): string | null {
+  return snapshot.activityLabel ?? snapshot.activeScope ?? null;
 }
 
 function formatActiveDetail(t: SubagentsTranslate, snapshot: StatusSnapshot): string {
-  const label = activeScopeLabel(t, snapshot);
+  const label = activeScopeLabel(snapshot);
   if (!label) return t("module.subagents.widget.status.active");
   const duration = snapshot.activeDurationText ? ` ${snapshot.activeDurationText}` : "";
   return t("module.subagents.widget.detail.active", { label, duration });
@@ -83,7 +70,7 @@ function formatStalledDetail(t: SubagentsTranslate, snapshot: StatusSnapshot): s
 
 /** 工单 45：stale 档（信息陈旧）的最后活动标签；拿不到时用中性破折号。 */
 function staleLastLabel(t: SubagentsTranslate, snapshot: Pick<StatusSnapshot, "activityLabel" | "activeScope" | "latestEvent">): string {
-  return activeScopeLabel(t, snapshot) ?? snapshot.latestEvent ?? "—";
+  return activeScopeLabel(snapshot) ?? snapshot.latestEvent ?? "—";
 }
 
 function formatStaleDetail(t: SubagentsTranslate, snapshot: StatusSnapshot): string {

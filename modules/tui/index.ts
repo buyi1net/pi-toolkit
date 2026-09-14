@@ -17,13 +17,13 @@
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { enabledField, type ModuleContext, type ModuleDefinition } from "../../kit/module.ts";
 import { TUI_MODULE_ID, readTuiSection } from "./config.ts";
-import { buildTuiMenuItems, TUI_MENU_ITEM_ID, type TuiMenuRuntime } from "./menu.ts";
+import { buildTuiMenuItems, buildTuiTopLevel, TUI_MENU_ITEM_ID, type TuiMenuRuntime } from "./menu.ts";
 import { registerPiTuiLifecycle, type PiTuiLifecycleHandle } from "./plugin/lifecycle.ts";
 import type { VisibleScreenOutput } from "./plugin/screen-transition.ts";
 import type { LoadedPiTuiConfig } from "./plugin/settings-config.ts";
 
 export { TUI_MODULE_ID } from "./config.ts";
-export { TUI_MENU_ITEM_ID, TuiPanel } from "./menu.ts";
+export { TUI_MENU_ITEM_ID } from "./menu.ts";
 
 export interface TuiModuleOptions {
 	/** pi 的配置目录（pi-toolkit.json 在它下面）；默认 getAgentDir() */
@@ -69,7 +69,9 @@ export function createTuiModule(options: TuiModuleOptions = {}): ModuleDefinitio
 		id: TUI_MODULE_ID,
 		labelKey: "module.tui.label",
 		descriptionKey: "module.tui.description",
-		group: "general",
+		// 工单 46：单独一组的「外观与状态」入口，与 status 模块共享二级页（pageId "tui"）
+		group: "tui",
+		pageId: "tui",
 	// schema 只放总开关；外观与高级是结构化配置（非 schema 键），
 	// 由本模块的菜单与配置层读写。供应商刷新间隔归 providers 模块，
 	// 状态预设 / 段位与回复遥测开关归 status 模块。
@@ -78,6 +80,9 @@ export function createTuiModule(options: TuiModuleOptions = {}): ModuleDefinitio
 		},
 		register(context): void {
 			registerTui(context, options, runtime);
+		},
+		topLevel(context): ReturnType<typeof buildTuiTopLevel> {
+			return buildTuiTopLevel(context, runtime);
 		},
 		menuItems(context): ReturnType<typeof buildTuiMenuItems> {
 			return buildTuiMenuItems(context, runtime);

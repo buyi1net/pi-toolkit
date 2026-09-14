@@ -12,7 +12,7 @@ import {
 	DEFAULT_PROVIDER_REFRESH_MS,
 	PROVIDER_REFRESH_INTERVALS,
 } from "./api.ts";
-import { buildProvidersMenuItems } from "./menu.ts";
+import { buildProvidersMenuItems, buildProvidersTopLevel } from "./menu.ts";
 import { registerProviders, type ProvidersModuleOptions } from "./mod.ts";
 
 /** 模块 id：同时是配置节名与菜单项 id 前缀 */
@@ -39,7 +39,9 @@ export function createProvidersModule(options: ProvidersModuleOptions = {}): Mod
 		id: PROVIDERS_MODULE_ID,
 		labelKey: "module.providers.label",
 		descriptionKey: "module.providers.description",
-		group: "general",
+		// 工单 46：归「模型与用量」分组，与 usage 模块共享二级页（pageId "providers-usage"）
+		group: "models",
+		pageId: "providers-usage",
 		configSchema: {
 			enabled: enabledField("module.providers.enabled.label", "module.providers.enabled.description"),
 			refreshMs: {
@@ -53,6 +55,7 @@ export function createProvidersModule(options: ProvidersModuleOptions = {}): Mod
 		register(context: ModuleContext): void {
 			registerProviders(context, options);
 		},
+		topLevel: buildProvidersTopLevel,
 		menuItems(context): ReturnType<typeof buildProvidersMenuItems> {
 			return buildProvidersMenuItems(context);
 		},

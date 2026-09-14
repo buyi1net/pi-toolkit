@@ -133,6 +133,10 @@ function readRegistrationFile(file: string): PeerRegistration | null {
   return validateRegistration(parsed);
 }
 
+function describeFailure(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /**
  * 按心跳年龄判活性：≤stale 判 online、≤cleanup 判 stale（响应迟缓）、超过判 offline。
  * 心跳时间在未来（对端时钟超前）按 online 处理（保守，不推测为过期）。
@@ -196,6 +200,70 @@ export function readPeerRegistrations(
     });
   }
   return { registrations, skipped };
+}
+
+/** 定向读取的输入：定位成分（帧自报，不可信）+ 活性判定输入 */
+export interface PeerRegistrationIdentityQuery {
+  readonly sessionId: string;
+  readonly instanceId: string;
+  readonly now: number;
+  readonly settings: PeersSettings;
+  /** 定位失败的运行期诊断上报（成分不合法 / 文件不存在或不可读）；内容不合法不报（与全量读同口径） */
+  readonly onDiagnostic?: (detail: string) => void;
+}
+
+/**
+ * 定向读取（工单 51，规格决策 7）：按「会话 id + 实例 id」直接定位那一个注册文件，不做
+ * 全量枚举。判定与全量读 readPeerRegistrations 同口径——读到了就带双阈值活性返回，
+ * 读不到一律返回 null（调用方按「来源未登记」处理，不区分原因）：
+ * - 两个成分先过写入侧同一文件名守卫（peerRegistrationFileName），不合法不拼路径，记诊断；
+ * - 文件不存在或不可读（含路径被目录占用等）记诊断；
+ * - 文件可解析但内容不合法（版本不符、字段结构坏、内容身份与定位成分不符）与全量读跳过
+ *   损坏 / 他版文件同口径：静默按未登记处理，不报诊断（全量读也只计数不报）。
+ */
+export function readPeerRegistrationByIdentity(
+  agentDir: string,
+  query: PeerRegistrationIdentityQuery,
+): PeerRegistrationRead | null {
+  let file: string;
+  try {
+    file = peerRegistrationFile(agentDir, query.sessionId, query.instanceId);
+  } catch (error) {
+    query.onDiagnostic?.(
+      `peers 注册查询被文件名守卫拒绝（会话 ${JSON.stringify(query.sessionId)} 实例 ${JSON.stringify(query.instanceId)}）：${describeFailure(error)}；按来源未登记处理`,
+    );
+    return null;
+  }
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    query.onDiagnostic?.(
+      `peers 注册查询定位失败（会话 ${query.sessionId} 实例 ${query.instanceId}）：${describeFailure(error)}；按来源未登记处理`,
+    );
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const registration = validateRegistration(parsed);
+  // 交叉校验同全量读：注册内容里的会话 id 与实例 id 必须与帧自报一致（全量读按内容实例 id
+  // 选条目、由判定层比对会话 id；定向读按文件名定位，两个成分都在这里对账）
+  if (
+    registration === null ||
+    registration.instanceId !== query.instanceId ||
+    registration.sessionId !== query.sessionId
+  ) {
+    return null;
+  }
+  return {
+    file,
+    registration,
+    liveness: peerRegistrationLiveness(query.now - registration.heartbeatAt, query.settings),
+  };
 }
 
 /** 心跳循环的定时器句柄 */

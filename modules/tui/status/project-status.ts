@@ -17,11 +17,14 @@ import { durationStatusColor, formatElapsed } from "./status-segments.ts";
 
 const SEPARATOR = " · ";
 const MIN_SEGMENT_WIDTH = 8;
+// git 段低于此宽度整段丢弃（工单 48 修正：短码优先于 git，git 先裁）
+const MIN_GIT_WIDTH = 8;
 const DEFAULT_GLYPHS = resolveGlyphs("unicode");
 const DEFAULT_PROJECT_STATUS_SEGMENTS: readonly ProjectStatusSegmentId[] = ["project", "git"];
 
 export type ProjectStatusRole =
 	| "path"
+	| "session"
 	| "separator"
 	| "branch"
 	| "branch-pending"
@@ -39,6 +42,7 @@ export interface ProjectStatusPart {
 
 const ROLE_COLORS: Readonly<Record<ProjectStatusRole, ThemeColor>> = {
 	path: "text",
+	session: "warning",
 	separator: "text",
 	branch: "accent",
 	"branch-pending": "dim",
@@ -196,6 +200,28 @@ function fitGitParts(
 	return [{ ...branch, text: truncateFromEnd(branch.text, branchWidth) }, ...suffix];
 }
 
+/** 路径 + 会话短码的宽度分配（工单 48 修正）：短码原样优先保留，路径吃剩余宽度；
+ * 短码放不下时先让路径整段让位（去掉组内分隔符），最后才退到只渲染路径。 */
+function fitPathSessionParts(
+	path: string,
+	sessionParts: readonly ProjectStatusPart[],
+	width: number,
+	glyphs: IconGlyphs,
+): ProjectStatusPart[] {
+	if (width <= 0) return [];
+	const sessionWidth = partsWidth(sessionParts);
+	const sessionOnly = sessionParts[0]?.role === "separator" ? sessionParts.slice(1) : sessionParts;
+	if (sessionWidth <= width) {
+		const pathWidth = width - sessionWidth;
+		if (pathWidth > 0) {
+			return [{ text: fitProjectPath(path, pathWidth, glyphs), role: "path" }, ...sessionParts];
+		}
+		return [...sessionOnly];
+	}
+	if (partsWidth(sessionOnly) <= width) return [...sessionOnly];
+	return [{ text: fitProjectPath(path, width, glyphs), role: "path" }];
+}
+
 function joinProjectStatusGroups(
 	path: ProjectStatusPart[],
 	git: ProjectStatusPart[],
@@ -227,20 +253,32 @@ export function layoutProjectStatusLine(
 	if (width <= 0) return [];
 	const order = [...new Set(segments)].filter(
 		(segment): segment is ProjectStatusSegmentId =>
-			segment === "project" || segment === "git" || segment === "duration" || segment === "runtime",
+			segment === "project" ||
+			segment === "session" ||
+			segment === "git" ||
+			segment === "duration" ||
+			segment === "runtime",
 	);
 	const showPath = order.includes("project");
+	const showSession = order.includes("session");
 	const showGit = order.includes("git");
 	const showDuration = order.includes("duration");
 	const showRuntime = order.includes("runtime");
-	if (!showPath && !showGit && !showDuration && !showRuntime) return [];
+	if (!showPath && !showSession && !showGit && !showDuration && !showRuntime) return [];
 	const path = formatProjectPath(snapshot.cwd, home);
 	const projectPath = `${formatLeadingIcon(glyphs.project)}${path}`;
 	const fullPath: ProjectStatusPart[] = showPath ? [{ text: projectPath, role: "path" }] : [];
+	// 会话短码与路径同组（工单 48）：组内自带分隔符，随路径一起参与压缩与降级；
+	// 取不到合法短码时整段隐藏
+	if (showSession && snapshot.sessionShort) {
+		// 路径未启用时不带组内分隔符，避免行首出现孤立的分隔符
+		if (fullPath.length > 0) fullPath.push({ text: SEPARATOR, role: "separator" });
+		fullPath.push({ text: `#${snapshot.sessionShort}`, role: "session" });
+	}
 	const fullGit = showGit ? projectGitParts(snapshot, glyphs) : [];
 	const fullDuration = showDuration ? projectDurationParts(snapshot, glyphs) : [];
 	const fullRuntime = showRuntime ? projectRuntimeParts(snapshot, glyphs) : [];
-	if (!showPath && fullGit.length === 0 && fullDuration.length === 0) {
+	if (fullPath.length === 0 && fullGit.length === 0 && fullDuration.length === 0) {
 		return fullRuntime.length > 0
 			? [{ ...fullRuntime[0]!, text: truncateFromEnd(fullRuntime[0]!.text, width) }]
 			: [];
@@ -253,7 +291,8 @@ export function layoutProjectStatusLine(
 		const baseWidth = width - durationWidth - visibleWidth(SEPARATOR);
 		if (baseWidth >= MIN_SEGMENT_WIDTH) {
 			const baseOrder = order.filter(
-				(segment): segment is ProjectStatusSegmentId => segment === "project" || segment === "git",
+				(segment): segment is ProjectStatusSegmentId =>
+					segment === "project" || segment === "session" || segment === "git",
 			);
 			const base = layoutProjectStatusLine(
 				{ ...snapshot, duration: undefined, runtime: undefined },
@@ -269,31 +308,44 @@ export function layoutProjectStatusLine(
 	}
 
 	const reducedOrder = order.filter((segment) => segment !== "duration");
-	if (fullGit.length === 0 && showPath) {
-		return [{ text: fitProjectPath(path, width, glyphs), role: "path" }];
+	// 会话短码（工单 48 修正）：路径组内路径之后的部分（组内自带分隔符）。
+	const sessionParts = showPath ? fullPath.slice(1) : fullPath;
+	const sessionWidth = partsWidth(sessionParts);
+	if (!showPath) {
+		if (sessionWidth === 0) return fitGitParts(snapshot, width, glyphs);
+		// 无项目段：短码原样优先，git 只用剩余宽度，放不下整段丢
+		const gitBudget = width - sessionWidth - visibleWidth(SEPARATOR);
+		if (fullGit.length > 0 && gitBudget >= MIN_GIT_WIDTH) {
+			return [
+				...sessionParts,
+				{ text: SEPARATOR, role: "separator" },
+				...fitGitParts(snapshot, gitBudget, glyphs),
+			];
+		}
+		return sessionWidth <= width ? [...sessionParts] : [];
 	}
-	if (!showPath) return fitGitParts(snapshot, width, glyphs);
+	if (fullGit.length === 0) {
+		// 无 git 段：路径按剩余宽度拟合，会话短码原样保留（工单 48）
+		return fitPathSessionParts(path, sessionParts, width, glyphs);
+	}
 
-	const fullWidth = visibleWidth(projectPath) + visibleWidth(SEPARATOR) + partsWidth(fullGit);
+	const fullWidth = partsWidth(fullPath) + visibleWidth(SEPARATOR) + partsWidth(fullGit);
 	if (fullWidth <= width) {
 		return joinProjectStatusGroups(fullPath, fullGit, [], [], reducedOrder);
 	}
-	const minProjectWidth = MIN_SEGMENT_WIDTH + visibleWidth(formatLeadingIcon(glyphs.project));
-	if (width < visibleWidth(SEPARATOR) + MIN_SEGMENT_WIDTH * 2) {
-		return [{ text: fitProjectPath(path, width, glyphs), role: "path" }];
+	// 超宽降级（工单 48 修正）：git 只用「路径 + 短码」之外的剩余宽度并在不足时整段丢，
+	// 短码尽量保到最后一档，路径随后才压缩与截断。
+	const gitBudget = width - partsWidth(fullPath) - visibleWidth(SEPARATOR);
+	if (gitBudget >= MIN_GIT_WIDTH) {
+		return joinProjectStatusGroups(
+			fullPath,
+			fitGitParts(snapshot, gitBudget, glyphs),
+			[],
+			[],
+			reducedOrder,
+		);
 	}
-
-	const contentWidth = width - visibleWidth(SEPARATOR);
-	const gitBudget = contentWidth - minProjectWidth;
-	const fittedGit = fitGitParts(snapshot, gitBudget, glyphs);
-	const pathWidth = contentWidth - partsWidth(fittedGit);
-	return joinProjectStatusGroups(
-		[{ text: fitProjectPath(path, pathWidth, glyphs), role: "path" }],
-		fittedGit,
-		[],
-		[],
-		reducedOrder,
-	);
+	return fitPathSessionParts(path, sessionParts, width, glyphs);
 }
 
 export function formatProjectStatusLine(

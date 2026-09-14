@@ -43,9 +43,9 @@ export interface ConfigField {
 
 export type ModuleConfigSchema = Record<string, ConfigField>;
 
-/** 菜单分组：顶层菜单的两组 */
-export type ModuleGroup = "general" | "subagents";
-export const MODULE_GROUPS: readonly ModuleGroup[] = ["general", "subagents"];
+/** 菜单分组：一级菜单的四个分组标题（工单 46；标题行只做视觉分隔，不响应回车、不参与搜索） */
+export type ModuleGroup = "general" | "tui" | "models" | "subagents";
+export const MODULE_GROUPS: readonly ModuleGroup[] = ["general", "tui", "models", "subagents"];
 
 /** 模块总开关字段名；每个模块的 schema 必须声明它 */
 export const ENABLED_FIELD = "enabled";
@@ -121,6 +121,13 @@ export interface ModuleMenuContext {
    * 重绘请求由菜单层注入，模块只需给出补丁与 reapply。
    */
   saveConfig(patch: ModuleConfigRecord, hooks?: ConfigWriteHooks): Promise<void>;
+  /** 顶层统一改动入口（id 与显示文案，工单 46）：共享二级页里 schema 字段行的取值经它落盘 */
+  onChange(id: string, value: string): void;
+  /**
+   * 共享二级页行集合（工单 46）：与本模块同 pageId 的启用模块的行，本模块的行在前。
+   * 未声明 pageId 的模块没有这一项。
+   */
+  pageItems?(): readonly SettingItem[];
 }
 
 export interface ModuleDefinition {
@@ -135,6 +142,17 @@ export interface ModuleDefinition {
   readonly register: (context: ModuleContext) => void;
   /** 可选：schema 自动生成的行之外，本模块专属的菜单行；同样只在模块启用时渲染 */
   readonly menuItems?: (context: ModuleMenuContext) => readonly SettingItem[];
+  /**
+   * 共享二级页归属（工单 46）：同 pageId 的启用模块共用一个二级页，
+   * 页面入口行由页主模块（提供 topLevel 入口行的模块）的子菜单打开。
+   */
+  readonly pageId?: string;
+  /**
+   * 顶层行钩子（工单 46）：模块在一级菜单（所在分组标题下）直接呈现的行。
+   * 不提供时按默认规则生成：schema 字段行 + menuItems 的入口行。
+   * 提供空数组表示本模块在一级不出现，行全部收进二级页。
+   */
+  readonly topLevel?: (context: ModuleMenuContext) => readonly SettingItem[];
 }
 
 const MODULE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
@@ -146,6 +164,12 @@ export function assertModuleDefinition(definition: ModuleDefinition): void {
   }
   if (!MODULE_GROUPS.includes(definition.group)) {
     throw new Error(`模块 ${definition.id} 的菜单分组不合法：${String(definition.group)}`);
+  }
+  if (definition.topLevel !== undefined && typeof definition.topLevel !== "function") {
+    throw new Error(`模块 ${definition.id} 的 topLevel 必须是函数`);
+  }
+  if (definition.pageId !== undefined && (typeof definition.pageId !== "string" || definition.pageId === "")) {
+    throw new Error(`模块 ${definition.id} 的 pageId 必须是非空字符串`);
   }
   const enabled = definition.configSchema[ENABLED_FIELD];
   if (!enabled || !isBooleanField(enabled)) {

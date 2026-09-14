@@ -1,5 +1,5 @@
 // peers 模块实现入口（工单 33 骨架 + 34 磁盘层扫描 + 35 会话注册 + 36 发现合并与 peers_list
-// + 38 端点监听 + 39 通讯主链路 + 40 大内容通道与限流防护）：发现快照控制器 +
+// + 38 端点监听 + 39 通讯主链路 + 40 大内容通道与限流防护 + 50 外部消息卡片渲染器）：发现快照控制器 +
 // `peers.discovery` 句柄 + 心跳维护器接线 + 端点生命周期 + 入站判定与注入 + 大内容
 // 文件通道与 TTL 清理 + 速率/队列/环路防护 + peers_send 工具 + 诊断呈现。
 //
@@ -32,8 +32,9 @@ import { createPeersEndpointServer, createPeersTransport, type PeersEndpointServ
 import { cleanupPeersExpiredFiles } from "./file-store.ts";
 import { registerPeersListTool } from "./list-tool.ts";
 import { createPeersDedupeWindow, createPeersInboundHandler, createPeersRateGuard } from "./messaging.ts";
+import { registerPeersRenderers } from "./renderer.ts";
 import { registerPeersSendTool } from "./send-tool.ts";
-import { createHeartbeatMaintainer, readPeerRegistrations } from "./registry.ts";
+import { createHeartbeatMaintainer, readPeerRegistrationByIdentity, readPeerRegistrations } from "./registry.ts";
 import { createPeersDiskScanner, type PeersDiskScanner } from "./scan.ts";
 
 function describeError(error: unknown): string {
@@ -300,10 +301,16 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
       const raw = context.getConfig().inboundPolicy;
       return raw === "reject" ? "reject" : "accept";
     },
-    findSourceRegistration: (instanceId, now) =>
-      readPeerRegistrations(agentDir, { now, settings: currentSettings() }).registrations.find(
-        (read) => read.registration.instanceId === instanceId,
-      ) ?? null,
+    // 入站来源校验（工单 51）：按帧自报的会话 id + 实例 id 定向读那一个注册文件（不再全量枚举），
+    // 定位失败按来源未登记并进运行期诊断——判定顺序与口径由 messaging.ts 的纯函数保证
+    findSourceRegistration: (instanceId, now, sessionId) =>
+      readPeerRegistrationByIdentity(agentDir, {
+        sessionId,
+        instanceId,
+        now,
+        settings: currentSettings(),
+        onDiagnostic: (detail) => runtime.reportRuntime(detail),
+      }),
     dedupe: createPeersDedupeWindow({ getWindowMs: () => currentSettings().dedupeWindowMs, now: moduleOptions.now ?? Date.now }),
     inject: (message, deliverOptions) => context.pi.sendMessage(message, deliverOptions),
     now: moduleOptions.now ?? Date.now,
@@ -397,19 +404,35 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
     label: context.t("module.peers.tool.list.label"),
   });
 
-  // 模型侧发送工具（工单 39 + 40）：候选集直读注册层与扫描层（共享磁盘扫描器的全量窗口，
-  // 不经列表合并器的截断与排序）；发送方自报字段取本实例注册身份（heartbeat.identity）；
+  // 模型侧发送工具（工单 39 + 40 + 51）：寻址分两段可替换入口——注册层只读注册文件（命中即
+  // 终局，不碰会话树），未命中才走扫描层（注册层 + 磁盘层合并候选集，共享磁盘扫描器的全量
+  // 窗口，不经列表合并器的截断与排序）；发送方自报字段取本实例注册身份（heartbeat.identity）；
   // 大内容转文件与环路防护的发送侧计数经 deps 接入
   registerPeersSendTool(context.pi, {
     getOwnIdentity: () => heartbeat.identity(),
-    loadCandidates: () => {
+    loadRegistryCandidates: () => {
       const settings = currentSettings();
       const now = (moduleOptions.now ?? Date.now)();
       const { registrations } = readPeerRegistrations(agentDir, { now, settings });
-      // 寻址候选不设列表上限：scan() 不传 limit 即全量（截断只属于列表展示层）
-      const disk = diskScanner.scan();
-      return [...collectPeerSessionCandidates({ registrations, disk: disk.sessions }).values()];
+      return [...collectPeerSessionCandidates({ registrations, disk: [] }).values()];
     },
+    loadCandidates: () => {
+      const settings = currentSettings();
+      const now = (moduleOptions.now ?? Date.now)();
+      try {
+        // 候选读取（注册层 + 扫描层）同一兜底：注册层读取失败与扫描器抛错都归一成显式
+        // 失败结果；细节文案不预判失败出自哪一层，避免注册层读取失败被外层误报成扫描树失败
+        const { registrations } = readPeerRegistrations(agentDir, { now, settings });
+        // 寻址候选不设列表上限：scan() 不传 limit 即全量（截断只属于列表展示层）
+        const disk = diskScanner.scan();
+        return [...collectPeerSessionCandidates({ registrations, disk: disk.sessions }).values()];
+      } catch (error) {
+        // 发送候选读取失败（注册层或扫描层）：按错误原样返回（细节文案不预判失败出自哪一层），
+        // 由 messaging.ts 统一加「读取发送候选失败」前缀；不降级成「对方离线」或「目标不明」
+        return { failure: describeError(error) };
+      }
+    },
+    reportDiagnostic: (detail) => runtime.reportRuntime(detail),
     transport: createPeersTransport(),
     getSettings: () => currentSettings(),
     agentDir,
@@ -417,4 +440,8 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
     now: moduleOptions.now,
     label: context.t("module.peers.tool.send.label"),
   });
+
+  // 外部消息卡片渲染器（工单 50）：context.t 读当前语言，语言切换后无需重新注册；
+  // 渲染器任何情况下都返回最小安全卡片，不让宿主回退渲染含英文安全提示的完整封套
+  registerPeersRenderers(context.pi, (key, vars) => context.t(key, vars));
 }

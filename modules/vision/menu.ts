@@ -1,5 +1,6 @@
-// 视觉配置子菜单：常规组里的 `视觉配置` 行打开这一页（原生 SettingsList 形态）。
+// 视觉配置子菜单（工单 46 起在一级「模型与用量」分组下作为入口行，页内含模块开关）：
 // 页面行：
+//   视觉辅助     —— 模块总开关（工单 46 从一级收进页内；取值经统一改动入口落盘）
 //   视觉模型     —— SelectList 选 auto / off / 具体模型；改模型前先跑真实图片探测，通过才写盘
 //   项目层提示   —— 受信任项目层提供了路由时出现（只读）：菜单显示与写盘目标均为全局值
 //   刷新模型目录 —— 重读 Pi 的模型目录（不联网），成功后候选列表与目录版本号都刷新
@@ -27,9 +28,10 @@ import {
   Text,
 } from "@earendil-works/pi-tui";
 import type { Translator } from "../../i18n/index.ts";
+import { schemaFieldRow } from "../../kit/menu/items.ts";
 import { I18nSettingsList } from "../../kit/menu/settings-list.ts";
 import type { MenuTheme } from "../../kit/menu/theme.ts";
-import type { ModuleMenuContext } from "../../kit/module.ts";
+import { enabledField, type ModuleMenuContext } from "../../kit/module.ts";
 import type { VisionRouteConfig } from "./config.ts";
 import {
   modelValueLabel,
@@ -43,6 +45,15 @@ import { VISION_PROBE_EXPECTED, VISION_PROBE_IMAGE } from "./vision-probe.ts";
 
 /** 分组页里的入口行 id */
 export const VISION_MENU_ITEM_ID = "vision.settings";
+
+/** 模块开关字段（工单 46）：菜单的开关行与 schema 同源（开关行收进视觉配置页） */
+export const VISION_ENABLED_FIELD = enabledField(
+  "module.vision.enabled.label",
+  "module.vision.enabled.description",
+);
+
+/** 页内模块开关行 id（schema 行语义，走统一改动入口） */
+const ROW_ENABLED = "vision.enabled";
 
 const ROW_MODEL = "vision.settings.model";
 const ROW_PROJECT_OVERRIDE = "vision.settings.projectOverride";
@@ -643,9 +654,13 @@ export class VisionModelPicker extends Container {
 
 export interface VisionPanelOptions extends PanelEnv {
   readonly onDone: (value: string) => void;
+  /** 页内模块开关行（工单 46）：由 buildVisionMenuItems 预构造后传入 */
+  readonly enabledItem?: SettingItem;
+  /** 开关行取值变化经它走统一改动入口（onChange → applyMenuChange）落盘并提示重载 */
+  readonly onFieldChange?: (id: string, value: string) => void;
 }
 
-/** 视觉配置页：四行 SettingsList，子菜单各自负责自己的异步动作 */
+/** 视觉配置页：SettingsList 默认开搜索、无标题行（搜索栏即页头，工单 46），子菜单各自负责自己的异步动作 */
 export class VisionPanel extends Container {
   private readonly options: VisionPanelOptions;
   private list: I18nSettingsList | undefined;
@@ -656,14 +671,15 @@ export class VisionPanel extends Container {
     super();
     this.options = options;
     this.candidates = discoverCandidates(options.context.modelRegistry);
-    this.addChild(new Text(options.theme.title(options.t("module.vision.menu.label")), 1, 0));
     this.list = new I18nSettingsList({
       items: this.buildItems(),
       maxVisible: 8,
       theme: options.theme.settings,
       t: options.t,
-      onChange: (id) => {
+      enableSearch: true,
+      onChange: (id, value) => {
         if (id === ROW_MODEL) this.refreshRows();
+        if (id === ROW_ENABLED) this.options.onFieldChange?.(id, value);
       },
       onCancel: () => this.close(),
     });
@@ -695,7 +711,11 @@ export class VisionPanel extends Container {
     const t = this.options.t;
     const snapshot = this.options.runtime.snapshot();
     const route = snapshot.route;
-    const items: SettingItem[] = [
+    const items: SettingItem[] = [];
+    if (this.options.enabledItem) {
+      items.push(this.options.enabledItem);
+    }
+    items.push(
       {
         id: ROW_MODEL,
         label: t("module.vision.model.label"),
@@ -710,7 +730,7 @@ export class VisionPanel extends Container {
             onDone: done,
           }),
       },
-    ];
+    );
     if (snapshot.projectLayer) {
       // 决策 7：项目层提供了路由就提示（不预设值与全局一定不同），菜单仍显示与写盘全局值
       items.push({
@@ -794,12 +814,19 @@ export class VisionPanel extends Container {
   }
 }
 
-/** 模块的菜单行：一行入口，进去是视觉配置页（项目层提供路由时多一行提示） */
+/** 模块的菜单行：一行入口，进去是视觉配置页（页内首行是模块开关，项目层提供路由时多一行提示） */
 export function buildVisionMenuItems(
   context: ModuleMenuContext,
   runtime: VisionMenuRuntime,
 ): readonly SettingItem[] {
   const t = context.t;
+  const enabledItem = schemaFieldRow({
+    t,
+    theme: context.theme,
+    id: ROW_ENABLED,
+    field: VISION_ENABLED_FIELD,
+    current: context.getConfig()["enabled"],
+  });
   return [
     {
       id: VISION_MENU_ITEM_ID,
@@ -813,6 +840,8 @@ export function buildVisionMenuItems(
           context: context.context,
           runtime,
           requestRender: () => context.requestRender(),
+          enabledItem,
+          onFieldChange: (id, value) => context.onChange(id, value),
           onDone: (value) => done(value),
         }),
     },

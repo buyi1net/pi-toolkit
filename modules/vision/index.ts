@@ -8,9 +8,9 @@
 // - messages/：本模块三语键表；系统级键在 i18n/messages.ts
 // 界面显示名走 i18n（"视觉辅助"），目录与代码标识用英文 vision（规格决策 3）。
 
-import { enabledField, type ModuleContext, type ModuleDefinition } from "../../kit/module.ts";
+import { type ModuleContext, type ModuleDefinition } from "../../kit/module.ts";
 import { VISION_MODULE_ID } from "./config.ts";
-import { buildVisionMenuItems } from "./menu.ts";
+import { buildVisionMenuItems, VISION_ENABLED_FIELD } from "./menu.ts";
 import { createVisionRuntime } from "./mod.ts";
 
 export { VISION_MODULE_ID } from "./config.ts";
@@ -24,15 +24,18 @@ export function createVisionModule(): ModuleDefinition {
     id: VISION_MODULE_ID,
     labelKey: "module.vision.label",
     descriptionKey: "module.vision.description",
-    group: "general",
+    // 工单 46：归「模型与用量」分组；一级只留入口行（视觉配置页），模块开关收进页内
+    group: "models",
     // schema 只放总开关；视觉路由是结构化配置（非 schema 键），由本模块的菜单与配置层读写
     configSchema: {
-      enabled: enabledField("module.vision.enabled.label", "module.vision.enabled.description"),
+      enabled: VISION_ENABLED_FIELD,
     },
     register(context: ModuleContext): void {
       runtime.register(context);
     },
-    menuItems(context): ReturnType<typeof buildVisionMenuItems> {
+    // 工单 46：一级只留入口行（topLevel）；视觉配置页是模块自画面板，
+    // 不声明 pageId，menuItems（kit 聚合的共享页内容）对本模块不适用
+    topLevel(context): ReturnType<typeof buildVisionMenuItems> {
       return buildVisionMenuItems(context, runtime.menu);
     },
   };

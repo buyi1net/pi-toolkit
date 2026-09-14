@@ -16,7 +16,7 @@ import type { RuntimeStatusSnapshot } from "./runtime-status.ts";
 import type { TurnTimerSnapshot } from "./turn-timer.ts";
 
 export type GitRefreshState = "idle" | "loading" | "ready" | "error";
-export type ProjectStatusSegmentId = "project" | "git" | "duration" | "runtime";
+export type ProjectStatusSegmentId = "project" | "session" | "git" | "duration" | "runtime";
 
 export interface GitStatusCodeCount {
 	/** Git porcelain v2 的原始可见状态码；普通记录为 XY，未跟踪记录为 ?。 */
@@ -46,6 +46,8 @@ export interface ProjectStatusSnapshot extends Partial<GitStatusDetails> {
 	refreshState?: GitRefreshState;
 	runtime?: RuntimeStatusSnapshot | null;
 	duration?: TurnTimerSnapshot;
+	/** 会话短码（工单 48，不带 #）：由 footer 现场注入；取不到时该段隐藏 */
+	sessionShort?: string | null;
 }
 
 export type GitStatusQuery = (

@@ -13,7 +13,7 @@ const EN = {
   "module.computer.label": "Computer control",
   "module.computer.description":
     "Let the agent see the screen, read UI controls and drive mouse and keyboard on desktop apps (Windows, macOS, Linux)",
-  "module.computer.enabled.label": "Enable computer control",
+  "module.computer.enabled.label": "Computer control",
   "module.computer.enabled.description":
     "When off, no computer_* tool is registered and the native helper is not started (reload to apply)",
   "module.computer.error.stale_ref":
@@ -39,7 +39,7 @@ const EN = {
 const ZH_CN: typeof EN = {
   "module.computer.label": "电脑控制",
   "module.computer.description": "让 Agent 看屏幕、认控件、动键鼠，操作桌面应用（Windows、macOS、Linux）",
-  "module.computer.enabled.label": "启用电脑控制",
+  "module.computer.enabled.label": "电脑控制",
   "module.computer.enabled.description": "关闭后不注册任何 computer_* 工具，也不启动原生 helper（重载 pi 后生效）",
   "module.computer.error.stale_ref": "界面在这次观察之后变了，引用已失效；请重新观察根，用新的 stateId 操作。",
   "module.computer.error.wrong_scope":
@@ -57,7 +57,7 @@ const ZH_CN: typeof EN = {
 const ZH_TW: typeof EN = {
   "module.computer.label": "電腦控制",
   "module.computer.description": "讓 Agent 看螢幕、認控件、動鍵鼠，操作桌面應用程式（Windows、macOS、Linux）",
-  "module.computer.enabled.label": "啟用電腦控制",
+  "module.computer.enabled.label": "電腦控制",
   "module.computer.enabled.description": "關閉後不註冊任何 computer_* 工具，也不啟動原生 helper（重載 pi 後生效）",
   "module.computer.error.stale_ref": "介面在這次觀察之後變了，參照已失效；請重新觀察根，用新的 stateId 操作。",
   "module.computer.error.wrong_scope":

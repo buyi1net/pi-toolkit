@@ -1,5 +1,6 @@
 // 顶层菜单组件与菜单改动落盘。
-// 顶层用 SettingsList 内嵌在 Container 里（上下边框），分组页与取值选择器见 panels.ts。
+// 顶层用 GroupedSettingsList（工单 46：分组标题 + 一级设置行，标题行上下键跳过、不参与搜索）
+// 内嵌在 Container 里（上下边框）；二级页与取值选择器见 panels.ts。
 
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -16,10 +17,10 @@ import {
   type MenuBuildContext,
   type MenuState,
 } from "./items.ts";
-import { I18nSettingsList } from "./settings-list.ts";
+import { GroupedSettingsList } from "./grouped-list.ts";
 import type { MenuTheme } from "./theme.ts";
 
-const TOP_LEVEL_MAX_VISIBLE = 8;
+const TOP_LEVEL_MAX_VISIBLE = 10;
 
 export function readMenuState(toolkit: Toolkit): MenuState {
   return {
@@ -50,7 +51,7 @@ export interface ToolkitMenuOptions {
 export class ToolkitMenu extends Container {
   private readonly options: ToolkitMenuOptions;
   private readonly build: MenuBuildContext;
-  private list: I18nSettingsList | undefined;
+  private list: GroupedSettingsList | undefined;
 
   constructor(options: ToolkitMenuOptions) {
     super();
@@ -91,14 +92,14 @@ export class ToolkitMenu extends Container {
     this.clear();
     const items = buildTopLevelItems(this.build);
     this.addChild(new DynamicBorder(this.options.theme.border));
-    const list = new I18nSettingsList({
+    const list = new GroupedSettingsList({
       items,
       maxVisible: Math.min(Math.max(items.length, 1), TOP_LEVEL_MAX_VISIBLE),
       theme: this.options.theme.settings,
       t: this.build.t,
       onChange: this.options.onChange,
       onCancel: () => this.options.onClose(),
-      enableSearch: true,
+      heading: this.options.theme.title,
     });
     this.list = list;
     this.addChild(list);

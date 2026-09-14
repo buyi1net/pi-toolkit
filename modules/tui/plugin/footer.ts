@@ -99,12 +99,18 @@ export class ProjectStatusFooter implements Component {
 		const settings = this.getSettings();
 		const paddingX = width >= FOOTER_PADDING_X * 2 + 1 ? FOOTER_PADDING_X : 0;
 		const contentWidth = Math.max(1, width - paddingX * 2);
+		// 会话短码段（工单 48 起进段位系统）：会话 id 直读宿主会话管理器（不经 status
+		// 句柄，status 关闭时仍显示），作为 session 段与路径同组布局，位置由
+		// footerPrimary 决定（默认 路径 · 短码 · git）；取不到合法 id 时该段隐藏。
+		const sessionId = this.getSessionId();
+		const sessionShortId = sessionId ? deriveSessionShortId(sessionId) : null;
 		const projectLine = renderProjectStatusLine(
 			{
 				// 快照未接线时仍保留占位，保证 Footer 结构从首帧起定型。
 				...(this.getProjectStatus?.() ?? { cwd: this.cwd, branch: null }),
 				runtime: this.getRuntimeStatus?.(),
 				duration: this.getTimer(),
+				sessionShort: sessionShortId,
 			},
 			contentWidth,
 			this.theme,
@@ -149,16 +155,7 @@ export class ProjectStatusFooter implements Component {
 				.map(([, status]) => sanitizeStyledSingleLine(status))
 				.filter(Boolean)
 			: [];
-		// 会话短码段（规格「TUI 显示位」）：会话 id 直读宿主会话管理器（不经 status
-		// 句柄，status 关闭时仍显示）；项目行为空、取不到合法 id 或可用差值不足
-		// 8 列（段 7 列 + 左侧间隔 1 列）时整段隐藏——不截断、不新增行、不挤左侧内容。
-		const sessionId = this.getSessionId();
-		const sessionShortId = sessionId ? deriveSessionShortId(sessionId) : null;
-		const projectLineWidth = visibleWidth(projectLine);
-		const firstLine = projectLine && sessionShortId !== null && contentWidth - projectLineWidth >= 8
-			? `${projectLine}${" ".repeat(contentWidth - projectLineWidth - 7)}${this.theme.fg("muted", `#${sessionShortId}`)}`
-			: projectLine;
-		const lines = firstLine ? [firstLine] : [];
+		const lines = projectLine ? [projectLine] : [];
 		if (usageLine) lines.push(usageLine);
 		if (statuses.length > 0) {
 			lines.push(truncateToWidth(statuses.join(" · "), contentWidth, this.theme.fg("dim", "…")));

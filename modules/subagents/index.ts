@@ -18,7 +18,7 @@
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { getToolkitConfigPath } from "../../kit/config.ts";
-import { enabledField, type ModuleContext, type ModuleDefinition } from "../../kit/module.ts";
+import { type ModuleContext, type ModuleDefinition } from "../../kit/module.ts";
 import { USAGE_RECORDER_SERVICE_NAME, type UsageRecorderService } from "../usage/api.ts";
 import { loadEffectiveTierConfig, MODEL_TIERS, SUBAGENTS_MODULE_ID, type ModelTier } from "./config.ts";
 import {
@@ -27,7 +27,7 @@ import {
   poolBaseRefs,
   type ModelHealthMap,
 } from "./model-health.ts";
-import { buildSubagentsMenuItems } from "./menu.ts";
+import { buildSubagentsTopLevel, SUBAGENTS_ENABLED_FIELD } from "./menu.ts";
 import subagentsExtension, {
   subagentsRunningView,
   type SubagentsHostSection,
@@ -131,16 +131,16 @@ export function createSubagentsModule(): ModuleDefinition {
     labelKey: "module.subagents.label",
     descriptionKey: "module.subagents.description",
     group: "subagents",
-    // schema 只放总开关；tier 路由与 status 开关是结构化配置（非 schema 键），
-    // 由本模块的菜单与配置层读写。
+    // schema 只放总开关（工单 46 起一级直接开关）；tier 路由与 status 开关是结构化配置
+    // （非 schema 键），状态显示行在一级直接改，tier 配置页由「模型与候选池」入口打开。
     configSchema: {
-      enabled: enabledField("module.subagents.enabled.label", "module.subagents.enabled.description"),
+      enabled: SUBAGENTS_ENABLED_FIELD,
     },
     register(context): void {
       registerSubagents(context);
     },
-    menuItems(context): ReturnType<typeof buildSubagentsMenuItems> {
-      return buildSubagentsMenuItems(context);
+    topLevel(context): ReturnType<typeof buildSubagentsTopLevel> {
+      return buildSubagentsTopLevel(context);
     },
   };
 }

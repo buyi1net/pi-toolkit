@@ -32,7 +32,11 @@ export function createUsageModule(): ModuleDefinition {
     id: USAGE_MODULE_ID,
     labelKey: "module.usage.label",
     descriptionKey: "module.usage.description",
-    group: "subagents",
+    // 工单 46：归「模型与用量」分组，与 providers 共享二级页（pageId "providers-usage"）；
+    // 一级不出现（topLevel 空数组），行收进共享页
+    group: "models",
+    pageId: "providers-usage",
+    topLevel: () => [],
     configSchema: {
       enabled: enabledField("module.usage.enabled.label", "module.usage.enabled.description"),
     },
