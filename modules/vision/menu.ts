@@ -690,6 +690,11 @@ export class VisionPanel extends Container {
     this.list?.handleInput(data);
   }
 
+  /** 行显示回滚入口（与 SettingsPanel.updateValue 同名契约）：委托内层列表 */
+  updateValue(id: string, newValue: string): void {
+    this.list?.updateValue(id, newValue);
+  }
+
   private close(): void {
     this.options.onDone(routeValueLabel(this.options.runtime.snapshot().route, this.options.t));
   }

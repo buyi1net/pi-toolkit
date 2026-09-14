@@ -91,6 +91,23 @@ export class GroupedSettingsList implements Component {
     }
   }
 
+  /**
+   * 把指定 id 的设置行显示值换掉（不触发 onChange）：保存失败后的显示回滚用。
+   * 本层没有该行时转发给打开中的子面板：二级页里的行走同一个回滚入口。
+   */
+  updateValue(id: string, newValue: string): void {
+    const item = this.filteredItems.find(
+      (candidate): candidate is SettingItem => !isHeading(candidate) && candidate.id === id,
+    );
+    if (item) {
+      item.currentValue = newValue;
+    }
+    const panel = this.submenuComponent as
+      | { updateValue?: (id: string, newValue: string) => void }
+      | null;
+    panel?.updateValue?.(id, newValue);
+  }
+
   invalidate(): void {
     this.submenuComponent?.invalidate?.();
   }

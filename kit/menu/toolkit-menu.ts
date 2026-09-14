@@ -5,12 +5,13 @@
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container } from "@earendil-works/pi-tui";
-import type { LanguageSetting } from "../../i18n/index.ts";
+import { languageLabelKey, type LanguageSetting } from "../../i18n/index.ts";
 import { createConfigTransaction } from "../config-transaction.ts";
-import type { ModuleConfigScalar } from "../module.ts";
+import { normalizeConfigValue, type ModuleConfigScalar } from "../module.ts";
 import type { Toolkit } from "../toolkit.ts";
 import {
   buildTopLevelItems,
+  fieldDisplayValue,
   fieldValueFromLabel,
   ID_LANGUAGE,
   languageFromLabel,
@@ -84,6 +85,28 @@ export class ToolkitMenu extends Container {
     this.rebuild(selectId);
   }
 
+  /**
+   * 把指定行的显示值重置为当前生效配置的取值：原生列表对子菜单回选做乐观更新，
+   * 保存失败或取值无法识别时用它回滚，避免界面谎报已保存。只换显示，不触发 onChange。
+   */
+  restoreValue(id: string): void {
+    const toolkit = this.options.toolkit;
+    const t = toolkit.getTranslator();
+    if (id === ID_LANGUAGE) {
+      this.list?.updateValue(id, t(languageLabelKey(toolkit.getLanguage())));
+      return;
+    }
+    const separator = id.indexOf(".");
+    if (separator <= 0) return;
+    const moduleId = id.slice(0, separator);
+    const field = id.slice(separator + 1);
+    const schemaField = toolkit.getModuleDefinition(moduleId)?.configSchema[field];
+    if (!schemaField) return;
+    const stored = toolkit.getModuleConfig(moduleId)[field];
+    const normalized = stored === undefined ? undefined : normalizeConfigValue(schemaField, stored);
+    this.list?.updateValue(id, fieldDisplayValue(t, schemaField, normalized));
+  }
+
   handleInput(data: string): void {
     this.list?.handleInput(data);
   }
@@ -116,6 +139,8 @@ export type MenuChangeResult =
       readonly field: string;
       readonly value: ModuleConfigScalar;
     }
+  /** 回显文案属于已声明的设置行，却翻不回配置取值：真实丢改动，调用方必须提示 */
+  | { readonly kind: "unmapped" }
   | { readonly kind: "ignored" };
 
 /**
@@ -131,7 +156,7 @@ export async function applyMenuChange(
 
   if (id === ID_LANGUAGE) {
     const language = languageFromLabel(t, displayValue);
-    if (!language) return { kind: "ignored" };
+    if (!language) return { kind: "unmapped" };
     return { kind: "language", language: await toolkit.setLanguage(language) };
   }
 
@@ -141,9 +166,11 @@ export async function applyMenuChange(
   const field = id.slice(separator + 1);
   const definition = toolkit.getModuleDefinition(moduleId);
   const schemaField = definition?.configSchema[field];
+  // 入口行/自管行的关闭回显（providers.settings 等非 schema 字段）属于预期静默；
+  // 已声明字段的文案翻不回取值才是真实丢改动。
   if (!definition || !schemaField) return { kind: "ignored" };
 
   const value = fieldValueFromLabel(t, schemaField, displayValue);
-  if (value === undefined) return { kind: "ignored" };
+  if (value === undefined) return { kind: "unmapped" };
   return { kind: "module-field", moduleId, field, value: await toolkit.setModuleField(moduleId, field, value) };
 }
