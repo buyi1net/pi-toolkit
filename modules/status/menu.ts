@@ -11,9 +11,8 @@
 import type { SettingItem } from "@earendil-works/pi-tui";
 import type { Translator } from "../../i18n/index.ts";
 import type { ConfigWriteHooks } from "../../kit/config-transaction.ts";
-import { ChoicePicker, type ChoiceOption } from "../../kit/menu/panels.ts";
-import type { MenuTheme } from "../../kit/menu/theme.ts";
-import type { ModuleConfigRecord, ModuleMenuContext } from "../../kit/module.ts";
+import type { ChoiceOption } from "../../kit/menu/panels.ts";
+import type { ModuleConfigRecord, ModuleMenuContext, RowChangeEntry } from "../../kit/module.ts";
 import type { StatusMenuRuntime } from "./mod.ts";
 import {
 	STATUS_PRESET_NAMES,
@@ -53,13 +52,14 @@ function describeError(error: unknown): string {
 
 interface StatusPanelOptions {
 	readonly t: Translator;
-	readonly theme: MenuTheme;
 	readonly runtime: StatusMenuRuntime;
 	/** 结构化配置写入事务（由菜单层注入，重绘请求也由它带） */
 	readonly saveConfig: (patch: ModuleConfigRecord, hooks?: ConfigWriteHooks) => Promise<void>;
 	readonly requestRender: () => void;
 	readonly getSection: () => Record<string, unknown>;
 	readonly notify?: (message: string, type: "error") => void;
+	/** 自绘短选项行的就地切换注册（见 kit 的 RowChangeEntry）：行构造时调用 */
+	readonly registerRowChange: (id: string, entry: RowChangeEntry) => void;
 }
 
 /** 保存补丁 → 事务（落盘 → 内存重载 → 重建控制器）；返回结果供 UI 判定 */
@@ -83,7 +83,8 @@ interface RowParams {
 	readonly id: string;
 	readonly labelKey: string;
 	readonly descriptionKey: string;
-	readonly current: string;
+	/** 读实时显示值（行显示与失败回滚都用它） */
+	readonly read: () => string;
 	readonly options: readonly ChoiceOption[];
 	readonly apply: (value: string) => StatusSectionUpdate;
 }
@@ -95,27 +96,23 @@ function statusRow(panel: StatusPanelOptions, params: RowParams): SettingItem {
 		if (outcome.ok) return;
 		panel.notify?.(t("notify.saveFailed", { reason: outcome.error ?? "" }), "error");
 	};
+	panel.registerRowChange(params.id, {
+		read: params.read,
+		change: async (value) => {
+			const picked = params.options.find((option) => option.label === value);
+			if (!picked) return false;
+			const outcome = await persistStatusSection(panel, params.apply(picked.value));
+			report(outcome);
+			panel.requestRender();
+			return outcome.ok;
+		},
+	});
 	return {
 		id: params.id,
 		label,
 		description: t(params.descriptionKey),
-		currentValue: params.current,
-		submenu: (_currentValue, done) =>
-			new ChoicePicker({
-				title: label,
-				theme: panel.theme,
-				t,
-				options: [...params.options],
-				onSelect: (value, displayLabel) => {
-					void (async () => {
-						const outcome = await persistStatusSection(panel, params.apply(value));
-						report(outcome);
-						panel.requestRender();
-						done(outcome.ok ? displayLabel : undefined);
-					})();
-				},
-				onCancel: () => done(),
-			}),
+		currentValue: params.read(),
+		values: params.options.map((option) => option.label),
 	};
 }
 
@@ -125,38 +122,35 @@ export function buildStatusMenuItems(
 	runtime: StatusMenuRuntime,
 ): readonly SettingItem[] {
 	const t = context.t;
-	const config = readStatusSection(context.getConfig()).config;
 	const panel: StatusPanelOptions = {
 		t,
-		theme: context.theme,
 		runtime,
 		saveConfig: (patch, hooks) => context.saveConfig(patch, hooks),
 		requestRender: () => context.requestRender(),
 		getSection: () => context.getConfig(),
 		notify: (message, type) => context.context.ui.notify(message, type),
+		registerRowChange: (id, entry) => context.registerRowChange(id, entry),
 	};
+
+	const readConfig = () => readStatusSection(panel.getSection()).config;
 
 	return [
 		statusRow(panel, {
 			id: STATUS_PRESET_ROW_ID,
 			labelKey: "module.status.preset.label",
 			descriptionKey: "module.status.preset.description",
-			current: presetLabel(t, config.preset),
-			options: STATUS_PRESET_NAMES.map((preset) => ({
-				value: preset,
-				label: presetLabel(t, preset),
-				...(preset === config.preset ? { description: t("common.current") } : {}),
-			})),
+			read: () => presetLabel(t, readConfig().preset),
+			options: STATUS_PRESET_NAMES.map((preset) => ({ value: preset, label: presetLabel(t, preset) })),
 			apply: (value) => ({ preset: value as StatusPresetName }),
 		}),
 		statusRow(panel, {
 			id: STATUS_TELEMETRY_ROW_ID,
 			labelKey: "module.status.telemetry.label",
 			descriptionKey: "module.status.telemetry.description",
-			current: statusBoolLabel(t, config.telemetry),
+			read: () => statusBoolLabel(t, readConfig().telemetry),
 			options: [
-				{ value: "true", label: t("common.on"), ...(config.telemetry ? { description: t("common.current") } : {}) },
-				{ value: "false", label: t("common.off"), ...(config.telemetry ? {} : { description: t("common.current") }) },
+				{ value: "true", label: t("common.on") },
+				{ value: "false", label: t("common.off") },
 			],
 			apply: (value) => ({ telemetry: value === "true" }),
 		}),

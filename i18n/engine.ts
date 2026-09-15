@@ -5,6 +5,8 @@
 // 模块内的局部 keyof 校验由各模块 messages/ 导出的键类型承担，
 // 跨模块 / 契约字段（labelKey 等）的键存在性落到运行时 hasMessage 与三语完整性测试。
 
+import { execFileSync } from "node:child_process";
+
 import {
 	FRAMEWORK_MESSAGES,
 	type FrameworkMessageKey,
@@ -59,13 +61,68 @@ function format(template: string | undefined, key: string, vars?: MessageVars): 
 	);
 }
 
+/**
+ * auto 解析：从系统语言候选里取第一个中文（非中文则 en）；纯函数，候选须已按权威度排好。
+ * 规则：zh 且含 hant/tw/hk/mo → zh-TW；其余 zh → zh-CN；无中文候选 → en。
+ */
+export function resolveSystemLanguage(candidates: readonly string[]): ResolvedLanguage {
+	for (const candidate of candidates) {
+		const locale = candidate.toLowerCase().replace(/_/g, "-");
+		if (!locale.startsWith("zh")) continue;
+		return /(hant|tw|hk|mo)/.test(locale) ? "zh-TW" : "zh-CN";
+	}
+	return "en";
+}
+
+/**
+ * macOS 的「语言与地区」偏好（如 zh_CN）：终端环境变量（LANG）常是 en_US.UTF-8，
+ * 会让 Intl 误报 en，所以系统偏好优先于 Intl。读不到（非 mac / 命令失败）返回 undefined。
+ */
+function macOsSystemLocale(): string | undefined {
+	if (process.platform !== "darwin") return undefined;
+	try {
+		const output = execFileSync("defaults", ["read", "-g", "AppleLocale"], {
+			encoding: "utf8",
+			timeout: 2000,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		const locale = output.trim();
+		return locale === "" ? undefined : locale;
+	} catch {
+		return undefined;
+	}
+}
+
+/** 系统语言候选（按权威度）：平台系统偏好 → Intl（跟随系统 / LANG） */
+function systemLocaleCandidates(): string[] {
+	const candidates: string[] = [];
+	const apple = macOsSystemLocale();
+	if (apple !== undefined) candidates.push(apple);
+	try {
+		candidates.push(Intl.DateTimeFormat().resolvedOptions().locale);
+	} catch {
+		// Intl 异常（理论外）：跳过该候选
+	}
+	return candidates;
+}
+
+/** auto 检测结果缓存：检测含子进程调用，不能随每次翻译重跑（进程内一次） */
+let resolvedAutoLanguage: ResolvedLanguage | undefined;
+
 /** auto 解析规则：非中文 → en；繁体地区 → zh-TW；其余中文 → zh-CN */
 export function resolveLanguage(setting: LanguageSetting): ResolvedLanguage {
 	if (setting !== "auto") return setting;
-	const locale = Intl.DateTimeFormat().resolvedOptions().locale.toLowerCase();
-	if (!locale.startsWith("zh")) return "en";
-	return /(hant|tw|hk|mo)/.test(locale) ? "zh-TW" : "zh-CN";
+	resolvedAutoLanguage ??= resolveSystemLanguage(systemLocaleCandidates());
+	return resolvedAutoLanguage;
 }
+
+/** 仅测试用：重置 auto 检测缓存；暴露系统候选构造，供 auto 结果一致性断言 */
+export const __test__ = {
+	resetAutoLanguageCache: (): void => {
+		resolvedAutoLanguage = undefined;
+	},
+	systemLocaleCandidates,
+};
 
 export function isLanguageSetting(value: unknown): value is LanguageSetting {
 	return typeof value === "string" && (LANGUAGE_SETTINGS as readonly string[]).includes(value);

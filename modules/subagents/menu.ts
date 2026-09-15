@@ -21,12 +21,14 @@ import type { SettingItem } from "@earendil-works/pi-tui";
 import type { Translator } from "../../i18n/index.ts";
 import type { ConfigWriteHooks } from "../../kit/config-transaction.ts";
 import { schemaFieldRow } from "../../kit/menu/items.ts";
-import { ChoicePicker } from "../../kit/menu/panels.ts";
+import { SettingsPanel } from "../../kit/menu/panels.ts";
 import type { MenuTheme } from "../../kit/menu/theme.ts";
 import {
   enabledField,
+  normalizeConfigValue,
   type ModuleConfigRecord,
   type ModuleMenuContext,
+  type RowChangeEntry,
 } from "../../kit/module.ts";
 import {
   loadEffectiveTierConfig,
@@ -100,8 +102,11 @@ export function readPackageStatusEnabled(): boolean {
   }
 }
 
-/** 分组页里的入口行 id */
+/** 一级「模型编排」入口行 id（打开模块开关 / 运行状态显示 / 候选池的设置页） */
 export const SUBAGENTS_MENU_ITEM_ID = "subagents.settings";
+
+/** 页内「模型与候选池」入口行 id（打开候选池编辑器） */
+export const SUBAGENTS_POOL_ROW_ID = "subagents.pool";
 
 /** 一级「运行状态显示」行 id（非 schema 字段，保存走本模块的配置事务） */
 export const SUBAGENTS_STATUS_ROW_ID = "subagents.status";
@@ -158,84 +163,81 @@ export async function saveStatus(
 }
 
 /**
- * 运行状态显示行（工单 46 起在一级直接开关）：写盘走本模块的配置事务，
- * 失败只提示、行取值保持旧值。本节点未声明时展示包内兜底默认。
+ * 运行状态显示行（本单起为就地切换）：值位即当前开关，回车/空格直接切；
+ * 写盘走本模块的配置事务，失败提示并把显示回滚（菜单层按 read 回读）。
+ * 本节点未声明时展示包内兜底默认。
  */
 function subagentsStatusRow(options: {
   readonly t: Translator;
-  readonly theme: MenuTheme;
   readonly context: ExtensionContext;
   readonly getSection: () => Record<string, unknown>;
   readonly saveConfig: (patch: ModuleConfigRecord, hooks?: ConfigWriteHooks) => Promise<void>;
   readonly requestRender: () => void;
+  readonly registerRowChange: (id: string, entry: RowChangeEntry) => void;
   readonly packageStatusEnabled: boolean;
 }): SettingItem {
   const t = options.t;
   const label = t("module.subagents.status.label");
-  const enabledNow = () => {
-    const state = readPanelState(options.getSection());
-    return (state.statusEnabled ?? options.packageStatusEnabled) === true;
-  };
+  const read = () =>
+    statusRowValue(readPanelState(options.getSection()), options.packageStatusEnabled, t);
+  options.registerRowChange(SUBAGENTS_STATUS_ROW_ID, {
+    read,
+    change: async (value) => {
+      const outcome = await saveStatus(options, value === t("common.on"));
+      if (!outcome.ok) {
+        options.context.ui.notify(t("notify.saveFailed", { reason: outcome.error ?? "" }), "error");
+      }
+      options.requestRender();
+      return outcome.ok;
+    },
+  });
   return {
     id: SUBAGENTS_STATUS_ROW_ID,
     label,
     description: t("module.subagents.status.description"),
-    currentValue: statusRowValue(readPanelState(options.getSection()), options.packageStatusEnabled, t),
-    submenu: (_currentValue, done) => {
-      const current = enabledNow();
-      return new ChoicePicker({
-        title: label,
-        theme: options.theme,
-        t,
-        options: [
-          { value: "true", label: t("common.on"), ...(current ? { description: t("common.current") } : {}) },
-          { value: "false", label: t("common.off"), ...(current ? {} : { description: t("common.current") }) },
-        ],
-        onSelect: (value, displayLabel) => {
-          void (async () => {
-            const outcome = await saveStatus(options, value === "true");
-            if (!outcome.ok) {
-              options.context.ui.notify(t("notify.saveFailed", { reason: outcome.error ?? "" }), "error");
-            }
-            options.requestRender();
-            done(outcome.ok ? displayLabel : undefined);
-          })();
-        },
-        onCancel: () => done(),
-      });
-    },
+    currentValue: read(),
+    values: [t("common.on"), t("common.off")],
   };
 }
 
-/** 顶层行（工单 46）：模块开关 + 运行状态显示 + 「模型与候选池」入口（候选池编辑器），共三行 */
+/**
+ * 顶层行（本单起）：模块开关、运行状态显示与模型候选池合并为一个「模型编排」入口，
+ * 值位显示模块总开关的已开启/已关闭；页内三行保持原名（二级菜单统一编排另行处理）。
+ */
 export function buildSubagentsTopLevel(context: ModuleMenuContext): readonly SettingItem[] {
   const t = context.t;
   const section = context.getConfig();
   const state = readPanelState(section);
   const load = () =>
     loadEffectiveTierConfig({ cwd: context.context.cwd, agentDir: context.agentDir });
-  // 缺映射（或本节点配置非法）时把原版报错摆在入口行的描述里，不进编辑器也能看见
+  // 缺映射（或本节点配置非法）时把原版报错摆在池入口行的描述里，不进编辑器也能看见
   const problem = firstTierProblem(state.mapping, load) ?? state.problems[0];
 
-  return [
+  const enabledText = () => {
+    const current = normalizeConfigValue(SUBAGENTS_ENABLED_FIELD, context.getConfig()["enabled"]);
+    return (current ?? SUBAGENTS_ENABLED_FIELD.default) === true
+      ? t("module.subagents.entry.on")
+      : t("module.subagents.entry.off");
+  };
+
+  const pageItems: SettingItem[] = [
     schemaFieldRow({
       t,
-      theme: context.theme,
       id: "subagents.enabled",
       field: SUBAGENTS_ENABLED_FIELD,
       current: section["enabled"],
     }),
     subagentsStatusRow({
       t,
-      theme: context.theme,
       context: context.context,
       getSection: () => context.getConfig(),
       saveConfig: (patch, hooks) => context.saveConfig(patch, hooks),
       requestRender: () => context.requestRender(),
+      registerRowChange: (id, entry) => context.registerRowChange(id, entry),
       packageStatusEnabled: readPackageStatusEnabled(),
     }),
     {
-      id: SUBAGENTS_MENU_ITEM_ID,
+      id: SUBAGENTS_POOL_ROW_ID,
       label: t("module.subagents.menu.label"),
       description: problem ?? t("module.subagents.menu.description"),
       currentValue: configuredCountValue(state.mapping, t),
@@ -249,6 +251,23 @@ export function buildSubagentsTopLevel(context: ModuleMenuContext): readonly Set
           requestRender: () => context.requestRender(),
           getSection: () => context.getConfig(),
           onDone: (value) => done(value),
+        }),
+    },
+  ];
+
+  return [
+    {
+      id: SUBAGENTS_MENU_ITEM_ID,
+      label: t("module.subagents.entry.label"),
+      description: t("module.subagents.entry.description"),
+      currentValue: enabledText(),
+      submenu: (_currentValue, done) =>
+        new SettingsPanel({
+          items: pageItems,
+          theme: context.theme,
+          t,
+          onChange: context.onChange,
+          onClose: () => done(enabledText()),
         }),
     },
   ];

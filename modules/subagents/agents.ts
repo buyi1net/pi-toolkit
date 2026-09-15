@@ -6,6 +6,8 @@ export type AgentSessionMode = "standalone" | "lineage-only" | "fork";
 
 export interface AgentDefaults {
   model?: string;
+  /** frontmatter tier 默认路由；显式 model 声明时由 model 胜出。 */
+  tier?: string;
   tools?: string;
   skills?: string;
   thinking?: string;
@@ -74,6 +76,7 @@ export function parseAgentDefinition(
     name: getFrontmatterValue(frontmatter, "name") ?? fallbackName,
     description: getFrontmatterValue(frontmatter, "description"),
     model: getFrontmatterValue(frontmatter, "model"),
+    tier: getFrontmatterValue(frontmatter, "tier"),
     tools: getFrontmatterValue(frontmatter, "tools"),
     systemPromptMode:
       systemPromptMode === "replace" || systemPromptMode === "append" ? systemPromptMode : undefined,

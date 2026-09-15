@@ -1,8 +1,10 @@
-// 菜单行构造：一级菜单（分组标题 + 设置行，工单 46）与共享二级页内容（模块行集合）。
+// 菜单行构造：一级菜单（问题行 + 各模块顶层行，按 MODULE_GROUPS 顺序排列）与共享二级页内容（模块行集合）。
 // 设计约定：SettingsList 一行只接受一个字符串，所以取值选择器回传"显示文案"，
 // 这里用同一份 i18n 选项表把文案映射回规范化取值（见 fieldValueFromLabel / languageFromLabel），
 // 因此语言切换后菜单重建即刷新全部显示，无需额外的显示态。
-// 一级结构：问题行 → 每组一个标题行 → 组内模块的顶层行（topLevel 钩子或默认规则）；
+// 短选项行（布尔与枚举 schema 字段）带 values 数组，回车/空格就地循环切换（pi 原生设置同款）：
+// 显示文案 → 规范化取值的反查与整行落盘由列表的统一改动入口（onChange）承担。
+// 一级结构：问题行 → 每组模块的顶层行（topLevel 钩子或默认规则）；
 // 需要专用编辑器的模块由 topLevel 入口行打开二级页，页内行集合由 pageId 聚合（buildPageItems）。
 
 import type { SettingItem } from "@earendil-works/pi-tui";
@@ -11,7 +13,6 @@ import type { ToolkitConfig } from "../config.ts";
 import {
   languageLabelKey,
   LANGUAGE_SETTINGS,
-  type FrameworkMessageKey,
   type LanguageSetting,
   type ResolvedLanguage,
   type Translator,
@@ -25,7 +26,7 @@ import {
   type ModuleConfigValue,
   type ModuleConfigRecord,
   type ModuleDefinition,
-  type ModuleGroup,
+  type RowChangeEntry,
 } from "../module.ts";
 import type { ActiveModule } from "../assembler.ts";
 import { moduleFieldId } from "../assembler.ts";
@@ -34,7 +35,6 @@ import type { ToolkitProblem } from "../toolkit.ts";
 import type { ServiceRegistry } from "../services.ts";
 import { ChoicePicker } from "./panels.ts";
 import type { MenuTheme } from "./theme.ts";
-import type { GroupedSettingItem, HeadingItem } from "./grouped-list.ts";
 import type { ModuleMenuContext } from "../module.ts";
 
 /** 语言行的 id */
@@ -64,6 +64,8 @@ export interface MenuBuildContext {
   requestRender(): void;
   /** 结构化配置写入事务（工单 19）：模块菜单把补丁写进自己的配置节，重绘请求由菜单层注入 */
   saveModuleConfig(moduleId: string, patch: ModuleConfigRecord, hooks?: ConfigWriteHooks): Promise<void>;
+  /** 自绘短选项行的就地切换注册（见 RowChangeEntry）：模块构造行时调用 */
+  registerRowChange(id: string, entry: RowChangeEntry): void;
   /** 重建整棵菜单：语言切换后用它刷新全部文案 */
   refresh(selectId?: string): void;
 }
@@ -124,14 +126,13 @@ export function languageFromLabel(t: Translator, label: string): LanguageSetting
   return languageOptions(t).find((option) => option.label === label)?.setting;
 }
 
-export function buildTopLevelItems(build: MenuBuildContext): GroupedSettingItem[] {
+export function buildTopLevelItems(build: MenuBuildContext): SettingItem[] {
   const state = build.getState();
-  const items: GroupedSettingItem[] = [];
+  const items: SettingItem[] = [];
   for (const problem of state.problems) {
     items.push(problemItem(build, problem));
   }
   for (const group of MODULE_GROUPS) {
-    items.push(groupHeading(build, group));
     if (group === "general") {
       items.push(languageItem(build));
     }
@@ -141,23 +142,6 @@ export function buildTopLevelItems(build: MenuBuildContext): GroupedSettingItem[
     }
   }
   return items;
-}
-
-function groupHeadingKey(group: ModuleGroup): FrameworkMessageKey {
-  switch (group) {
-    case "general":
-      return "group.general";
-    case "tui":
-      return "group.tui";
-    case "models":
-      return "group.models";
-    case "subagents":
-      return "group.subagents";
-  }
-}
-
-function groupHeading(build: MenuBuildContext, group: ModuleGroup): HeadingItem {
-  return { kind: "heading", label: build.t(groupHeadingKey(group)) };
 }
 
 /** 模块在一级的行：topLevel 钩子优先，缺省按默认规则（schema 字段行 + menuItems 入口行） */
@@ -183,6 +167,7 @@ export function moduleMenuContext(
     requestRender: () => build.requestRender(),
     saveConfig: (patch, hooks) => build.saveModuleConfig(definition.id, patch, hooks),
     onChange: build.onChange,
+    registerRowChange: (id, entry) => build.registerRowChange(id, entry),
     ...(definition.pageId === undefined
       ? {}
       : { pageItems: () => buildPageItems(build, definition.pageId!, definition.id) }),
@@ -256,22 +241,22 @@ function moduleItems(build: MenuBuildContext, definition: ModuleDefinition): Set
 }
 
 /**
- * schema 字段行的通用构造（骨架自动行与模块 topLevel 钩子共用，工单 46）：
- * 当前值在内部规范化（非法取值回落默认值），label / description 缺省从字段键取；
- * 取值选择器回传显示文案，经列表的统一改动入口（onChange）落盘，模块不需要自己的保存逻辑。
+ * schema 字段行的通用构造（骨架自动行与模块 topLevel 钩子共用）：
+ * 全部 schema 字段都按就地切换构造（布尔 → 开/关，枚举 → schema 声明的 values），
+ * 不做长度或类型筛选；行带 values 数组，回车/空格就地循环切换（pi 原生设置同款），
+ * 取值经列表的统一改动入口（onChange）反查落盘；当前值在内部规范化（非法取值回落默认值），
+ * label / description 缺省从字段键取。
  */
 export function schemaFieldRow(options: {
   readonly t: Translator;
-  readonly theme: MenuTheme;
   readonly id: string;
   readonly field: ConfigField;
   readonly label?: string;
   readonly description?: string;
   readonly current: ModuleConfigValue;
 }): SettingItem {
-  const { t, theme, field } = options;
+  const { t, field } = options;
   const current = normalizeConfigValue(field, options.current) ?? field.default;
-  const currentCode = fieldCode(current);
   const label = options.label ?? t(field.labelKey);
   const description =
     options.description ?? (field.descriptionKey === undefined ? undefined : t(field.descriptionKey));
@@ -280,19 +265,7 @@ export function schemaFieldRow(options: {
     label,
     ...(description === undefined ? {} : { description }),
     currentValue: fieldDisplayValue(t, field, current),
-    submenu: (_currentValue, done) =>
-      new ChoicePicker({
-        title: label,
-        options: fieldOptions(t, field).map((option) => ({
-          value: option.code,
-          label: option.label,
-          ...(option.code === currentCode ? { description: t("common.current") } : {}),
-        })),
-        theme,
-        t,
-        onSelect: (_value, displayLabel) => done(displayLabel),
-        onCancel: () => done(),
-      }),
+    values: fieldOptions(t, field).map((option) => option.label),
   };
 }
 
@@ -305,7 +278,6 @@ function fieldItem(
 ): SettingItem {
   return schemaFieldRow({
     t: build.t,
-    theme: build.theme,
     id: moduleFieldId(definition.id, key),
     field,
     current,

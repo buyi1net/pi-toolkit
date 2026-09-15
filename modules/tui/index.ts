@@ -69,7 +69,7 @@ export function createTuiModule(options: TuiModuleOptions = {}): ModuleDefinitio
 		id: TUI_MODULE_ID,
 		labelKey: "module.tui.label",
 		descriptionKey: "module.tui.description",
-		// 工单 46：单独一组的「外观与状态」入口，与 status 模块共享二级页（pageId "tui"）
+		// 工单 46：一级「外观配置」入口，与 status 模块共享二级页（pageId "tui"）
 		group: "tui",
 		pageId: "tui",
 	// schema 只放总开关；外观与高级是结构化配置（非 schema 键），

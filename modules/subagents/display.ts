@@ -5,6 +5,7 @@ import {
   layoutTwoColumnSegments,
   type StatusSegment,
 } from "../tui/status/segment-layout.ts";
+import { formatElapsed as formatElapsedMs } from "../tui/status/status-segments.ts";
 
 const ACCENT = "\x1b[38;2;77;163;255m";
 const RST = "\x1b[0m";
@@ -14,9 +15,7 @@ const ICON_RED = "\x1b[38;2;224;108;117m";
 const ICON_DIM = "\x1b[38;2;128;128;128m";
 
 export function formatElapsed(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${seconds % 60}s`;
+  return formatElapsedMs(seconds * 1000);
 }
 
 export function formatTokens(value: number): string {

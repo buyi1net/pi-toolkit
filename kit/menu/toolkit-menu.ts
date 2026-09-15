@@ -1,13 +1,17 @@
 // 顶层菜单组件与菜单改动落盘。
-// 顶层用 GroupedSettingsList（工单 46：分组标题 + 一级设置行，标题行上下键跳过、不参与搜索）
-// 内嵌在 Container 里（上下边框）；二级页与取值选择器见 panels.ts。
+// 顶层用 I18nSettingsList（原生 SettingsList + 提示行 i18n + 子面板回滚转发），内嵌在 Container 里
+// （上下边框）；二级页与取值选择器见 panels.ts。
+//
+// 短选项行（values 数组）由原生列表就地循环切换；列表的 onChange 先经过本组件：
+// 自绘行（模块经 registerRowChange 注册过）由行自己的 change 保存、失败按 read 回滚显示；
+// 其余走外部改动链（语言与 schema 字段行 → applyMenuChange）。
 
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container } from "@earendil-works/pi-tui";
 import { languageLabelKey, type LanguageSetting } from "../../i18n/index.ts";
 import { createConfigTransaction } from "../config-transaction.ts";
-import { normalizeConfigValue, type ModuleConfigScalar } from "../module.ts";
+import { normalizeConfigValue, type ModuleConfigScalar, type RowChangeEntry } from "../module.ts";
 import type { Toolkit } from "../toolkit.ts";
 import {
   buildTopLevelItems,
@@ -18,7 +22,7 @@ import {
   type MenuBuildContext,
   type MenuState,
 } from "./items.ts";
-import { GroupedSettingsList } from "./grouped-list.ts";
+import { I18nSettingsList } from "./settings-list.ts";
 import type { MenuTheme } from "./theme.ts";
 
 const TOP_LEVEL_MAX_VISIBLE = 10;
@@ -43,7 +47,7 @@ export interface ToolkitMenuOptions {
   readonly agentDir: string;
   /** 异步动作结束后请宿主重绘 */
   readonly requestRender: () => void;
-  /** 菜单里每次取值变化都先到这里（id + 显示文案） */
+  /** 未被自绘直切行接住的取值变化到这里（语言与 schema 字段行，id + 显示文案） */
   readonly onChange: (id: string, value: string) => void;
   /** 顶层 Esc：关闭菜单 */
   readonly onClose: () => void;
@@ -52,7 +56,9 @@ export interface ToolkitMenuOptions {
 export class ToolkitMenu extends Container {
   private readonly options: ToolkitMenuOptions;
   private readonly build: MenuBuildContext;
-  private list: GroupedSettingsList | undefined;
+  private list: I18nSettingsList | undefined;
+  /** 自绘短选项行的就地切换处理器（模块在行构造时注册；重建时随 items 一并刷新） */
+  private readonly rowChanges = new Map<string, RowChangeEntry>();
 
   constructor(options: ToolkitMenuOptions) {
     super();
@@ -71,10 +77,15 @@ export class ToolkitMenu extends Container {
       agentDir: options.agentDir,
       getState: () => readMenuState(options.toolkit),
       getModuleConfig: (moduleId) => options.toolkit.getModuleConfig(moduleId),
-      onChange: options.onChange,
+      onChange: (id, value) => {
+        void this.handleRowChange(id, value);
+      },
       requestRender: () => options.requestRender(),
       saveModuleConfig: (moduleId, patch, hooks) =>
         transaction.write({ modules: { [moduleId]: patch } }, hooks),
+      registerRowChange: (id, entry) => {
+        this.rowChanges.set(id, entry);
+      },
       refresh: (selectId) => this.rebuild(selectId),
     };
     this.rebuild();
@@ -111,18 +122,40 @@ export class ToolkitMenu extends Container {
     this.list?.handleInput(data);
   }
 
+  /** 行取值变化的总入口：自绘直切行先查注册表，其余交给外部改动链 */
+  private async handleRowChange(id: string, value: string): Promise<void> {
+    const entry = this.rowChanges.get(id);
+    if (!entry) {
+      this.options.onChange(id, value);
+      return;
+    }
+    let ok = false;
+    try {
+      ok = await entry.change(value);
+    } catch {
+      // 契约：change 内部完成失败提示；这里兜住异常，统一按失败回滚显示
+      ok = false;
+    }
+    if (!ok) {
+      this.list?.updateValue(id, entry.read());
+    }
+  }
+
   private rebuild(selectId?: string): void {
     this.clear();
+    this.rowChanges.clear();
     const items = buildTopLevelItems(this.build);
     this.addChild(new DynamicBorder(this.options.theme.border));
-    const list = new GroupedSettingsList({
+    const list = new I18nSettingsList({
       items,
       maxVisible: Math.min(Math.max(items.length, 1), TOP_LEVEL_MAX_VISIBLE),
       theme: this.options.theme.settings,
       t: this.build.t,
-      onChange: this.options.onChange,
+      enableSearch: true,
+      onChange: (id, value) => {
+        void this.handleRowChange(id, value);
+      },
       onCancel: () => this.options.onClose(),
-      heading: this.options.theme.title,
     });
     this.list = list;
     this.addChild(list);

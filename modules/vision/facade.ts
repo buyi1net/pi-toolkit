@@ -152,15 +152,26 @@ export class VisionRouteFacade {
   }
 }
 
-/** 描述：菜单里显示的当前视觉模型（全局值，不带 fixed 前缀） */
+/** 描述：配置页里「视觉模型」行的值位（自动 / 模型名 / 关闭） */
 export function modelValueLabel(route: VisionRouteConfig, t: Translator): string {
   if (route.allowedModels !== null && route.allowedModels.length === 0) {
-    return t("module.vision.model.off");
+    return t("module.vision.value.off");
   }
   if (route.mode === "fixed" && route.fixedModel) {
     return `${route.fixedModel.provider}/${route.fixedModel.model}`;
   }
-  return t("module.vision.model.auto");
+  return t("module.vision.value.auto");
+}
+
+/** 描述：一级「视觉辅助」入口行的值位（自动 / 已配置 / 关闭，模型名不进一级） */
+export function visionEntryValue(route: VisionRouteConfig, t: Translator): string {
+  if (route.allowedModels !== null && route.allowedModels.length === 0) {
+    return t("module.vision.value.off");
+  }
+  if (route.mode === "fixed" && route.fixedModel) {
+    return t("module.vision.value.configured");
+  }
+  return t("module.vision.value.auto");
 }
 
 /** 描述：菜单里的只读路由文案（全局值） */

@@ -20,6 +20,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   Container,
+  fuzzyFilter,
+  getKeybindings,
+  Input,
   Key,
   matchesKey,
   SelectList,
@@ -36,6 +39,7 @@ import type { VisionRouteConfig } from "./config.ts";
 import {
   modelValueLabel,
   routeValueLabel,
+  visionEntryValue,
   type VisionFacadePatch,
   type VisionRouteSnapshot,
   type VisionSaveOptions,
@@ -467,11 +471,14 @@ export interface VisionModelPickerOptions extends PanelEnv {
   readonly onDone: (value?: string) => void;
 }
 
-/** 视觉模型选择器：SelectList 形态；选具体模型先探测，auto / off 直接写盘 */
+/** 视觉模型选择器：SelectList 形态、输入即过滤；选具体模型先探测，auto 直接写盘 */
 export class VisionModelPicker extends Container {
   private readonly options: VisionModelPickerOptions;
   private readonly initialValue: string;
-  private readonly list: SelectList;
+  private list: SelectList;
+  private readonly searchInput: Input;
+  private readonly allItems: SelectItem[];
+  private listChildIndex = 0;
   private readonly controller: Cancellable;
   private token = 0;
   /** picking：选择列表；busy：探测/保存中（Esc 取消）；settled：结果显示中（Esc 返回） */
@@ -484,24 +491,35 @@ export class VisionModelPicker extends Container {
     this.controller = startCancellable(options.context.signal);
 
     this.addChild(new Text(options.theme.title(options.t("module.vision.model.label")), 1, 0));
-    const items = this.buildItems();
-    const currentIndex = items.findIndex((item) => item.value === this.initialValue);
-    this.list = new SelectList(items, Math.min(items.length, 10), options.theme.select);
+    this.allItems = this.buildItems();
+    this.searchInput = new Input();
+    this.addChild(this.searchInput);
+    const currentIndex = this.allItems.findIndex((item) => item.value === this.initialValue);
+    this.list = this.buildList(this.allItems);
     if (currentIndex > 0) this.list.setSelectedIndex(currentIndex);
-    this.list.onSelect = (item) => {
-      void this.choose(item.value);
-    };
-    this.list.onCancel = () => this.options.onDone();
+    this.listChildIndex = this.children.length;
     this.addChild(this.list);
     if (options.candidates.length === 0) {
       this.addChild(new Text(options.theme.fg("warning", `  ${options.t("module.vision.model.empty")}`), 1, 0));
     }
-    this.addChild(new Text(options.theme.hint(options.t("hint.chooseOptions")), 1, 0));
+    this.addChild(new Text(options.theme.hint(options.t("hint.filter")), 1, 0));
   }
 
   handleInput(data: string): void {
     if (this.phase === "picking") {
-      this.list.handleInput(data);
+      // 导航键交给列表，其余输入进搜索框过滤（pi 原生 SelectSubmenu 同款分流）
+      const kb = getKeybindings();
+      const isNav =
+        kb.matches(data, "tui.select.up") ||
+        kb.matches(data, "tui.select.down") ||
+        kb.matches(data, "tui.select.confirm") ||
+        kb.matches(data, "tui.select.cancel");
+      if (isNav) {
+        this.list.handleInput(data);
+        return;
+      }
+      this.searchInput.handleInput(data);
+      this.applyFilter(this.searchInput.getValue());
       return;
     }
     if (!matchesKey(data, Key.escape)) return;
@@ -520,18 +538,32 @@ export class VisionModelPicker extends Container {
     this.controller.abort(new DOMException("Disposed", "AbortError"));
   }
 
+  /** 建列表（重建过滤结果时也走这里，保证选中/取消挂钩一致） */
+  private buildList(items: readonly SelectItem[]): SelectList {
+    const list = new SelectList([...items], Math.min(items.length, 10), this.options.theme.select);
+    list.onSelect = (item) => {
+      void this.choose(item.value);
+    };
+    list.onCancel = () => this.options.onDone();
+    return list;
+  }
+
+  private applyFilter(query: string): void {
+    const filtered = query
+      ? fuzzyFilter(this.allItems, query, (item) => `${item.label} ${item.description ?? ""}`)
+      : this.allItems;
+    const list = this.buildList(filtered);
+    this.children[this.listChildIndex] = list;
+    this.list = list;
+  }
+
   private buildItems(): SelectItem[] {
     const t = this.options.t;
     const items: SelectItem[] = [
       {
         value: VALUE_AUTO,
-        label: t("module.vision.model.auto"),
+        label: t("module.vision.value.auto"),
         description: t("module.vision.model.autoDescription"),
-      },
-      {
-        value: VALUE_OFF,
-        label: t("module.vision.model.off"),
-        description: t("module.vision.model.offDescription"),
       },
     ];
     const unavailable = isModelValue(this.initialValue)
@@ -696,7 +728,7 @@ export class VisionPanel extends Container {
   }
 
   private close(): void {
-    this.options.onDone(routeValueLabel(this.options.runtime.snapshot().route, this.options.t));
+    this.options.onDone(visionEntryValue(this.options.runtime.snapshot().route, this.options.t));
   }
 
   private refreshRows(): void {
@@ -827,7 +859,6 @@ export function buildVisionMenuItems(
   const t = context.t;
   const enabledItem = schemaFieldRow({
     t,
-    theme: context.theme,
     id: ROW_ENABLED,
     field: VISION_ENABLED_FIELD,
     current: context.getConfig()["enabled"],
@@ -837,7 +868,7 @@ export function buildVisionMenuItems(
       id: VISION_MENU_ITEM_ID,
       label: t("module.vision.menu.label"),
       description: t("module.vision.menu.description"),
-      currentValue: routeValueLabel(runtime.snapshot().route, t),
+      currentValue: visionEntryValue(runtime.snapshot().route, t),
       submenu: (_currentValue, done) =>
         new VisionPanel({
           t,

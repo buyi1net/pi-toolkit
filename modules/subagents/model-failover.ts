@@ -72,6 +72,8 @@ export interface ModelRoutingDetails {
   readonly attempts: readonly ModelFailoverAttempt[];
   /** 首次计划阶段被跳过的候选及原因（选择期降级，如额度不足）。 */
   readonly selectionSkips: readonly ModelCandidateRejection[];
+  /** 池未配置或状态/额度全阻断时继承父会话的原因。 */
+  readonly fallbackReason?: "pool-unconfigured" | "pool-status-unavailable";
 }
 
 /** 截断错误文本，降级链只留可读摘要。 */
@@ -87,6 +89,7 @@ export function buildModelRouting(input: {
   actual: string | null;
   attempts: readonly ModelFailoverAttempt[];
   selectionSkips: readonly ModelCandidateRejection[];
+  fallbackReason?: "pool-unconfigured" | "pool-status-unavailable";
 }): ModelRoutingDetails {
   const preferred = input.pool[0] ?? input.actual ?? "";
   const actual = input.actual ?? preferred;
@@ -97,6 +100,8 @@ export function buildModelRouting(input: {
       .map((attempt) => `#${attempt.index} ${attempt.model} failed (${attempt.kind}): ${truncate(attempt.message)}`)
       .join("; ");
     reason = `${chain} — switched to ${actual}`;
+  } else if (input.fallbackReason) {
+    reason = `tier pool ${input.fallbackReason}; inherited parent session model ${actual}`;
   } else {
     const preferredSkips = input.selectionSkips.filter(
       (skip) => baseModelRef(skip.model) === baseModelRef(preferred),
@@ -115,6 +120,7 @@ export function buildModelRouting(input: {
     reason,
     attempts: [...input.attempts],
     selectionSkips: [...input.selectionSkips],
+    ...(input.fallbackReason ? { fallbackReason: input.fallbackReason } : {}),
   };
 }
 

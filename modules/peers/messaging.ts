@@ -12,17 +12,17 @@
 //   deliverPeersMessage（候选读取 + 转文件 + 真实传输）。
 //
 // 接收端固定判定顺序（规格「投递判定顺序」）：连接 → 版本校验 → 来源校验 → 自投递检查
-// → 入站拒收策略 → 消息 id 去重 → 队列/速率检查 → 接受（内容获取与文件校验）。
+// → 消息 id 去重 → 队列/速率检查 → 接受（内容获取与文件校验）。
 // 前两步在端点适配器与线协议解码侧完成（endpoint.ts / protocol.ts）；本文件从来源
 // 校验起接管。拒绝路径不记去重窗口，发送方可用原 messageId 重试（规格「限流与防护」）。
 // 速率记录口径（审查修复）：仅内容校验失败（文件校验失败 / 内联超阈值）在拒绝前计入
 // 发送方速率窗口——这两条路径每帧触发 stat + read + sha256 的 IO 放大，故障对端可借此
-// 无成本轰炸；队列满、速率超限、拒收策略、来源校验失败不加速率记录：它们本身没有 IO
+// 无成本轰炸；队列满、速率超限、来源校验失败不加速率记录：它们本身没有 IO
 // 放大，且把已被限流的帧再计入会让发送方在窗口内自我锁定。
 
 import { randomUUID } from "node:crypto";
 import { deriveSessionShortId } from "../../shared/short-id.ts";
-import type { PeerActivity, PeersInboundPolicy, PeerLiveness, PeersSettings } from "./api.ts";
+import type { PeerActivity, PeerLiveness, PeersSettings } from "./api.ts";
 import type { PeerLiveCandidate, PeerSessionCandidate } from "./discovery.ts";
 import type { PeersEndpointReply } from "./endpoint.ts";
 import { loadPeersLargeContent, storePeersLargeContent } from "./file-store.ts";
@@ -461,7 +461,7 @@ export interface PeersInboundThrottleState {
 
 /**
  * 接收端固定判定顺序（从来源校验起；连接与版本校验在端点/解码侧完成）：
- * 来源校验 → 自投递检查 → 入站拒收策略 → 消息 id 去重 → 队列/速率检查 → 接受。
+ * 来源校验 → 自投递检查 → 消息 id 去重 → 队列/速率检查 → 接受。
  * 来源校验失败映射（规格）：注册不存在或会话 id 不匹配 → 「来源未登记」；注册已过
  * 清理阈值 → 「来源过期」。stale（心跳超一拍未过清理阈值）接受——可能只是事件循环
  * 被长工具调用阻塞。去重命中 → accepted + 「重复消息」，调用方不得重复注入。
@@ -472,7 +472,6 @@ export function judgePeersInboundRequest(input: {
   readonly request: PeersRequestFrame;
   readonly ownSessionId: string | null;
   readonly ownInstanceId: string | null;
-  readonly policy: PeersInboundPolicy;
   readonly sourceRegistration: PeerRegistrationRead | null;
   readonly duplicate: boolean;
   readonly throttle?: PeersInboundThrottleState;
@@ -499,14 +498,11 @@ export function judgePeersInboundRequest(input: {
   ) {
     return refused("self-delivery", "帧来源即本实例（自投递拒绝）");
   }
-  if (input.policy === "reject") {
-    return refused("rejected", "本会话入站策略为拒收");
-  }
   if (input.duplicate) {
     return { result: "accepted", reason: "duplicate-message", detail: "消息 id 在去重窗口内命中，不重复注入" };
   }
   // 队列/速率检查点（工单 40）：固定顺序「队列满 → 速率超限 → 接受」，保持在去重之后、
-  // 接受之前（规格判定顺序），不得先于拒收策略。本检查点的拒绝（队列满 / 速率超限）
+  // 接受之前（规格判定顺序）。本检查点的拒绝（队列满 / 速率超限）
   // 不记去重也不记速率，发送方可重试（内容校验失败的速率口径不同，见文件头说明）
   if (input.throttle !== undefined) {
     if (input.throttle.queueDepth >= input.throttle.queueLimit) {
@@ -535,7 +531,6 @@ export type PeersMessageInjector = (
 
 export interface PeersInboundHandlerDeps {
   readonly getOwnIdentity: () => Pick<PeerInstanceIdentity, "sessionId" | "instanceId"> | null;
-  readonly getPolicy: () => PeersInboundPolicy;
   /** 来源注册查找（工单 51）：实例 id + 时钟沿用旧接缝，第三参数为帧自报的会话 id——
    * 定向读按「会话 id + 实例 id」定位注册文件，两个成分都要。既有实现只按实例 id 查找时
    * 忽略第三参数，语义与旧接缝等价。 */
@@ -586,7 +581,6 @@ export function createPeersInboundHandler(deps: PeersInboundHandlerDeps): PeersI
       request,
       ownSessionId: own?.sessionId ?? null,
       ownInstanceId: own?.instanceId ?? null,
-      policy: deps.getPolicy(),
       sourceRegistration: source,
       duplicate: deps.dedupe.has(request.sessionId, request.instanceId, request.messageId),
       throttle:
@@ -614,7 +608,7 @@ export function createPeersInboundHandler(deps: PeersInboundHandlerDeps): PeersI
             `peers 大内容文件校验失败（消息 id ${request.messageId}，引用 ${request.file.path}）：${loaded.detail}；已拒绝注入，发送方不获反向通知`,
           );
           // 校验失败消耗发送方窗口预算：仍不记去重（原 messageId 可重试）。队列满 /
-          // 速率超限 / 拒收策略 / 来源校验失败不加速率记录——无 IO 放大，且把已被限流
+          // 速率超限 / 来源校验失败不加速率记录——无 IO 放大，且把已被限流
           // 的帧再计入会造成发送方自我锁定（口径见文件头）
           deps.rateGuard?.recordInbound(request.sessionId, own?.sessionId ?? null, now);
           return { result: "rejected", reason: loaded.reason };
@@ -846,8 +840,8 @@ export function describePeersReason(reason: PeersReasonCode): string {
     case "self-delivery":
       return "target is this instance (self-delivery)";
     case "rejected":
-      // 覆盖两类语义：入站拒收策略，以及大内容文件完整性校验失败（缺失 / 哈希不符 / 大小不符）
-      return "target rejected the message (inbound policy or failed content validation)";
+      // 大内容文件完整性校验失败（缺失 / 哈希不符 / 大小不符）：拒绝注入，发送端只拿到本原因码
+      return "target rejected the message (failed content validation)";
     case "queue-full":
       return "target inbound queue is full";
     case "rate-limited":

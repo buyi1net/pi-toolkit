@@ -13,11 +13,6 @@ export const PEERS_MODULE_ID = "peers";
 /** 只读发现句柄名：快照 = 会话清单（活/离线分区）+ 变更序号 + 错误状态 */
 export const PEERS_DISCOVERY_SERVICE_NAME = "peers.discovery";
 
-/** 入站策略（菜单 schema 枚举，规格场景 7：默认接收、可配置拒收） */
-export type PeersInboundPolicy = "accept" | "reject";
-
-export const PEERS_INBOUND_POLICIES: readonly PeersInboundPolicy[] = ["accept", "reject"];
-
 /** 活性：online=心跳在阈值内；stale=心跳超一拍未过清理阈值；offline=注册过期或纯磁盘会话 */
 export type PeerLiveness = "online" | "stale" | "offline";
 

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { formatElapsed } from "../tui/status/status-segments.ts";
 
 export const SNAPSHOT_STALLED_AFTER_MS = 60_000;
 /**
@@ -225,14 +226,7 @@ export function loadStatusConfig(
 }
 
 export function formatElapsedDuration(ms: number): string {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  if (totalSeconds < 60) return `${totalSeconds}s`;
-
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  if (hours > 0) return `${hours}h ${minutes}m`;
-
-  return `${minutes}m`;
+  return formatElapsed(ms);
 }
 
 export function createStatusState(params: {

@@ -297,10 +297,6 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
   // 在 messaging.ts，阈值经 getThrottle 注入（随 reload 生效）
   const inboundHandler = createPeersInboundHandler({
     getOwnIdentity: () => heartbeat.identity(),
-    getPolicy: () => {
-      const raw = context.getConfig().inboundPolicy;
-      return raw === "reject" ? "reject" : "accept";
-    },
     // 入站来源校验（工单 51）：按帧自报的会话 id + 实例 id 定向读那一个注册文件（不再全量枚举），
     // 定位失败按来源未登记并进运行期诊断——判定顺序与口径由 messaging.ts 的纯函数保证
     findSourceRegistration: (instanceId, now, sessionId) =>
@@ -332,7 +328,7 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
       agentDir,
       instanceId,
       getSettings: () => currentSettings(),
-      // 投递判定（来源校验 / 自投递 / 拒收策略 / 去重）与注入（messaging.ts，工单 39）
+      // 投递判定（来源校验 / 自投递 / 去重 / 队列与速率）与注入（messaging.ts，工单 39）
       onRequest: inboundHandler,
       // 运行期监听异常 teardown 后，心跳里缓存的端点已是死地址且不会被本实例后续
       // 心跳改写：先清空注册端点再上报（setEndpoint(null) 同值直接返回，安全）；

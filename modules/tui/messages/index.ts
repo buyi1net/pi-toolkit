@@ -6,13 +6,12 @@
 import type { MessageTables } from "../../../i18n/index.ts";
 
 const EN = {
-  "module.tui.label": "Appearance & status",
+  "module.tui.label": "Appearance",
   "module.tui.description": "Editor border, header, footer, spinner, status preset and provider data",
   "module.tui.enabled.label": "Enable appearance & status",
   "module.tui.enabled.description": "When off, the editor, header, footer, working indicator and all 15 event hooks are not installed (reload to apply)",
-  "module.tui.menu.label": "Appearance & status",
+  "module.tui.menu.label": "Appearance",
   "module.tui.menu.description": "Editor border, header, footer, spinner and status bar display",
-  "module.tui.menu.value": "Editor {editor} · Header {header} · Footer {footer}",
   "module.tui.editor.label": "Editor border status",
   "module.tui.editor.description": "Show status segments on the editor frame",
   "module.tui.header.label": "Header",
@@ -28,13 +27,12 @@ const EN = {
 } satisfies Record<string, string>;
 
 const ZH_CN: typeof EN = {
-  "module.tui.label": "外观与状态",
-  "module.tui.description": "编辑器边框、Header、底部栏、Spinner、状态预设与供应商数据",
+  "module.tui.label": "外观配置",
+  "module.tui.description": "编辑器边框、顶部信息栏、底部状态栏、工作指示动画、状态预设与供应商数据",
   "module.tui.enabled.label": "启用外观与状态",
-  "module.tui.enabled.description": "关闭后不安装编辑器、Header、底部栏、工作指示动画与全部 15 个事件钩子（重载 pi 后生效）",
-  "module.tui.menu.label": "外观与状态",
-  "module.tui.menu.description": "编辑器边框、Header、底部栏、Spinner 与状态栏显示",
-  "module.tui.menu.value": "编辑器{editor} · Header{header} · 底部栏{footer}",
+  "module.tui.enabled.description": "关闭后不安装编辑器、顶部信息栏、底部状态栏、工作指示动画与全部 15 个事件钩子（重载 pi 后生效）",
+  "module.tui.menu.label": "外观配置",
+  "module.tui.menu.description": "编辑器边框、顶部信息栏、底部状态栏与工作指示动画",
   "module.tui.editor.label": "编辑器边框状态",
   "module.tui.editor.description": "在编辑器边框上显示状态分段",
   "module.tui.header.label": "顶部信息栏",
@@ -50,13 +48,12 @@ const ZH_CN: typeof EN = {
 };
 
 const ZH_TW: typeof EN = {
-  "module.tui.label": "外觀與狀態",
-  "module.tui.description": "編輯器邊框、Header、底部列、Spinner、狀態預設與供應商資料",
+  "module.tui.label": "外觀配置",
+  "module.tui.description": "編輯器邊框、頂部資訊列、底部狀態列、工作指示動畫、狀態預設與供應商資料",
   "module.tui.enabled.label": "啟用外觀與狀態",
-  "module.tui.enabled.description": "關閉後不安裝編輯器、Header、底部列、工作指示動畫與全部 15 個事件鉤子（重新載入 pi 後生效）",
-  "module.tui.menu.label": "外觀與狀態",
-  "module.tui.menu.description": "編輯器邊框、Header、底部列、Spinner 與狀態列顯示",
-  "module.tui.menu.value": "編輯器{editor} · Header{header} · 底部列{footer}",
+  "module.tui.enabled.description": "關閉後不安裝編輯器、頂部資訊列、底部狀態列、工作指示動畫與全部 15 個事件鉤子（重新載入 pi 後生效）",
+  "module.tui.menu.label": "外觀配置",
+  "module.tui.menu.description": "編輯器邊框、頂部資訊列、底部狀態列與工作指示動畫",
   "module.tui.editor.label": "編輯器邊框狀態",
   "module.tui.editor.description": "在編輯器邊框上顯示狀態分段",
   "module.tui.header.label": "頂部資訊列",

@@ -244,7 +244,7 @@ export function parseCaptureResult(value: unknown): ComputerCaptureRecord | unde
     if (!isRecord(capturedWindow)) return undefined;
     const key = capturedWindow.key;
     if (typeof key !== "string" || key.length === 0) return undefined;
-    if (source !== "print_window" && source !== "screen_region") return undefined;
+    if (source !== "print_window" && source !== "screen_region" && source !== "quartz_window") return undefined;
     if (typeof mayBeObscured !== "boolean") return undefined;
     // 协议不变量：回退屏幕区域就是可能被遮挡，PrintWindow 就是没有
     if (mayBeObscured !== (source === "screen_region")) return undefined;
@@ -519,6 +519,7 @@ function actPayload(request: ComputerBackendActRequest): Record<string, unknown>
     key: request.rootKey,
     actions: request.actions.map((entry) => ({
       action: entry.command.action,
+      ...(entry.command.delivery !== undefined ? { delivery: entry.command.delivery } : {}),
       ...(entry.command.text !== undefined ? { text: entry.command.text } : {}),
       ...(entry.command.keys !== undefined ? { keys: [...entry.command.keys] } : {}),
       ...(entry.command.x !== undefined ? { x: entry.command.x } : {}),

@@ -31,7 +31,7 @@ export function createStatusModule(options: StatusModuleOptions = {}): ModuleDef
 		id: STATUS_MODULE_ID,
 		labelKey: "module.status.label",
 		descriptionKey: "module.status.description",
-		// 工单 46：归 TUI 分组，与 tui 模块共享「外观与状态」二级页（pageId "tui"）；
+		// 工单 46：归 TUI 分组，与 tui 模块共享「外观配置」二级页（pageId "tui"）；
 		// 一级不出现（topLevel 空数组），行全部收进二级页
 		group: "tui",
 		pageId: "tui",

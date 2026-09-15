@@ -189,6 +189,10 @@ export const COMPUTER_ACTIONS = [
 ] as const;
 export type ComputerActionName = (typeof COMPUTER_ACTIONS)[number];
 
+/** 动作投递路径：semantic 走无障碍语义接口；background 不抢用户焦点；foreground 明确允许前台输入。 */
+export const COMPUTER_ACTION_DELIVERIES = ["semantic", "background", "foreground"] as const;
+export type ComputerActionDelivery = (typeof COMPUTER_ACTION_DELIVERIES)[number];
+
 /**
  * 动作条目上除 action 之外的逻辑字段名；必填关系见 COMPUTER_ACTION_CONTRACTS.requires。
  * 逻辑字段 → 条目属性名的对应：ref → ref；point → x/y；to → toX/toY；delta → deltaX/deltaY；
@@ -293,8 +297,8 @@ export interface ComputerCaptureImage {
   readonly scale: number;
 }
 
-/** 窗口像素的来源：PrintWindow，或失败/黑帧时回退到屏幕上的可见区域 */
-export type ComputerCaptureSource = "print_window" | "screen_region";
+/** 窗口像素的来源：Windows PrintWindow/屏幕回退，或 macOS Quartz 窗口采集 */
+export type ComputerCaptureSource = "print_window" | "screen_region" | "quartz_window";
 
 /**
  * 一次采集的回执：文件路径、图像元数据与采集区域（虚拟桌面物理坐标）。
@@ -308,7 +312,7 @@ export interface ComputerCaptureRecord {
   readonly display?: ComputerDisplayInfo;
   readonly window?: { readonly key: string };
   readonly source?: ComputerCaptureSource;
-  /** 屏幕回退的采集可能包含遮挡物；source 为 screen_region 时为 true */
+  /** 屏幕回退的采集可能包含遮挡物；source 为 screen_region 时为 true，窗口专用采集为 false */
   readonly mayBeObscured?: boolean;
 }
 
@@ -604,6 +608,13 @@ const COMPUTER_ACTION_SCHEMA = Type.Object(
         "Coordinate actions (click/scroll/drag/moveMouse with x/y) need the stateId of a capture: true " +
         "observation: x/y are pixels of that observation's image.",
     }),
+    delivery: Type.Optional(
+      Type.Union(COMPUTER_ACTION_DELIVERIES.map((value) => Type.Literal(value)), {
+        description:
+          "Delivery path: semantic uses accessibility APIs; background must not take the user's focus; foreground explicitly permits foreground input. " +
+          "Defaults to semantic for element actions and background for physical input.",
+      }),
+    ),
     ref: Type.Optional(ACTION_REF_FIELD),
     x: Type.Optional(
       Type.Number({

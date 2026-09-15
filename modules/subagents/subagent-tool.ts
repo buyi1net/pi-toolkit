@@ -557,7 +557,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       "PERSISTENT TEAM MEMBERS (member: true): spawns a long-lived headless team member instead of a one-shot sub-agent. The call returns an immediate ack (no hard barrier); the member stays alive between rounds, receives follow-up rounds via team_dispatch, and each round's result is delivered once as a steer message. Members may fire-and-forget message each other via team_send along the profile's peer-send ACL. Refused combinations: surface 'pane', interactive agents, retention 'discard', timeoutMs, dependsOn. Members cannot be dependsOn targets. Terminate a member explicitly with subagent_stop; host shutdown or /reload terminates members and marks them offline (session preserved for explicit resume). " +
       "surface parameter: 'auto' (default — headless for autonomous, visible pane for interactive), 'background' (force headless; refused for interactive agents), 'pane' (force a visible pane). " +
       "RETENTION parameter: 'auto' (default) | 'preserve' | 'discard' — controls what happens to a headless autonomous sub-agent's session artifacts (session JSONL, .loadout.json, context task/system-prompt files, activity/runtime registration) AFTER this call has settled with the real result. 'auto': successful runs are cleaned up; failed/cancelled/handed-off runs are preserved so you can resume them with subagent_message. 'preserve': always keep everything. 'discard': always clean up after a terminal state, including failures — use when you know you will never resume. Visible pane / demo sub-agents are ALWAYS preserved regardless. Cleanup never affects the tool result." +
-      "tier parameter: 'fast' | 'balanced' | 'deep' preset resolved from the pi-subagents config (ordered candidate pools models.fast/balanced/deep — arrays where the first entry is the preferred model; aliases quick/balance/standard/strong accepted). Candidates are tried in configured order: candidates that verifiably lack a capability required by the agent profile (frontmatter `capabilities`) or do not support the resolved thinking level are skipped in favor of later candidates, as are candidates whose provider is known (from the last runtime status refresh) to have exhausted its quota, be offline, or be persistently unstable; unknown/unconfirmed status never blocks a candidate. FAILOVER: if the actually-launched candidate dies on a TRANSIENT route error (rate limit / overload / timeout / temporary 5xx) before doing any work (zero tool calls), the call automatically retries the next untried candidate — each candidate at most once, in configured order, with the overall timeoutMs budget covering all attempts; parameter/credential/quota/context errors are NOT auto-retried. The tool result records the preferred model, the actual model, and the downgrade reason in details.modelRouting; if every candidate fails, a clear aggregated per-attempt error is returned. An explicit `model` always wins over `tier` (and is verified, never swapped — no failover); a tier without a configured candidate pool fails with a clear error — models are never silently swapped. " +
+      "tier parameter: 'fast' | 'balanced' | 'flagship' preset resolved from the pi-subagents config (ordered candidate pools models.fast/balanced/flagship — arrays where the first entry is the preferred model; aliases quick/balance/standard/deep/strong accepted). Candidates are tried in configured order: candidates that verifiably lack a capability required by the agent profile (frontmatter `capabilities`) or do not support the resolved thinking level are skipped in favor of later candidates, as are candidates whose provider is known (from the last runtime status refresh) to have exhausted its quota, be offline, or be persistently unstable; unknown/unconfirmed status never blocks a candidate. FAILOVER: if the actually-launched candidate dies on a TRANSIENT route error (rate limit / overload / timeout / temporary 5xx) before doing any work (zero tool calls), the call automatically retries the next untried candidate — each candidate at most once, in configured order, with the overall timeoutMs budget covering all attempts; parameter/credential/quota/context errors are NOT auto-retried. The tool result records the preferred model, the actual model, and the downgrade reason in details.modelRouting; if every candidate fails, a clear aggregated per-attempt error is returned. An explicit `model` always wins over `tier` (and is verified, never swapped — no failover); a tier without a configured candidate pool inherits the parent session model when available; without a parent model it fails clearly — models are never silently swapped. " +
       "DEPENDENCIES (dependsOn): pass `dependsOn: [names]` to make this call WAIT for those same-session subagents to reach a terminal state BEFORE launching — including siblings issued in the SAME assistant message (the dependent call waits on the upstream completion promise; independent siblings still run in parallel). " +
       "When all dependencies completed, a short real-results context block is appended to `task`. If any dependency failed or was cancelled, this call does NOT launch and the tool result details carry a structured `dependencyException` (kind, dependency, upstream error) — no pane/process is created. " +
       "Rejected without launching: this call's own name, unknown names (not running, not announced by a sibling, not in the session registry), running-without-waiter (e.g. after a host reload), and interactive demo subagents (no waitable terminal state). Dependencies finished in an earlier turn are resolved from the session registry. " +
@@ -886,12 +886,13 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       const retentionPolicy = params.retention ?? "auto";
       const waitDeadline = timeoutMs != null ? Date.now() + timeoutMs : null;
       const failoverBase =
-        plan.tier != null && plan.tierPool != null && plan.tierPool.length > 0
+        plan.tier != null && (plan.tierPool != null || plan.fallbackReason != null)
           ? {
               tier: plan.tier,
-              pool: plan.tierPool,
-              preferred: plan.tierPool[0],
+              pool: plan.tierPool?.length ? plan.tierPool : [plan.effectiveModel!],
+              preferred: plan.tierPool?.[0] ?? plan.effectiveModel!,
               initialSkips: plan.tierSelection?.skipped ?? [],
+              fallbackReason: plan.fallbackReason,
             }
           : null;
       const failoverAttempts: ModelFailoverAttempt[] = [];
@@ -907,6 +908,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
               actual: running.model ?? null,
               attempts: failoverAttempts,
               selectionSkips: failoverBase.initialSkips,
+              fallbackReason: failoverBase.fallbackReason ?? undefined,
             })
           : null;
 
@@ -988,7 +990,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       const result: SubagentResult = raced;
 
       // ── 工单 26：临时性路由故障的候选切换判定（仅 tier 候选池路径）──
-      if (failoverBase) {
+      if (failoverBase && !plan.fallbackReason) {
         const cancelledNow =
           started.signal.aborted || !!result.userClosed || !!result.stopped;
         const routeExceptionNow = cancelledNow

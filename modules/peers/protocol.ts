@@ -9,7 +9,7 @@
 // - 非法帧 / 未知版本：拒绝并返回协议错误原因码，不崩溃、不挂连接、不误读后续帧。
 //
 // 本文件是纯逻辑（无真实 OS 端点）：传输走 PeersTransport 接缝，真实命名管道 / 域
-// socket 适配器归工单 38；投递判定顺序（来源校验、自投递、拒收、队列/速率）归工单 39/40。
+// socket 适配器归工单 38；投递判定顺序（来源校验、自投递、去重、队列/速率）归工单 39/40。
 
 import { Buffer } from "node:buffer";
 import type { PeersSettings } from "./api.ts";

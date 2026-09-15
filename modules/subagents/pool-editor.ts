@@ -1,7 +1,7 @@
 // 子代理候选池编辑器（工单 47 方案 C）：每档一个分区——头行显示档位名与该档
 // 默认思考等级（←→ 循环调整），下面是候选模型行与「＋ 添加模型」行。原生
 // SettingsList / SelectList 不支持左右键、排序键、Ctrl+D 待删态，也没有「当前
-// 选中行」的读取口，所以这里自绘专用组件（渲染与按键风格照 kit/menu/grouped-list.ts：
+// 选中行」的读取口，所以这里自绘专用组件（渲染与按键风格照 pi 原生 SettingsList：
 // 主题上色、cursor 前缀、(n/m) 滚动提示、i18n 提示行）。
 //
 // 键位（工单 47 的表）：↑↓ 全行可达（头行也算行）、←→ 调当前行所属档位的思考
@@ -50,7 +50,7 @@ import type { SubagentsMessageKey } from "./messages/index.ts";
  * MODEL_TIERS（fast → balanced → deep）仍是校验与报错原文的规范档位清单，
  * 不随显示顺序变化，两份常量各管各的。
  */
-export const TIER_DISPLAY_ORDER: readonly ModelTier[] = ["deep", "balanced", "fast"];
+export const TIER_DISPLAY_ORDER: readonly ModelTier[] = ["flagship", "balanced", "fast"];
 
 /** 档位显示名的 i18n 键：内部键不改名，只在显示层换名 */
 export function tierNameKey(tier: ModelTier): SubagentsMessageKey {
@@ -510,6 +510,8 @@ export class SubagentsPanel implements Component {
           : t("module.subagents.pool.addTitle", { tier: tierName }),
       theme: this.options.theme,
       t,
+      // 模型目录全集较长：开搜索框，输入即过滤
+      searchable: true,
       options: this.candidates.map((candidate) => ({
         value: tierCandidateValue(candidate),
         label: tierCandidateValue(candidate),

@@ -12,11 +12,6 @@ const EN = {
   "module.peers.enabled.label": "Enable session discovery",
   "module.peers.enabled.description": "When off, no peer discovery handle is registered and messaging is unavailable (reload to apply)",
 
-  "module.peers.inboundPolicy.label": "Cross-session collaboration",
-  "module.peers.inboundPolicy.description": "Whether this session accepts messages sent by other local sessions",
-  "module.peers.inboundPolicy.accept": "Accept messages",
-  "module.peers.inboundPolicy.reject": "Reject messages",
-
   "module.peers.problem.init": "Peers module initialization problem: {detail}",
   "module.peers.problem.runtime": "Peers module runtime problem: {detail}",
 
@@ -41,11 +36,6 @@ const ZH_CN: typeof EN = {
   "module.peers.enabled.label": "启用会话发现",
   "module.peers.enabled.description": "关闭后不注册会话发现句柄，通讯能力不可用（重载 pi 后生效）",
 
-  "module.peers.inboundPolicy.label": "跨会话协作",
-  "module.peers.inboundPolicy.description": "本会话是否接收其它本机会话发来的消息",
-  "module.peers.inboundPolicy.accept": "接收",
-  "module.peers.inboundPolicy.reject": "拒收",
-
   "module.peers.problem.init": "会话发现与通讯模块初始化异常：{detail}",
   "module.peers.problem.runtime": "会话发现与通讯模块运行异常：{detail}",
 
@@ -69,11 +59,6 @@ const ZH_TW: typeof EN = {
   "module.peers.description": "發現本機開著其它 pi 會話，並在會話之間互傳訊息",
   "module.peers.enabled.label": "啟用會話發現",
   "module.peers.enabled.description": "關閉後不註冊會話發現句柄，通訊能力不可用（重新載入 pi 後生效）",
-
-  "module.peers.inboundPolicy.label": "跨會話協作",
-  "module.peers.inboundPolicy.description": "本會話是否接收其它本機會話傳來的訊息",
-  "module.peers.inboundPolicy.accept": "接收",
-  "module.peers.inboundPolicy.reject": "拒收",
 
   "module.peers.problem.init": "會話發現與通訊模組初始化異常：{detail}",
   "module.peers.problem.runtime": "會話發現與通訊模組執行異常：{detail}",

@@ -59,13 +59,18 @@ export function durationStatusColor(state: TurnTimerState): ThemeColor {
 	return "dim";
 }
 
+/** 四档全展示（s / m+s / h+m+s / d+h+m+s）：秒数永不省略，数字不补零；
+ * 字段宽度不在此截断，由段位布局的压缩降级负责。 */
 export function formatElapsed(elapsedMs: number): string {
 	const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
 	const seconds = totalSeconds % 60;
 	const totalMinutes = Math.floor(totalSeconds / 60);
 	if (totalMinutes < 1) return `${seconds}s`;
 	const minutes = totalMinutes % 60;
-	const hours = Math.floor(totalMinutes / 60);
-	if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
-	return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+	const totalHours = Math.floor(totalMinutes / 60);
+	if (totalHours < 1) return `${minutes}m ${seconds}s`;
+	const hours = totalHours % 24;
+	const days = Math.floor(totalHours / 24);
+	if (days < 1) return `${hours}h ${minutes}m ${seconds}s`;
+	return `${days}d ${hours}h ${minutes}m ${seconds}s`;
 }

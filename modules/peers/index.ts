@@ -23,10 +23,8 @@ import {
   type ModuleConfigSchema,
   type ModuleContext,
   type ModuleDefinition,
-  type ModuleMenuContext,
 } from "../../kit/module.ts";
-import { schemaFieldRow } from "../../kit/menu/items.ts";
-import { PEERS_INBOUND_POLICIES, PEERS_MODULE_ID, type PeersInboundPolicy } from "./api.ts";
+import { PEERS_MODULE_ID } from "./api.ts";
 import { registerPeers, type PeersModuleOptions } from "./mod.ts";
 
 export { PEERS_DISCOVERY_SERVICE_NAME, PEERS_MODULE_ID } from "./api.ts";
@@ -38,7 +36,6 @@ export type {
   PeersDiagnostic,
   PeersDiscoveryService,
   PeersDiscoverySnapshot,
-  PeersInboundPolicy,
   PeersScanFn,
   PeersScanResult,
   PeersSettings,
@@ -125,40 +122,10 @@ export type {
   PeerSessionIdentity,
 } from "./registry.ts";
 
-/** 入站策略取值 → 三语文案键；与 PEERS_INBOUND_POLICIES 一一对应 */
-const INBOUND_POLICY_LABEL_KEYS: Readonly<Record<PeersInboundPolicy, string>> = {
-  accept: "module.peers.inboundPolicy.accept",
-  reject: "module.peers.inboundPolicy.reject",
-};
-
-/** 配置 schema：菜单顶层钩子与装配共用同一份定义（工单 46） */
+/** 配置 schema：装配门控共用（菜单不再出现任何 peers 行） */
 const PEERS_CONFIG_SCHEMA: ModuleConfigSchema = {
   enabled: enabledField("module.peers.enabled.label", "module.peers.enabled.description"),
-  inboundPolicy: {
-    default: "accept",
-    values: PEERS_INBOUND_POLICIES,
-    labelKey: "module.peers.inboundPolicy.label",
-    descriptionKey: "module.peers.inboundPolicy.description",
-    valueLabelKeys: INBOUND_POLICY_LABEL_KEYS,
-  },
 };
-
-/**
- * 顶层行（工单 46）：只放入站策略一行，直接在一级改。
- * 「关闭跨会话协作」开关按用户决策撤掉（跨会话协作是默认能力），
- * enabled 字段保留在 schema 里供装配门控，但不再出现在菜单。
- */
-function peersTopLevel(context: ModuleMenuContext) {
-  return [
-    schemaFieldRow({
-      t: context.t,
-      theme: context.theme,
-      id: `${PEERS_MODULE_ID}.inboundPolicy`,
-      field: PEERS_CONFIG_SCHEMA.inboundPolicy,
-      current: context.getConfig()["inboundPolicy"],
-    }),
-  ];
-}
 
 export function createPeersModule(options: PeersModuleOptions = {}): ModuleDefinition {
   return {
@@ -166,10 +133,12 @@ export function createPeersModule(options: PeersModuleOptions = {}): ModuleDefin
     labelKey: "module.peers.label",
     descriptionKey: "module.peers.description",
     group: "general",
-    // 配置契约（规格定案）：菜单 schema 只放 enabled 与入站策略枚举；
+    // 配置契约：菜单 schema 只放 enabled；原入站策略按用户决策废除（拒收是全局阀，
+    // 一关全机器收不到消息，不是防骚扰，故删除）。
     // 阈值类数值参数是模块私有结构化配置，由 config.ts 的解析器校验。
     configSchema: PEERS_CONFIG_SCHEMA,
-    topLevel: peersTopLevel,
+    // 模块在一级菜单不出行（显式空 topLevel；无需菜单行，开关只能手编配置文件）
+    topLevel: () => [],
     register(context: ModuleContext): void {
       registerPeers(context, options);
     },

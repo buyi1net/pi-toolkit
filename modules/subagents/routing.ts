@@ -7,9 +7,9 @@ import { homedir } from "node:os";
 const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url));
 
 /** 规范档位;配置与 params 都归一化到这三个值。 */
-export type ModelTier = "fast" | "balanced" | "deep";
+export type ModelTier = "fast" | "balanced" | "flagship";
 
-export const MODEL_TIERS: readonly ModelTier[] = ["fast", "balanced", "deep"];
+export const MODEL_TIERS: readonly ModelTier[] = ["fast", "balanced", "flagship"];
 
 /**
  * 规范思考等级（工单 23）：与 Pi 宿主的 ThinkingLevel 全集逐字一致
@@ -59,7 +59,7 @@ export function modelOwnThinkingSuffix(
 const TIER_ALIASES: Record<ModelTier, string[]> = {
   fast: ["fast", "quick"],
   balanced: ["balanced", "balance", "standard"],
-  deep: ["deep", "strong"],
+  flagship: ["flagship", "deep", "strong"],
 };
 
 /** 归一化 tier 输入;无法识别返回 null,调用方必须报清晰错误,不得静默换档。 */
@@ -456,29 +456,32 @@ export type TierLaunchResolution =
   | { error: string };
 
 export type TierPoolResolution =
-  | { tier: ModelTier | null; pool?: string[]; thinking?: ThinkingLevel }
+  | { tier: ModelTier | null; pool?: string[]; thinking?: ThinkingLevel; fallbackReason?: "pool-unconfigured" }
   | { error: string };
 
 /**
  * launch 前的 tier 候选池解析（工单 24 抽出，供启动链接选择器）：显式
- * params.model 永远优先 tier（同时给出时不读配置，tier 仅作 loadout 记录，
- * pool 为 undefined）；tier 无法归一化、配置读失败或缺映射时报错，不回退。
+ * model 永远优先 tier（同时给出时不读配置，tier 仅作 loadout 记录，pool
+ * 为 undefined）；显式 tier 优先 agentTier。tier 无法归一化或配置读失败时报错；
+ * 缺映射交由启动层按父会话是否可用决定是否继承。
  *
  * tier 经配置解析出候选池时，同时带出该档的默认思考等级 thinking；显式
  * model 胜出时 tier 只是记录，不把档位思考等级带到另一个模型上。
  */
 export function resolveTierPoolForParams(
-  params: { tier?: string; model?: string },
+  params: { tier?: string; model?: string; agentTier?: string },
   loadConfig: () => TierConfigLoadResult,
 ): TierPoolResolution {
-  const requested = params.tier?.trim();
+  // 四级路由的前三级在此收口：显式 model 由调用方传入，显式 tier
+  // 优先于档案 tier；无声明时返回 null，第四级由后续工单接入。
+  const requested = params.tier?.trim() || params.agentTier?.trim();
   if (!requested) return { tier: null };
   const tier = normalizeTier(requested);
   if (!tier) {
     return {
       error:
         `Invalid tier "${params.tier}". Use one of: ${MODEL_TIERS.join(", ")} ` +
-        "(aliases: quick, balance/standard, strong).",
+        "(aliases: quick, balance/standard, deep/strong).",
     };
   }
   if (params.model) return { tier };
@@ -487,14 +490,15 @@ export function resolveTierPoolForParams(
     return { error: `Tier "${tier}" could not be resolved: ${loaded.error}` };
   }
   const pool = tierModelPool(tier, loaded.config);
-  if ("error" in pool) return { error: pool.error };
+  if ("error" in pool) return { tier, fallbackReason: "pool-unconfigured" };
   const tierThinking = loaded.config?.thinking?.[tier] ?? undefined;
   return { tier, pool: pool.pool, ...(tierThinking ? { thinking: tierThinking } : {}) };
 }
 
 /**
- * launch 前的 tier 解析:显式 params.model 永远优先 tier(同时给出时不读
- * 配置,tier 仅作 loadout 记录);tier 无法归一化或缺映射时报错,不回退。
+ * launch 前的 tier 解析：显式 model 永远优先 tier（同时给出时不读配置，tier
+ * 仅作 loadout 记录）；显式 tier 优先 agentTier。tier 无法归一化时报错；
+ * 缺映射交由启动层按父会话是否可用决定是否继承。
  *
  * 工单 23:tier 经配置解析出模型时,同时带出该档的默认思考等级 thinking;
  * 显式 model 胜出时 tier 只是记录,不把档位思考等级带到另一个模型上
@@ -506,7 +510,7 @@ export function resolveTierPoolForParams(
  * model-selector.ts 的 selectModelCandidate（启动链，startup.ts）。
  */
 export function resolveTierForParams(
-  params: { tier?: string; model?: string },
+  params: { tier?: string; model?: string; agentTier?: string },
   loadConfig: () => TierConfigLoadResult,
 ): TierLaunchResolution {
   const resolved = resolveTierPoolForParams(params, loadConfig);

@@ -43,7 +43,7 @@ export interface ConfigField {
 
 export type ModuleConfigSchema = Record<string, ConfigField>;
 
-/** 菜单分组：一级菜单的四个分组标题（工单 46；标题行只做视觉分隔，不响应回车、不参与搜索） */
+/** 菜单分组：决定一级菜单里的行序（模块按组依次排列；菜单不再渲染分组标题） */
 export type ModuleGroup = "general" | "tui" | "models" | "subagents";
 export const MODULE_GROUPS: readonly ModuleGroup[] = ["general", "tui", "models", "subagents"];
 
@@ -104,6 +104,17 @@ export interface ModuleContext {
   saveConfig(patch: ModuleConfigRecord, hooks?: ConfigWriteHooks): Promise<void>;
 }
 
+/**
+ * 自绘短选项行的就地切换契约（本单）：行带 `values` 显示数组后，用户回车/空格直接循环切换，
+ * 菜单层把新文案交回这里的 change；保存失败时按 read 回读的文案回滚行显示。
+ */
+export interface RowChangeEntry {
+  /** 当前应显示的文案（保存失败时回滚显示用） */
+  read(): string;
+  /** 就地切换：新显示文案 → 保存；返回是否成功（失败时菜单层回滚显示，提示由行自己负责） */
+  change(label: string): Promise<boolean>;
+}
+
 export interface ModuleMenuContext {
   readonly t: Translator;
   readonly services: ServiceRegistry;
@@ -123,6 +134,11 @@ export interface ModuleMenuContext {
   saveConfig(patch: ModuleConfigRecord, hooks?: ConfigWriteHooks): Promise<void>;
   /** 顶层统一改动入口（id 与显示文案，工单 46）：共享二级页里 schema 字段行的取值经它落盘 */
   onChange(id: string, value: string): void;
+  /**
+   * 自绘短选项行的就地切换注册（本单）：行构造时注册，用户切换后由菜单层调用 entry.change；
+   * schema 字段行不需要（骨架自动行直接走 applyMenuChange）。
+   */
+  registerRowChange(id: string, entry: RowChangeEntry): void;
   /**
    * 共享二级页行集合（工单 46）：与本模块同 pageId 的启用模块的行，本模块的行在前。
    * 未声明 pageId 的模块没有这一项。

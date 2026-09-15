@@ -125,6 +125,10 @@ export interface SpawnContext {
    * 时同样跳过核验，不虚构支持性。
    */
   readonly modelRegistry?: SpawnModelCatalog;
+  /** 当前父会话模型；仅池未配置/全状态阻断时作为第四级继承源。 */
+  readonly model?: { provider: string; id: string };
+  /** 当前父会话思考等级，与父会话实际值一致地显式传给子进程。 */
+  readonly thinkingLevel?: string;
 }
 
 /** 启动后的句柄：已登记的运行态 + 已按运行类别启动的 watcher。 */
@@ -178,6 +182,8 @@ export interface SpawnPlan {
    * 原样。非 tier 路径（无 tier / 显式 model）为 null——显式 model 永不换。
    */
   tierPool: readonly string[] | null;
+  /** 第四级继承的可观测原因；仅白名单触发。 */
+  fallbackReason: "pool-unconfigured" | "pool-status-unavailable" | null;
   /**
    * 候选选择器结果（工单 24）：tier 路径实际选中的候选与被跳过候选的
    * 诊断记录。非 tier 路径（无 tier / 显式 model）为 null。effectiveModel
@@ -542,14 +548,23 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     // tier 仅作记录,resume 不随配置漂移。
     // 对象包裹：闭包内赋值 + 外部读取时绕开 TS 控制流把 let 变量窄化成 null。
     const tierLoadRef: { value: TierConfigLoadResult | null } = { value: null };
-    const tierPool = resolveTierPoolForParams(params, () => {
-      tierLoadRef.value = loadTierRouteConfig({
-        cwd: targetCwdForSession,
-        agentConfigDir: effectiveAgentDir,
-        injected: deps.resolveHostTierSources(),
-      });
-      return tierLoadRef.value;
-    });
+    const tierPool = resolveTierPoolForParams(
+      {
+        ...params,
+        // 档案 model 与 tier 同时存在时，model 作为最高级声明，阻止 tier
+        // 候选池解析；档案 tier 仅在没有显式 tier 时接入。
+        model: params.model ?? (params.tier ? undefined : agentDefs?.model),
+        agentTier: agentDefs?.tier,
+      },
+      () => {
+        tierLoadRef.value = loadTierRouteConfig({
+          cwd: targetCwdForSession,
+          agentConfigDir: effectiveAgentDir,
+          injected: deps.resolveHostTierSources(),
+        });
+        return tierLoadRef.value;
+      },
+    );
     if ("error" in tierPool) return { kind: "error", error: tierPool.error };
 
     // ── 候选选择器（工单 24 + 工单 25 运行状态边界 + 工单 26 降级重试）──
@@ -563,6 +578,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     // 候选——查询失败绝不让整个编排停摆；同时 fire-and-forget 触发后台
     // 刷新，下一轮 spawn 受益。全池被过滤时返回结构化可诊断错误，不静默换档。
     let tierSelection: ModelCandidateSelection | null = null;
+    let fallbackReason: SpawnPlan["fallbackReason"] = tierPool.fallbackReason ?? null;
     let modelHealth: ModelHealthMap | undefined;
     if (tierPool.pool !== undefined && deps.modelHealth) {
       modelHealth = deps.modelHealth.read(tierPool.pool);
@@ -580,43 +596,64 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         planOptions?.excludeModels,
       );
       if ("failure" in outcome) {
-        const source = tierLoadRef.value?.sourcePath ?? "the pi-subagents config";
-        const rejections = outcome.failure.rejections
-          .map((rejection) => `  - ${rejection.model}: ${rejection.reason}`)
-          .join("\n");
-        const statusSkipped = outcome.failure.rejections.some((rejection) => rejection.kind === "status");
-        return {
-          kind: "error",
-          error:
-            `No usable model candidate for tier "${tierPool.tier}": every configured candidate ` +
-            `was filtered out (pool: ${outcome.failure.pool.join(", ")}).\n${rejections}\n` +
-            `Adjust models.${tierPool.tier} in ${source}, the thinking level, ` +
-            `or the agent capability requirements.` +
-            (statusSkipped
-              ? "\nNote: status-based skips use the last known runtime status (quota exhausted / offline) " +
-                "and refresh in the background; the static pool config is unchanged."
-              : ""),
-          details: {
-            error: "no usable model candidate",
-            tier: tierPool.tier,
-            pool: [...outcome.failure.pool],
-            requirements: {
-              ...(requiredCapabilities.length > 0 ? { capabilities: [...requiredCapabilities] } : {}),
-              thinking: requestedThinking ?? tierPool.thinking ?? null,
+        const allStatusBlocked = outcome.failure.rejections.length > 0 &&
+          outcome.failure.rejections.every((rejection) =>
+            rejection.kind === "status" && !rejection.reason.includes("excluded by failover policy"),
+          );
+        if (!allStatusBlocked) {
+          const source = tierLoadRef.value?.sourcePath ?? "the pi-subagents config";
+          const rejections = outcome.failure.rejections
+            .map((rejection) => `  - ${rejection.model}: ${rejection.reason}`)
+            .join("\n");
+          const statusSkipped = outcome.failure.rejections.some((rejection) => rejection.kind === "status");
+          return {
+            kind: "error",
+            error:
+              `No usable model candidate for tier "${tierPool.tier}": every configured candidate ` +
+              `was filtered out (pool: ${outcome.failure.pool.join(", ")}).\n${rejections}\n` +
+              `Adjust models.${tierPool.tier} in ${source}, the thinking level, ` +
+              `or the agent capability requirements.` +
+              (statusSkipped
+                ? "\nNote: status-based skips use the last known runtime status (quota exhausted / offline) " +
+                  "and refresh in the background; the static pool config is unchanged."
+                : ""),
+            details: {
+              error: "no usable model candidate",
+              tier: tierPool.tier,
+              pool: [...outcome.failure.pool],
+              requirements: {
+                ...(requiredCapabilities.length > 0 ? { capabilities: [...requiredCapabilities] } : {}),
+                thinking: requestedThinking ?? tierPool.thinking ?? null,
+              },
+              rejections: outcome.failure.rejections.map((rejection) => ({ ...rejection })),
             },
-            rejections: outcome.failure.rejections.map((rejection) => ({ ...rejection })),
-          },
-        };
+          };
+        }
+        fallbackReason = "pool-status-unavailable";
+      } else {
+        tierSelection = outcome.selection;
       }
-      tierSelection = outcome.selection;
     }
-    const effectiveModel = params.model ?? tierSelection?.model ?? agentDefs?.model;
+    // 模型四级优先级：显式 model > 显式 tier 池 > 档案 tier 池 > 父会话。
+    // 继承只由池未配置或全候选状态/额度阻断触发；档案 model 与 tier 冲突时
+    // model 在 resolver 入参中已阻止 tier 池，仍按档案 model 使用。
+    const inheritedModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : null;
+    if (fallbackReason && !inheritedModel) {
+      return {
+        kind: "error",
+        error: `Cannot inherit parent session model for tier "${tierPool.tier}": no parent model is available.`,
+        details: { error: "parent model unavailable", tier: tierPool.tier, reason: fallbackReason },
+      };
+    }
+    const effectiveModel = params.model ?? tierSelection?.model ?? agentDefs?.model ?? inheritedModel;
     // 思考等级覆盖链（工单 23，规格 §4）：任务显式值 > 代理 frontmatter 默认 >
     // 档位默认。档位默认只在 tier 真正解析出模型时参与（显式 model 胜出时
     // tier 仅作记录，不把档位思考等级带到另一个模型上）。上层值已在进
     // 选择器前校验，档位值由 parseTierConfig 严格保证，这里不再重复校验。
     const tierThinking = tierPool.thinking ?? null;
-    const effectiveThinking = params.thinking ?? agentDefs?.thinking ?? tierThinking ?? undefined;
+    const effectiveThinking = fallbackReason
+      ? ctx.thinkingLevel
+      : params.thinking ?? agentDefs?.thinking ?? tierThinking ?? undefined;
     // 工单 23：不静默声称不支持的目标模型已使用指定思考等级。实际会拼进
     // argv 的等级（显式/代理/档位，或模型自带后缀）在宿主目录里可查时必须
     // 被模型支持——宿主对不支持的等级会静默钳制到就近支持值，这里在启动前
@@ -772,6 +809,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         tier: tierPool.tier,
         tierPool: tierPool.pool ?? null,
         tierSelection,
+        fallbackReason,
         effectiveAutoExit,
         interactive: effectiveInteractive,
         member: memberMode,

@@ -11,7 +11,7 @@ import type { MessageTables } from "../../../i18n/index.ts";
 const EN = {
   "module.providers.label": "Provider usage",
   "module.providers.description": "Query provider balance and quota for the editor status bar",
-  "module.providers.menu.label": "Providers & usage",
+  "module.providers.menu.label": "Balance query",
   "module.providers.menu.description": "Credentials, refresh interval and model usage stats",
   "module.providers.enabled.label": "Enable provider usage",
   "module.providers.enabled.description": "When off, provider balance/quota queries are not made and the editor status bar shows no provider segments (reload to apply)",
@@ -30,7 +30,7 @@ const EN = {
 const ZH_CN: typeof EN = {
   "module.providers.label": "供应商用量",
   "module.providers.description": "查询供应商余额与套餐额度，供编辑器状态栏显示",
-  "module.providers.menu.label": "供应商与用量",
+  "module.providers.menu.label": "余额查询",
   "module.providers.menu.description": "凭据状态、刷新间隔与模型用量统计",
   "module.providers.enabled.label": "启用供应商用量",
   "module.providers.enabled.description": "关闭后不发起供应商余额/套餐查询，编辑器状态栏的供应商分段整块消失（重载 pi 后生效）",
@@ -49,7 +49,7 @@ const ZH_CN: typeof EN = {
 const ZH_TW: typeof EN = {
   "module.providers.label": "供應商用量",
   "module.providers.description": "查詢供應商餘額與套餐額度，供編輯器狀態列顯示",
-  "module.providers.menu.label": "供應商與用量",
+  "module.providers.menu.label": "餘額查詢",
   "module.providers.menu.description": "憑證狀態、重新整理間隔與模型用量統計",
   "module.providers.enabled.label": "啟用供應商用量",
   "module.providers.enabled.description": "關閉後不發起供應商餘額/套餐查詢，編輯器狀態列的供應商分段整塊消失（重新載入 pi 後生效）",
