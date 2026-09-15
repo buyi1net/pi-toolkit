@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext, ThemeColor } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -114,9 +114,8 @@ import {
   borderLine,
   borderSegmentLine,
   borderTop,
-  buildSubagentModelSegments,
-  buildSubagentRoleSegment,
-  buildSubagentViaSegment,
+  buildSubagentMetadataSegment,
+  type SubagentMetadataLevel,
   contextWindowFor,
   formatContextUsage,
   formatElapsed,
@@ -723,77 +722,97 @@ function formatRowRightLabel(row: { orphan: boolean; snapshot: StatusSnapshot })
   return ` ${widgetText("module.subagents.widget.orphan")} · ${formatWidgetRightLabel(row.snapshot).trim()} `;
 }
 
-const THINKING_BORDER_COLORS: Readonly<Record<string, ThemeColor>> = {
-  off: "thinkingOff",
-  minimal: "thinkingMinimal",
-  low: "thinkingLow",
-  medium: "thinkingMedium",
-  high: "thinkingHigh",
-  xhigh: "thinkingXhigh",
-  max: "thinkingMax",
-};
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
-function widgetBorderColor(snapshot: WidgetSnapshot, theme: any): ((text: string) => string) | undefined {
-  if (!theme || typeof theme.fg !== "function") return undefined;
-  const firstLayer = snapshot.rows.find((row) => row.depth === 0);
-  const color = firstLayer ? THINKING_BORDER_COLORS[firstLayer.thinking ?? ""] ?? "muted" : "muted";
-  return (text: string) => theme.fg(color, text);
+function widgetBorderColor(
+  _snapshot: WidgetSnapshot,
+  theme: any,
+  currentSessionThinkingLevel: string | undefined,
+): ((text: string) => string) | undefined {
+  if (!theme || typeof theme.getThinkingBorderColor !== "function") return undefined;
+  const level = currentSessionThinkingLevel && THINKING_LEVELS.has(currentSessionThinkingLevel)
+    ? currentSessionThinkingLevel
+    : "off";
+  return theme.getThinkingBorderColor(level);
 }
 
-function renderWidgetSnapshotLines(snapshot: WidgetSnapshot, width: number, theme?: any): string[] {
+function rowIdentityAndMetadata(
+  row: WidgetSnapshot["rows"][number],
+  tier: ReturnType<typeof subagentTreeTier>,
+  level: SubagentMetadataLevel,
+  muted: ((text: string) => string) | undefined,
+): { prefix: string; left: string; right: string } {
+  const icon = widgetIcon(row.snapshot.kind);
+  // 工单 63：固定 3 列树形槽位（外列统一 1 列内边距）——顶层「图标+两空格」、
+  // 后代「连接符+一空格」占同一槽位，时间列从同一列开始；后代行不再重复
+  // 状态图标，运行状态由右侧状态段表达。前缀是固定 chrome：单独扣减段位
+  // 预算，不进压缩循环。
+  const prefix = row.depth === 0
+    ? ` ${icon}  `
+    : ` ${subagentTreePrefix(row.depth, row.lastFlags, row.isLast, tier, muted ?? ((text) => text))}`;
+  const name = row.depth === 0 ? row.name : truncateToWidth(row.name, DESCENDANT_NAME_LIMIT, "…");
+  const role = row.agent ? truncateToWidth(row.agent, DESCENDANT_NAME_LIMIT, "…") : null;
+  const metadata = level === "hidden" ? null : buildSubagentMetadataSegment(row.model, row.thinking, role, level);
+  const identity = `${formatElapsedMMSS(row.startTime)}  ${name}`;
+  const left = metadata ? `${identity}  ${metadata.text}` : identity;
+  return { prefix, left, right: formatRowRightLabel(row) };
+}
+
+/** 元信息级别按整个 widget 的最坏行统一选择，而不是逐行压缩。 */
+function widgetMetadataLevel(snapshot: WidgetSnapshot, width: number, tier: ReturnType<typeof subagentTreeTier>): SubagentMetadataLevel {
+  for (const level of ["full", "compact"] as const) {
+    const fits = snapshot.rows.every((row) => {
+      const parts = rowIdentityAndMetadata(row, tier, level, undefined);
+      const budget = Math.max(0, width - 2 - visibleWidth(parts.prefix));
+      return visibleWidth(parts.left) + 1 + visibleWidth(parts.right) <= budget;
+    });
+    if (fits) return level;
+  }
+  return "hidden";
+}
+
+function renderWidgetSnapshotLines(
+  snapshot: WidgetSnapshot,
+  width: number,
+  theme?: any,
+  currentSessionThinkingLevel?: string,
+): string[] {
   // 标题 Subagents 是用户口径的标识类例外（不翻），计数是状态语汇走 t()；
   // 同一行里一半冻结一半翻是刻意为之。
-  const colorize = widgetBorderColor(snapshot, theme);
+  const colorize = widgetBorderColor(snapshot, theme, currentSessionThinkingLevel);
+  // 工单 63：树形连接符/续行用主题 muted，与外框同一主题实例取色；主题
+  // 缺席或无 fg 接口时不着色。
+  const muted = theme && typeof theme.fg === "function"
+    ? (text: string) => theme.fg("muted", text)
+    : undefined;
   const lines: string[] = [
     borderTop("Subagents", widgetText("module.subagents.widget.count.running", { count: snapshot.counts.allCount }), width, colorize),
   ];
   const tier = subagentTreeTier(width);
+  const metadataLevel = widgetMetadataLevel(snapshot, width, tier);
 
   for (const row of snapshot.rows) {
-    // 前缀是固定 chrome：单独扣减段位预算，不进压缩循环（否则 required 段
-    // 截断兑底时会把前缀一起吃掉）。
-    const prefix = row.depth === 0
-      ? ""
-      : subagentTreePrefix(row.depth, row.lastFlags, row.isLast, tier);
-    const elapsed = formatElapsedMMSS(row.startTime);
-    // 16 列截断只作用于后代行（工单 43）：第一层行的名字保持原样展示。
-    const name = row.depth === 0
-      ? row.name
-      : truncateToWidth(row.name, DESCENDANT_NAME_LIMIT, "…");
-    const role = row.agent
-      ? truncateToWidth(row.agent, DESCENDANT_NAME_LIMIT, "…")
-      : null;
-    const icon = widgetIcon(row.snapshot.kind);
-    // 工单 27：状态行段位化——左侧身份（required）、中间实际模型与思考等级
-    // （可压缩可隐藏）、右侧运行状态（required）都交给 TUI 段位压缩循环。
-    // 工单 43：后代行只加归属段（via），无 model/thinking（RuntimeRecord 无
-    // 此两字段，明确非目标）。角色独立成可隐藏段，身份只保留图标、时长、名字。
-    const left: StatusSegment[] = [
-      {
-        id: "identity",
-        text: ` ${icon} ${elapsed}  ${name}`,
-        priority: SUBAGENT_WIDGET_SEGMENT_PRIORITIES.identity,
-        required: true,
-      },
-      ...(row.depth === 0 ? buildSubagentModelSegments(row.model, row.thinking) : []),
-      ...(row.via != null
-        ? [buildSubagentViaSegment(truncateToWidth(row.via, DESCENDANT_NAME_LIMIT, "…"))]
-        : []),
-      ...(role != null ? [buildSubagentRoleSegment(role)] : []),
-    ];
+    const parts = rowIdentityAndMetadata(row, tier, metadataLevel, muted);
+    const left: StatusSegment[] = [{
+      id: "identity",
+      text: parts.left,
+      priority: SUBAGENT_WIDGET_SEGMENT_PRIORITIES.identity,
+      required: true,
+    }];
     const right: StatusSegment[] = [{
       id: "status",
-      text: formatRowRightLabel(row),
+      text: parts.right,
       priority: SUBAGENT_WIDGET_SEGMENT_PRIORITIES.status,
       required: true,
     }];
 
+    const prefix = parts.prefix;
     const budget = Math.max(0, width - 2 - visibleWidth(prefix));
     const layout = layoutTwoColumnSegments(left, right, budget);
     lines.push(borderLine(prefix + layout.left, layout.right, width, colorize));
     if (row.collapseAfter != null && row.collapseAfter > 0) {
-      // 组尾折叠提示（chrome 行，不占代理数据行预算）。
-      lines.push(borderLine(` └─ … +${row.collapseAfter} more`, "", width, colorize));
+      // 组尾折叠提示（chrome 行，连接符与树线同用 muted）。
+      lines.push(borderLine(` ${muted ? muted("└─") : "└─"} … +${row.collapseAfter} more`, "", width, colorize));
     }
   }
 
@@ -804,8 +823,18 @@ function renderWidgetSnapshotLines(snapshot: WidgetSnapshot, width: number, them
   return lines;
 }
 
-function renderSubagentWidgetLines(agents: RunningSubagent[], width: number, theme?: any): string[] {
-  return renderWidgetSnapshotLines(buildFirstLayerOnlySnapshot(agents, Date.now()), width, theme);
+function renderSubagentWidgetLines(
+  agents: RunningSubagent[],
+  width: number,
+  theme?: any,
+  currentSessionThinkingLevel?: string,
+): string[] {
+  return renderWidgetSnapshotLines(
+    buildFirstLayerOnlySnapshot(agents, Date.now()),
+    width,
+    theme,
+    currentSessionThinkingLevel,
+  );
 }
 
 /** 后代快照 tracker（工单 43）：session_start 重建，session_shutdown 丢弃。 */
@@ -841,7 +870,16 @@ function updateWidget() {
       return {
         invalidate() {},
         render(width: number) {
-          return widgetSnapshot ? renderWidgetSnapshotLines(widgetSnapshot, width, theme) : [];
+          return widgetSnapshot
+          ? renderWidgetSnapshotLines(
+              widgetSnapshot,
+              width,
+              theme,
+              typeof latestPi?.getThinkingLevel === "function"
+                ? latestPi.getThinkingLevel()
+                : latestCtx?.thinkingLevel,
+            )
+          : [];
         },
       };
     },
@@ -1256,7 +1294,6 @@ export { needsEnvProxyForTools } from "./launch-config.ts";
 export const __test__ = {
   borderLine,
   borderSegmentLine,
-  buildSubagentModelSegments,
   isStatusEnabled,
   getShellReadyDelayMs,
   renderSubagentWidgetLines,

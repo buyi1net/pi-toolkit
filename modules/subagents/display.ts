@@ -87,13 +87,13 @@ export function borderLine(left: string, right: string, width: number, colorize:
   return `${colorize("│")}${truncatedLeft}${" ".repeat(padding)}${right}${colorize("│")}`;
 }
 
-// ── 工单 27：子代理状态行的段位化渲染 ──────────────────────────────
+// ── 工单 27/62：子代理状态行的段位化渲染 ──────────────────────────
 //
-// 布局优先级（规格《模型编排》§7）靠 TUI 段位压缩循环实现，本文件不另造
-// 宽度算法：右侧运行状态与左侧身份是 required 段（只压缩不隐藏，宽度
-// 吃紧时由截断兑底），中间模型名/思考等级是可压缩可隐藏段。优先级数值
-// 越大越早压缩/隐藏：思考等级先隐藏，模型名先退短名（剥供应商路径
-// 前缀）再隐藏。中间段位紧随身份段之后，位于名称与右侧运行状态之间。
+// 布局优先级靠 TUI 段位压缩循环实现，本文件不另造宽度算法：右侧运行
+// 状态与左侧身份是 required 段（只压缩不隐藏，宽度吃紧时由截断兑底）。
+// 工单 62 起模型、思考等级和角色合并为一个元信息组，由 widget 级别统一
+// 决定完整、紧凑或整组隐藏，不再逐段参与压缩循环（旧的角色/归属/独立
+// 模型段位随之移除，避免字段按行拆散）。
 
 /** 子代理状态行各段位的压缩优先级（数值越大越早压缩/隐藏）。 */
 export const SUBAGENT_WIDGET_SEGMENT_PRIORITIES = {
@@ -101,14 +101,8 @@ export const SUBAGENT_WIDGET_SEGMENT_PRIORITIES = {
   status: 0,
   /** 左侧身份（图标/耗时/名称）：其次保留（required，必要时截断兑底）。 */
   identity: 1,
-  /** 中间模型名：先退紧凑短名，再隐藏。 */
+  /** 中间元信息组：widget 级别整组显隐，不参与逐段压缩。 */
   model: 2,
-  /** 中间归属段（工单 43 直接父代理名）：隐藏早于模型名、晚于思考等级。 */
-  via: 3,
-  /** 中间思考等级：最先隐藏。 */
-  thinking: 4,
-  /** 角色：窄宽度先于身份与状态隐藏。 */
-  role: 5,
 } as const;
 
 /** 模型引用的紧凑形态：剥供应商路径前缀（与 TUI 顶边 formatHeaderModel 同规则）。 */
@@ -117,55 +111,38 @@ function compactModelRef(ref: string): string {
   return separator >= 0 ? ref.slice(separator + 1) : ref;
 }
 
+export type SubagentMetadataLevel = "full" | "compact" | "hidden";
+
 /**
- * 中间模型信息段位（工单 27）：显示实际调用模型与实际思考等级，两段不带
- * 图标标记，靠段位分隔符「 · 」相连（模型 · 等级）。模型名一律剥供应商前缀
- * 只显短名（与 TUI 顶边 formatHeaderModel 同规则），不再区分完整/紧凑双形态。
- * model 可携带 ":level" 自带后缀（显示时剥掉，等级由 thinking 给出——覆盖链
- * 解析后的实际生效值）；两者都缺省时返回空数组（不渲染中间段）。降级重试
- * 换候选后调用方传入新的 running.model/thinking，状态行即跟随实际模型。
+ * 子代理行的元信息组（工单 62）：模型、思考等级和角色作为一个整体进入
+ * 布局，由 widget 级别统一决定显示级别，段位压缩循环不再拆动它们。形态
+ * 统一为剥掉供应商前缀的 `model:max(role)`：`:` 连接模型与思考等级，角色
+ * 用档案名的小写形式放在尾部英文括号内；缺字段时省略对应部分（无等级
+ * 省 `:level`，无角色省括号），不再出现带空格的 ` · ` 和 ` (role)`。
+ * model 可携带 ":level" 自带后缀（显示时剥掉，等级由 thinking 给出——
+ * 覆盖链解析后的实际生效值）。level 参数保留规格的完整→紧凑梯位语义：
+ * 第一版两档同文，后续差异形态在此分叉。三元组全空时返回 null（无段可
+ * 渲染）。降级重试换候选后调用方传入新的 running.model/thinking，状态
+ * 行即跟随实际模型。
  */
-export function buildSubagentModelSegments(
+export function buildSubagentMetadataSegment(
   model: string | null | undefined,
   thinking: string | null | undefined,
-): StatusSegment[] {
-  const ref = typeof model === "string" ? model.trim() : "";
-  if (!ref) return [];
-  const segments: StatusSegment[] = [{
-    id: "model",
-    text: compactModelRef(baseModelRef(ref)),
+  role: string | null | undefined,
+  _level: Exclude<SubagentMetadataLevel, "hidden">,
+): StatusSegment | null {
+  const modelRef = typeof model === "string" && model.trim() ? baseModelRef(model.trim()) : "";
+  const modelText = compactModelRef(modelRef);
+  const thinkingText = typeof thinking === "string" && thinking.trim() ? thinking.trim() : "";
+  const roleText = typeof role === "string" && role.trim() ? role.trim().toLowerCase() : "";
+  if (!modelText && !thinkingText && !roleText) return null;
+
+  const parts = [modelText, thinkingText].filter(Boolean);
+  return {
+    id: "metadata",
+    text: `${parts.join(":")}${roleText ? `(${roleText})` : ""}`,
     priority: SUBAGENT_WIDGET_SEGMENT_PRIORITIES.model,
-  }];
-  const level = typeof thinking === "string" ? thinking.trim() : "";
-  if (level) {
-    segments.push({
-      id: "thinking",
-      text: level,
-      priority: SUBAGENT_WIDGET_SEGMENT_PRIORITIES.thinking,
-    });
-  }
-  return segments;
-}
-
-/**
- * 归属段（工单 43）：后代行的直接父代理名。完整形态 `via <name>`，压缩
- * 形态 `↳<name>`；第一层行不携带此段。隐藏顺序位于思考等级与模型名
- * 之间（thinking > via > model）。
- */
-export function buildSubagentViaSegment(via: string): StatusSegment {
-  return {
-    id: "via",
-    text: `${ICON_DIM}via${RST} ${via}`,
-    compactText: `${ICON_DIM}↳${RST}${via}`,
-    priority: SUBAGENT_WIDGET_SEGMENT_PRIORITIES.via,
-  };
-}
-
-export function buildSubagentRoleSegment(role: string): StatusSegment {
-  return {
-    id: "role",
-    text: ` (${role})`,
-    priority: SUBAGENT_WIDGET_SEGMENT_PRIORITIES.role,
+    required: true,
   };
 }
 
@@ -186,13 +163,15 @@ export function borderSegmentLine(
   return borderLine(layout.left, layout.right, width, colorize);
 }
 
-// ── 工单 43：后代行的树形前缀（固定 chrome）──────────────────────────
+// ── 工单 43/63：后代行的树形前缀（固定 chrome）──────────────────────
 //
 // 前缀不进段位压缩循环，单独计宽（段位预算 = 宽度 − 2 边框 − 前缀），
-// 否则布局对 required 段的截断会把前缀一起吃掉。窄宽降级梯：缩进封顶
-// 逐级收（2 层 → 1 层）→ 连接符降到单字符 → 无前缀；任何档位以不越界
-// 优先，borderLine 截断只作最后防线。阈值按「还能放下最小行内容」估的
-// 经验值，不是规格定数。
+// 否则布局对 required 段的截断会把前缀一起吃掉。工单 63 起采用固定 3 列
+// 槽位节奏：顶层「图标+两空格」、后代「连接符+一空格」占同一槽位（外列
+// 边距由调用方统一加），时间列对齐；缩进封顶 2 层，第三层及以后统一用
+// 简化连接符 ↳，时间列不随深度无限右移；连接符与续行用 muted，不抢
+// 状态色。窄宽降级梯：缩进封顶逐级收（2 层 → 1 层）→ 连接符降到单字符
+// → 无前缀；任何档位以不越界优先，borderLine 截断只作最后防线。
 
 export type SubagentTreeTier = "full" | "cap1" | "single" | "none";
 
@@ -205,29 +184,33 @@ export function subagentTreeTier(width: number): SubagentTreeTier {
 }
 
 /**
- * 后代行树形前缀：逐层 +3 列，缩进封顶 2 层（更深层不再加宽，靠归属段
- * 区分）。lastFlags 为各层祖先是否末子（续行 │/空白），isLast 为自身
- * 连接符（└─ 末子 / ├─ 非末子）。
+ * 后代行树形前缀（工单 63）：固定 3 列槽位节奏逐层 +3 列，缩进封顶 2 层；
+ * 第三层及以后连接符统一简化为 ↳（3 列节奏同 ↳+两空格），与二层孙代理
+ * 时间列同列，不再随深度右移。lastFlags 为各层祖先是否末子（续行 │/空白），
+ * isLast 为自身连接符（└─ 末子 / ├─ 非末子）。muted 用于连接符与续行符号
+ * （规格：树形符号用 muted，不抢状态色），缺省不着色。
  */
 export function subagentTreePrefix(
   depth: number,
   lastFlags: readonly boolean[],
   isLast: boolean,
   tier: SubagentTreeTier,
+  muted: BorderColorizer = plainBorder,
 ): string {
   if (depth <= 0 || tier === "none") return "";
   // 转正/被提升的行（父行缺失后成为渲染根）lastFlags 可能短于 depth − 1：
   // 单元数以 lastFlags 为上限，取不到祖先标记的层不渲染悬空续行 │。
   const units = tier === "cap1" ? 1 : Math.min(depth, 2, lastFlags.length + 1);
+  const simplified = depth > 2;
   const parts: string[] = [];
   for (let unit = 1; unit <= units; unit++) {
     const connector = unit === units;
     if (tier === "single") {
-      if (connector) parts.push(isLast ? "└ " : "├ ");
-      else parts.push(lastFlags[unit - 1] ? "  " : "│ ");
+      if (connector) parts.push(simplified ? `${muted("↳")} ` : isLast ? `${muted("└")} ` : `${muted("├")} `);
+      else parts.push(lastFlags[unit - 1] ? "  " : `${muted("│")} `);
     } else {
-      if (connector) parts.push(isLast ? "└─ " : "├─ ");
-      else parts.push(lastFlags[unit - 1] ? "   " : "│  ");
+      if (connector) parts.push(simplified ? `${muted("↳")}  ` : isLast ? `${muted("└─")} ` : `${muted("├─")} `);
+      else parts.push(lastFlags[unit - 1] ? "   " : `${muted("│")}  `);
     }
   }
   return parts.join("");
