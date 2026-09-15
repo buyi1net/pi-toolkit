@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -115,6 +115,7 @@ import {
   borderSegmentLine,
   borderTop,
   buildSubagentModelSegments,
+  buildSubagentRoleSegment,
   buildSubagentViaSegment,
   contextWindowFor,
   formatContextUsage,
@@ -605,7 +606,7 @@ export const subagentsRunningView = {
 };
 
 // When this extension is loaded inside a subagent that itself spawns children
-// (e.g. a worker delegating to scout/researcher), `subagent-done.ts` runs in the
+// (e.g. a worker delegating to plan/researcher), `subagent-done.ts` runs in the
 // same process and needs to know whether this session still has children in
 // flight — so it can suppress auto-exit and keep the session open until they all
 // report back. Expose a live count through a process-global symbol that both
@@ -722,11 +723,29 @@ function formatRowRightLabel(row: { orphan: boolean; snapshot: StatusSnapshot })
   return ` ${widgetText("module.subagents.widget.orphan")} · ${formatWidgetRightLabel(row.snapshot).trim()} `;
 }
 
-function renderWidgetSnapshotLines(snapshot: WidgetSnapshot, width: number): string[] {
+const THINKING_BORDER_COLORS: Readonly<Record<string, ThemeColor>> = {
+  off: "thinkingOff",
+  minimal: "thinkingMinimal",
+  low: "thinkingLow",
+  medium: "thinkingMedium",
+  high: "thinkingHigh",
+  xhigh: "thinkingXhigh",
+  max: "thinkingMax",
+};
+
+function widgetBorderColor(snapshot: WidgetSnapshot, theme: any): ((text: string) => string) | undefined {
+  if (!theme || typeof theme.fg !== "function") return undefined;
+  const firstLayer = snapshot.rows.find((row) => row.depth === 0);
+  const color = firstLayer ? THINKING_BORDER_COLORS[firstLayer.thinking ?? ""] ?? "muted" : "muted";
+  return (text: string) => theme.fg(color, text);
+}
+
+function renderWidgetSnapshotLines(snapshot: WidgetSnapshot, width: number, theme?: any): string[] {
   // 标题 Subagents 是用户口径的标识类例外（不翻），计数是状态语汇走 t()；
   // 同一行里一半冻结一半翻是刻意为之。
+  const colorize = widgetBorderColor(snapshot, theme);
   const lines: string[] = [
-    borderTop("Subagents", widgetText("module.subagents.widget.count.running", { count: snapshot.counts.allCount }), width),
+    borderTop("Subagents", widgetText("module.subagents.widget.count.running", { count: snapshot.counts.allCount }), width, colorize),
   ];
   const tier = subagentTreeTier(width);
 
@@ -737,32 +756,30 @@ function renderWidgetSnapshotLines(snapshot: WidgetSnapshot, width: number): str
       ? ""
       : subagentTreePrefix(row.depth, row.lastFlags, row.isLast, tier);
     const elapsed = formatElapsedMMSS(row.startTime);
-    // 16 列截断只作用于后代行（工单 43）：第一层行的名字与 agent 标签保持
-    // 改动前的原样展示（验收「第一层现有展示不回归」）。
+    // 16 列截断只作用于后代行（工单 43）：第一层行的名字保持原样展示。
     const name = row.depth === 0
       ? row.name
       : truncateToWidth(row.name, DESCENDANT_NAME_LIMIT, "…");
-    const agentTag = row.agent
-      ? row.depth === 0
-        ? ` (${row.agent})`
-        : ` (${truncateToWidth(row.agent, DESCENDANT_NAME_LIMIT, "…")})`
-      : "";
+    const role = row.agent
+      ? truncateToWidth(row.agent, DESCENDANT_NAME_LIMIT, "…")
+      : null;
     const icon = widgetIcon(row.snapshot.kind);
     // 工单 27：状态行段位化——左侧身份（required）、中间实际模型与思考等级
     // （可压缩可隐藏）、右侧运行状态（required）都交给 TUI 段位压缩循环。
     // 工单 43：后代行只加归属段（via），无 model/thinking（RuntimeRecord 无
-    // 此两字段，明确非目标）。
+    // 此两字段，明确非目标）。角色独立成可隐藏段，身份只保留图标、时长、名字。
     const left: StatusSegment[] = [
       {
         id: "identity",
-        text: ` ${icon} ${elapsed}  ${name}${agentTag}`,
+        text: ` ${icon} ${elapsed}  ${name}`,
         priority: SUBAGENT_WIDGET_SEGMENT_PRIORITIES.identity,
         required: true,
       },
+      ...(row.depth === 0 ? buildSubagentModelSegments(row.model, row.thinking) : []),
       ...(row.via != null
         ? [buildSubagentViaSegment(truncateToWidth(row.via, DESCENDANT_NAME_LIMIT, "…"))]
         : []),
-      ...(row.depth === 0 ? buildSubagentModelSegments(row.model, row.thinking) : []),
+      ...(role != null ? [buildSubagentRoleSegment(role)] : []),
     ];
     const right: StatusSegment[] = [{
       id: "status",
@@ -773,22 +790,22 @@ function renderWidgetSnapshotLines(snapshot: WidgetSnapshot, width: number): str
 
     const budget = Math.max(0, width - 2 - visibleWidth(prefix));
     const layout = layoutTwoColumnSegments(left, right, budget);
-    lines.push(borderLine(prefix + layout.left, layout.right, width));
+    lines.push(borderLine(prefix + layout.left, layout.right, width, colorize));
     if (row.collapseAfter != null && row.collapseAfter > 0) {
       // 组尾折叠提示（chrome 行，不占代理数据行预算）。
-      lines.push(borderLine(` └─ … +${row.collapseAfter} more`, "", width));
+      lines.push(borderLine(` └─ … +${row.collapseAfter} more`, "", width, colorize));
     }
   }
 
   if (snapshot.counts.globalOverflow > 0) {
-    lines.push(borderLine(` … +${snapshot.counts.globalOverflow} more`, "", width));
+    lines.push(borderLine(` … +${snapshot.counts.globalOverflow} more`, "", width, colorize));
   }
-  lines.push(borderBottom(width));
+  lines.push(borderBottom(width, colorize));
   return lines;
 }
 
-function renderSubagentWidgetLines(agents: RunningSubagent[], width: number): string[] {
-  return renderWidgetSnapshotLines(buildFirstLayerOnlySnapshot(agents, Date.now()), width);
+function renderSubagentWidgetLines(agents: RunningSubagent[], width: number, theme?: any): string[] {
+  return renderWidgetSnapshotLines(buildFirstLayerOnlySnapshot(agents, Date.now()), width, theme);
 }
 
 /** 后代快照 tracker（工单 43）：session_start 重建，session_shutdown 丢弃。 */
@@ -820,11 +837,11 @@ function updateWidget() {
 
   latestCtx.ui.setWidget(
     "subagent-status",
-    (_tui: any, _theme: any) => {
+    (_tui: any, theme: any) => {
       return {
         invalidate() {},
         render(width: number) {
-          return widgetSnapshot ? renderWidgetSnapshotLines(widgetSnapshot, width) : [];
+          return widgetSnapshot ? renderWidgetSnapshotLines(widgetSnapshot, width, theme) : [];
         },
       };
     },

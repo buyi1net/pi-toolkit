@@ -608,7 +608,10 @@ export class SubagentsPanel implements Component {
       const level = t("module.subagents.pool.thinking", {
         level: tierThinkingRowValue(row.tier, this.state.tierThinking, t),
       });
-      const value = theme.settings.value(level, selected);
+      const summary = this.state.mapping[row.tier]
+        ? level
+        : `${t("module.subagents.tier.unmapped")} · ${level}`;
+      const value = theme.settings.value(summary, selected);
       const pad = Math.max(1, width - visibleWidth(prefix) - visibleWidth(label) - visibleWidth(value));
       return truncateToWidth(prefix + label + " ".repeat(pad) + value, width);
     }

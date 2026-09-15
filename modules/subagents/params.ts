@@ -27,7 +27,7 @@ export function validateCohortId(value: unknown): string | null {
 export const SubagentParams = Type.Object({
   agent: Type.String({
     description:
-      "Which agent to spawn (e.g. 'worker', 'scout', 'researcher'). This loads the agent's " +
+      "Which agent to spawn (e.g. 'worker', 'plan', 'researcher'). This loads the agent's " +
       "fixed profile — its model, tool loadout, and system prompt. Must be one of the available agents.",
   }),
   task: Type.String({ description: "Task/prompt for the sub-agent" }),
@@ -52,14 +52,14 @@ export const SubagentParams = Type.Object({
   tier: Type.Optional(
     Type.String({
       description:
-        "Model tier preset: 'fast', 'balanced', or 'deep' (aliases quick/balance|standard/strong accepted). " +
-        "Resolved from the pi-subagents config as an ordered candidate pool (models.fast/balanced/deep, arrays; the first configured candidate is the preferred model). " +
+        "Model tier preset: 'fast', 'balanced', or 'flagship' (aliases quick/balance|standard/strong accepted). " +
+        "Resolved from the pi-subagents config as an ordered candidate pool (models.fast/balanced/flagship, arrays; the first configured candidate is the preferred model). " +
         "Candidates are tried in the configured order: when the host model catalog is available, candidates that verifiably lack a capability the agent profile requires (frontmatter `capabilities`, e.g. vision/reasoning) or do not support the resolved thinking level are skipped in favor of later candidates; " +
         "a candidate whose provider is known (from the last runtime status refresh) to have exhausted its quota, be offline, or be persistently unstable is also skipped. Unknown/unconfirmed status never blocks a candidate. " +
         "If the launched candidate then dies on a transient route error (rate limit / overload / timeout / temporary 5xx) before doing any work, the call automatically retries the next untried candidate (each candidate at most once, configured order, one shared timeoutMs budget); parameter/credential/quota/context errors are never auto-retried. " +
         "The tool result records the preferred model, the actual model, and the downgrade reason; if every candidate fails, a clear aggregated error is returned. " +
         "An explicit `model` always wins over `tier` (and is verified, never swapped — no failover). A tier without a configured candidate pool fails with a clear error — models are never silently swapped. " +
-        "A default thinking level configured for the tier (thinking.fast/balanced/deep) applies when neither `thinking` nor the agent profile sets one.",
+        "A default thinking level configured for the tier (thinking.fast/balanced/flagship) applies when neither `thinking` nor the agent profile sets one.",
     }),
   ),
   thinking: Type.Optional(

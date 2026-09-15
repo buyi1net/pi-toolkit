@@ -7,9 +7,7 @@ import {
 } from "../tui/status/segment-layout.ts";
 import { formatElapsed as formatElapsedMs } from "../tui/status/status-segments.ts";
 
-const ACCENT = "\x1b[38;2;77;163;255m";
 const RST = "\x1b[0m";
-const ICON_GREEN = "\x1b[38;2;126;186;103m";
 const ICON_YELLOW = "\x1b[38;2;214;181;94m";
 const ICON_RED = "\x1b[38;2;224;108;117m";
 const ICON_DIM = "\x1b[38;2;128;128;128m";
@@ -71,18 +69,22 @@ export function widgetIcon(kind: SubagentStatusKind): string {
   }
 }
 
-export function borderLine(left: string, right: string, width: number): string {
+export type BorderColorizer = (text: string) => string;
+
+const plainBorder: BorderColorizer = (text) => text;
+
+export function borderLine(left: string, right: string, width: number, colorize: BorderColorizer = plainBorder): string {
   if (width <= 0) return "";
-  if (width === 1) return `${ACCENT}│${RST}`;
+  if (width === 1) return colorize("│");
   const contentWidth = Math.max(0, width - 2);
   const rightWidth = visibleWidth(right);
   if (rightWidth >= contentWidth) {
     const truncated = truncateToWidth(right, contentWidth);
-    return `${ACCENT}│${RST}${truncated}${" ".repeat(Math.max(0, contentWidth - visibleWidth(truncated)))}${ACCENT}│${RST}`;
+    return `${colorize("│")}${truncated}${" ".repeat(Math.max(0, contentWidth - visibleWidth(truncated)))}${colorize("│")}`;
   }
   const truncatedLeft = truncateToWidth(left, contentWidth - rightWidth);
   const padding = Math.max(0, contentWidth - visibleWidth(truncatedLeft) - rightWidth);
-  return `${ACCENT}│${RST}${truncatedLeft}${" ".repeat(padding)}${right}${ACCENT}│${RST}`;
+  return `${colorize("│")}${truncatedLeft}${" ".repeat(padding)}${right}${colorize("│")}`;
 }
 
 // ── 工单 27：子代理状态行的段位化渲染 ──────────────────────────────
@@ -105,6 +107,8 @@ export const SUBAGENT_WIDGET_SEGMENT_PRIORITIES = {
   via: 3,
   /** 中间思考等级：最先隐藏。 */
   thinking: 4,
+  /** 角色：窄宽度先于身份与状态隐藏。 */
+  role: 5,
 } as const;
 
 /** 模型引用的紧凑形态：剥供应商路径前缀（与 TUI 顶边 formatHeaderModel 同规则）。 */
@@ -157,6 +161,14 @@ export function buildSubagentViaSegment(via: string): StatusSegment {
   };
 }
 
+export function buildSubagentRoleSegment(role: string): StatusSegment {
+  return {
+    id: "role",
+    text: ` (${role})`,
+    priority: SUBAGENT_WIDGET_SEGMENT_PRIORITIES.role,
+  };
+}
+
 /**
  * 段位化的子代理状态行：左右两栏经 TUI 段位压缩循环（显式预算 =
  * 终端宽度 - 2 列边框）后交给 borderLine 拼边框；压缩循环保证两侧不
@@ -166,11 +178,12 @@ export function borderSegmentLine(
   left: readonly StatusSegment[],
   right: readonly StatusSegment[],
   width: number,
+  colorize: BorderColorizer = plainBorder,
 ): string {
   if (width <= 0) return "";
-  if (width === 1) return `${ACCENT}│${RST}`;
+  if (width === 1) return colorize("│");
   const layout = layoutTwoColumnSegments(left, right, Math.max(0, width - 2));
-  return borderLine(layout.left, layout.right, width);
+  return borderLine(layout.left, layout.right, width, colorize);
 }
 
 // ── 工单 43：后代行的树形前缀（固定 chrome）──────────────────────────
@@ -220,9 +233,9 @@ export function subagentTreePrefix(
   return parts.join("");
 }
 
-export function borderTop(title: string, info: string, width: number): string {
+export function borderTop(title: string, info: string, width: number, colorize: BorderColorizer = plainBorder): string {
   if (width <= 0) return "";
-  if (width === 1) return `${ACCENT}╭${RST}`;
+  if (width === 1) return colorize("╭");
   const inner = Math.max(0, width - 2);
   const titlePart = `─ ${title} `;
   const infoPart = ` ${info} ─`;
@@ -235,11 +248,11 @@ export function borderTop(title: string, info: string, width: number): string {
   const fill = "─".repeat(Math.max(0, inner - visibleWidth(titlePart) - visibleWidth(infoPart)));
   const content = sliceByColumn(`${titlePart}${fill}${infoPart}`, 0, inner, true);
   const padding = "─".repeat(Math.max(0, inner - visibleWidth(content)));
-  return `${ACCENT}╭${content}${padding}╮${RST}`;
+  return `${colorize("╭")}${content}${padding}${colorize("╮")}`;
 }
 
-export function borderBottom(width: number): string {
+export function borderBottom(width: number, colorize: BorderColorizer = plainBorder): string {
   if (width <= 0) return "";
-  if (width === 1) return `${ACCENT}╰${RST}`;
-  return `${ACCENT}╰${"─".repeat(Math.max(0, width - 2))}╯${RST}`;
+  if (width === 1) return colorize("╰");
+  return `${colorize("╰")}${"─".repeat(Math.max(0, width - 2))}${colorize("╯")}`;
 }

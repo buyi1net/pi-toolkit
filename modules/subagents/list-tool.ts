@@ -158,8 +158,8 @@ export function registerSubagentsListTool(
         const lines = definitionList.map((agent) => {
           const badge = agent.source === "project" ? " (project)" : "";
           const description = agent.description ? ` — ${agent.description}` : "";
-          const model = agent.model ? ` [${agent.model}]` : "";
-          return `• ${agent.name}${badge}${model}${description}`;
+          const route = agent.tier ? ` [tier: ${agent.tier}]` : agent.model ? ` [${agent.model}]` : "";
+          return `• ${agent.name}${badge}${route}${description}`;
         });
         return {
           text: lines.join("\n"),
@@ -231,8 +231,12 @@ export function registerSubagentsListTool(
           .map((agent: any) => {
             const badge = agent.source === "project" ? theme.fg("accent", " (project)") : "";
             const description = agent.description ? theme.fg("dim", ` — ${agent.description}`) : "";
-            const model = agent.model ? theme.fg("dim", ` [${agent.model}]`) : "";
-            return `  ${theme.fg("toolTitle", theme.bold(agent.name))}${badge}${model}${description}`;
+            const route = agent.tier
+              ? theme.fg("dim", ` [tier: ${agent.tier}]`)
+              : agent.model
+                ? theme.fg("dim", ` [${agent.model}]`)
+                : "";
+            return `  ${theme.fg("toolTitle", theme.bold(agent.name))}${badge}${route}${description}`;
           })
           .join("\n");
       };

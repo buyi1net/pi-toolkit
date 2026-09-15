@@ -2,7 +2,7 @@
 name: researcher
 description: Web researcher — searches the web and synthesizes findings
 tools: web_search, web_fetch, safe_bash
-model: zai-coding-cn/glm-5.3-flash
+tier: balanced
 thinking: max
 system-prompt: append
 auto-exit: true

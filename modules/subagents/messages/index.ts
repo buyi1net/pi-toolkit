@@ -91,7 +91,7 @@ const ZH_CN: typeof EN = {
   "module.subagents.tier.name.balanced": "均衡模型",
   "module.subagents.tier.name.fast": "快速模型",
   "module.subagents.tier.description": "子代理请求 tier \"{tier}\" 时使用的模型",
-  "module.subagents.tier.unmapped": "未配置",
+  "module.subagents.tier.unmapped": "未映射",
   "module.subagents.tier.authenticated": "已认证",
   "module.subagents.tier.noAuthRequired": "未配置认证",
   "module.subagents.tier.thinking.label": "{tier} · 默认思考等级",
