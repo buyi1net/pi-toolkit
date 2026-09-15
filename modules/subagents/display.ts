@@ -231,11 +231,14 @@ export function borderTop(title: string, info: string, width: number, colorize: 
   const fill = "─".repeat(Math.max(0, inner - visibleWidth(titlePart) - visibleWidth(infoPart)));
   const content = sliceByColumn(`${titlePart}${fill}${infoPart}`, 0, inner, true);
   const padding = "─".repeat(Math.max(0, inner - visibleWidth(content)));
-  return `${colorize("╭")}${content}${padding}${colorize("╮")}`;
+  // 四边同色：角与全部水平线（标题/信息两侧及中缝填充）统一走 colorizer；
+  // 标题/信息文字是内容，保持自有颜色；着色码零宽，不影响可见宽度与截断。
+  return `╭${content}${padding}╮`.replace(/╭─*|─*╮|─+/g, (run) => colorize(run));
 }
 
 export function borderBottom(width: number, colorize: BorderColorizer = plainBorder): string {
   if (width <= 0) return "";
   if (width === 1) return colorize("╰");
-  return `${colorize("╰")}${"─".repeat(Math.max(0, width - 2))}${colorize("╯")}`;
+  // 四边同色：底线整条（含水平线）一次着色，不逐段开关色码。
+  return colorize(`╰${"─".repeat(Math.max(0, width - 2))}╯`);
 }

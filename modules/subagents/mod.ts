@@ -741,6 +741,7 @@ function rowIdentityAndMetadata(
   tier: ReturnType<typeof subagentTreeTier>,
   level: SubagentMetadataLevel,
   muted: ((text: string) => string) | undefined,
+  text?: (text: string) => string,
 ): { prefix: string; left: string; right: string } {
   const icon = widgetIcon(row.snapshot.kind);
   // 工单 63：固定 3 列树形槽位（外列统一 1 列内边距）——顶层「图标+两空格」、
@@ -755,7 +756,11 @@ function rowIdentityAndMetadata(
   const metadata = level === "hidden" ? null : buildSubagentMetadataSegment(row.model, row.thinking, role, level);
   const identity = `${formatElapsedMMSS(row.startTime)}  ${name}`;
   const left = metadata ? `${identity}  ${metadata.text}` : identity;
-  return { prefix, left, right: formatRowRightLabel(row) };
+  // 行内基本文字（时间/名称/元信息组/右侧运行状态）统一走主题 text 基础色：
+  // 整段一次着色，不逐字开闭色码；图标与 muted 连接符的前缀各自保留专用色，
+  // 不与文字段嵌套。测量路径（widgetMetadataLevel）不传 text，宽度按裸文本计。
+  const paint = text ?? ((value: string) => value);
+  return { prefix, left: paint(left), right: paint(formatRowRightLabel(row)) };
 }
 
 /** 元信息级别按整个 widget 的最坏行统一选择，而不是逐行压缩。 */
@@ -785,6 +790,10 @@ function renderWidgetSnapshotLines(
   const muted = theme && typeof theme.fg === "function"
     ? (text: string) => theme.fg("muted", text)
     : undefined;
+  // 行内基本文字与连接符同一主题实例取色；theme 缺席时保持裸文本。
+  const textPaint = theme && typeof theme.fg === "function"
+    ? (text: string) => theme.fg("text", text)
+    : undefined;
   const lines: string[] = [
     borderTop("Subagents", widgetText("module.subagents.widget.count.running", { count: snapshot.counts.allCount }), width, colorize),
   ];
@@ -792,7 +801,7 @@ function renderWidgetSnapshotLines(
   const metadataLevel = widgetMetadataLevel(snapshot, width, tier);
 
   for (const row of snapshot.rows) {
-    const parts = rowIdentityAndMetadata(row, tier, metadataLevel, muted);
+    const parts = rowIdentityAndMetadata(row, tier, metadataLevel, muted, textPaint);
     const left: StatusSegment[] = [{
       id: "identity",
       text: parts.left,
