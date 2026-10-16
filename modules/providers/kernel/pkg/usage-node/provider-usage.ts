@@ -129,7 +129,9 @@ const JSON_PARSERS: Record<
 		const quota = parseMiniMaxQuota(json);
 		return quota ? { mode: "subscription", quota } : null;
 	},
-	"sub2api-usage": (json) => parseSub2ApiUsage(json, "apikey.fun"),
+	// 内置 Sub2API 站点按推理地址从目录取品牌标识，避免所有站点共享 ApiKey 的名称。
+	"sub2api-usage": (json, ctx) =>
+		parseSub2ApiUsage(json, findProviderByUrl(ctx.baseUrl)?.id ?? "sub2api"),
 };
 
 /** 专用协议连接器登记表；标识由路由表引用，宿主不可见。 */

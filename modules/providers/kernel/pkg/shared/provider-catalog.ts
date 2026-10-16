@@ -154,6 +154,7 @@ const BRAND_METADATA = {
 	zenmux: { displayName: 'ZenMux', category: 'major-relay' },
 	'together-ai': { displayName: 'Together', category: 'major-relay' },
 	'new-api': { displayName: 'New API', category: 'small-relay' },
+	duiz: { displayName: 'Duiz', category: 'small-relay' },
 } as const satisfies Record<string, Pick<ProviderCatalogEntry, 'displayName' | 'category'>>;
 
 type ProviderVariant = Pick<ProviderCatalogEntry, 'id' | 'routes' | 'presetName' | 'variant' | 'aliases' | 'queryKind'> & {
@@ -265,6 +266,8 @@ const PROVIDER_VARIANTS: readonly ProviderVariant[] = [
 	// cc-switch 其它宿主相对 Claude 目录新增的聚合/网关服务。
 	{ id: 'together-ai', brandId: 'together-ai', routes: [route('api.together.xyz')], aliases: ['Together AI'] },
 	{ id: 'new-api', brandId: 'new-api', routes: [], aliases: ['NewAPI'] },
+	// 自建 Sub2API 中转站，/v1/usage 余额查询走 sub2api 协议。
+	{ id: 'duiz', brandId: 'duiz', routes: [route('llm.duiz.net')], queryAccess: 'api-key', queryKind: 'sub2api' },
 ];
 
 function createCatalog(variants: readonly ProviderVariant[]): {
