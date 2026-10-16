@@ -4,7 +4,7 @@
 // 遥测行排版留在 tui，条目类型与解析从 status 模块的静态导出面取。
 
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, type Component } from "@earendil-works/pi-tui";
 import {
 	TURN_DURATION_ENTRY_TYPE,
 	TURN_TELEMETRY_ENTRY_TYPE,
@@ -15,6 +15,7 @@ import {
 } from "../../status/api.ts";
 import { formatTokenCount } from "./session-status.ts";
 import { formatElapsed } from "./status-segments.ts";
+import { renderStatusLineSegments, type StatusSegment } from "./segment-layout.ts";
 
 export function registerTurnTelemetryRenderers(
 	pi: Pick<ExtensionAPI, "registerEntryRenderer">,
@@ -24,7 +25,7 @@ export function registerTurnTelemetryRenderers(
 		(entry, _options, theme) => {
 			const telemetry = readTurnTelemetryEntryData(entry.data);
 			if (!telemetry) return undefined;
-			return new Text(theme.fg("dim", formatTurnTelemetry(telemetry)), 1, 0);
+			return new TurnTelemetryEntryComponent(telemetry, theme);
 		},
 	);
 	pi.registerEntryRenderer?.<PersistedTurnDuration>(TURN_DURATION_ENTRY_TYPE, () => undefined);
@@ -46,32 +47,61 @@ function formatEstimatedCost(costUsd: number): string {
 	return `$${amount}`;
 }
 
-export function formatTurnTelemetry(
-	telemetry: TurnTelemetrySnapshot,
-): string {
-	const parts: string[] = [];
+function buildTurnTelemetrySegments(telemetry: TurnTelemetrySnapshot): StatusSegment[] {
 	const speed = telemetry.tokensPerSecond === null
 		? "TPS:—"
 		: `TPS:${formatTokensPerSecond(telemetry.tokensPerSecond)}tok/s`;
-	parts.push(`TTFT:${formatTelemetryDuration(telemetry.ttftMs)}`);
-	parts.push(speed);
-	if (telemetry.inputTokens > 0) {
-		parts.push(`↑${formatTokenCount(telemetry.inputTokens)}`);
-	}
-	if (telemetry.outputTokens > 0) {
-		parts.push(`↓${formatTokenCount(telemetry.outputTokens)}`);
-	}
-	if (
+	return [
+		{
+			id: "ttft",
+			text: `TTFT:${formatTelemetryDuration(telemetry.ttftMs)}`,
+			priority: 0,
+			required: true,
+		},
+		{ id: "tps", text: speed, priority: 0, required: true },
+		telemetry.inputTokens > 0
+			? { id: "input", text: `↑${formatTokenCount(telemetry.inputTokens)}`, priority: 2 }
+			: undefined,
+		telemetry.outputTokens > 0
+			? { id: "output", text: `↓${formatTokenCount(telemetry.outputTokens)}`, priority: 2 }
+			: undefined,
 		telemetry.cacheReadTokens !== null
 		&& telemetry.cacheWriteTokens !== null
 		&& (telemetry.cacheReadTokens > 0 || telemetry.cacheWriteTokens > 0)
-	) {
-		parts.push(`R${formatTokenCount(telemetry.cacheReadTokens)}`);
-	}
-	if (telemetry.costUsd > 0) {
-		parts.push(`Cost:${formatEstimatedCost(telemetry.costUsd)}`);
-	}
-	parts.push(`Total:${formatElapsed(telemetry.totalMs)}`);
+			? { id: "cache", text: `R${formatTokenCount(telemetry.cacheReadTokens)}`, priority: 3 }
+			: undefined,
+		telemetry.costUsd > 0
+			? { id: "cost", text: `Cost:${formatEstimatedCost(telemetry.costUsd)}`, priority: 0, required: true }
+			: undefined,
+		{
+			id: "total",
+			text: `Total:${formatElapsed(telemetry.totalMs)}`,
+			priority: 0,
+			required: true,
+		},
+	].filter((segment): segment is StatusSegment => segment !== undefined);
+}
 
-	return parts.join(" ");
+class TurnTelemetryEntryComponent implements Component {
+	private readonly telemetry: TurnTelemetrySnapshot;
+	private readonly theme: Theme;
+
+	constructor(telemetry: TurnTelemetrySnapshot, theme: Theme) {
+		this.telemetry = telemetry;
+		this.theme = theme;
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		const contentWidth = Math.max(1, width - 2);
+		const line = renderStatusLineSegments(buildTurnTelemetrySegments(this.telemetry), contentWidth, " ");
+		return new Text(this.theme.fg("dim", line), 1, 0).render(width);
+	}
+}
+
+export function formatTurnTelemetry(
+	telemetry: TurnTelemetrySnapshot,
+): string {
+	return buildTurnTelemetrySegments(telemetry).map((segment) => segment.text).join(" ");
 }
