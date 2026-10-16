@@ -3,7 +3,7 @@
 // 数据半（采集器、条目 schema、解析函数）在 modules/status/：渲染器注册与
 // 遥测行排版留在 tui，条目类型与解析从 status 模块的静态导出面取。
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import {
 	TURN_DURATION_ENTRY_TYPE,
@@ -21,10 +21,10 @@ export function registerTurnTelemetryRenderers(
 ): void {
 	pi.registerEntryRenderer?.<PersistedTurnTelemetry>(
 		TURN_TELEMETRY_ENTRY_TYPE,
-		(entry) => {
+		(entry, _options, theme) => {
 			const telemetry = readTurnTelemetryEntryData(entry.data);
 			if (!telemetry) return undefined;
-			return new Text(formatTurnTelemetry(telemetry), 1, 0);
+			return new Text(theme.fg("dim", formatTurnTelemetry(telemetry)), 1, 0);
 		},
 	);
 	pi.registerEntryRenderer?.<PersistedTurnDuration>(TURN_DURATION_ENTRY_TYPE, () => undefined);
