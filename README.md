@@ -24,7 +24,7 @@ pi install git:github.com/buyi1net/pi-toolkit
 
 **子代理编排（来自 pi-subagents）**：spawn、调度、回收子代理。自动任务默认 headless 后台进程，演示型任务用 herdr 或 tmux 分屏，结果自动回注主会话。支持 tier 模型路由（fast / balanced / deep）与团队协作。`ask_question` 让子代理在卡住时向主会话提问。
 
-**供应商用量、工作区与会话状态、外观（来自 pi-tui，重构后拆为三个模块）**：编辑器状态边框、Header、项目状态 Footer、启动与 reload 转场、单轮遥测，附带 16 个主题。供应商余额与套餐查询需要凭据时读取 `~/.pi/agent/pi-tui.json`（该文件由你手工维护，插件只读）。
+**供应商用量、工作区与会话状态、外观（来自 pi-tui，重构后拆为三个模块）**：编辑器状态边框、Header、项目状态 Footer、启动与 reload 转场、单轮遥测，附带 21 个主题（16 个 pi-themes-bundle + 5 个对齐 Herdr 内置主题的自维护移植）。供应商余额与套餐查询需要凭据时读取 `~/.pi/agent/pi-tui.json`（该文件由你手工维护，插件只读）。
 
 **电脑控制（pi-computer）**：让 Agent 看屏幕、认控件、动键鼠，把只在图形界面里能办的事办完。当前落地 Windows 语义后端：列出窗口、菜单、对话框与弹层，读取无障碍（UIA）语义树，按引用点按控件、读写文本、切换焦点与激活窗口，共七个工具（`computer_status`、`computer_roots`、`computer_observe`、`computer_search`、`computer_inspect`、`computer_act`、`computer_read`）。Windows 的 helper 二进制约 335 KB，随包分发，不需要额外工具链；macOS 与 Linux 后端在后续版本加入。
 
