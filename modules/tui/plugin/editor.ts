@@ -164,7 +164,8 @@ export class PiUiEditor extends CustomEditor {
 		layout: EditorLayoutSource = {},
 		hooks: PiUiEditorHooks = {},
 	) {
-		super(tui, theme, keybindings, { embedWorkingStatus: true });
+		// 保留模型信息在编辑框上边框；Working 由 Pi 宿主的 statusContainer 放到编辑框上方独立显示。
+		super(tui, theme, keybindings, { embedWorkingStatus: false });
 		this.ctx = ctx;
 		this.getGlyphs = appearance.getGlyphs ?? (() => resolveGlyphs("unicode"));
 		this.getSettings = appearance.getSettings ?? (() => resolveStatusSettings({}));
