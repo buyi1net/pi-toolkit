@@ -215,7 +215,7 @@ export function registerPiTuiLifecycle(
 		}, TRANSITION_SETTLE_MS);
 		transitionRevealTimer.unref?.();
 	};
-	registerTurnTelemetryRenderers(pi, () => resolveGlyphs("auto", env));
+	registerTurnTelemetryRenderers(pi);
 
 	const disposeInstalledControllers = (): void => {
 		cancelModelSwitchRepaint();

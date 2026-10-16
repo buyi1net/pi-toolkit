@@ -13,20 +13,18 @@ import {
 	type PersistedTurnTelemetry,
 	type TurnTelemetrySnapshot,
 } from "../../status/api.ts";
-import { resolveGlyphs, type IconGlyphs } from "../renderer/icons.ts";
 import { formatTokenCount } from "./session-status.ts";
 import { formatElapsed } from "./status-segments.ts";
 
 export function registerTurnTelemetryRenderers(
 	pi: Pick<ExtensionAPI, "registerEntryRenderer">,
-	getGlyphs: () => IconGlyphs,
 ): void {
 	pi.registerEntryRenderer?.<PersistedTurnTelemetry>(
 		TURN_TELEMETRY_ENTRY_TYPE,
 		(entry, _options, theme) => {
 			const telemetry = readTurnTelemetryEntryData(entry.data);
 			if (!telemetry) return undefined;
-			return new Text(formatTurnTelemetry(telemetry, theme, getGlyphs()), 1, 0);
+			return new Text(formatTurnTelemetry(telemetry, theme), 1, 0);
 		},
 	);
 	pi.registerEntryRenderer?.<PersistedTurnDuration>(TURN_DURATION_ENTRY_TYPE, () => undefined);
@@ -58,7 +56,6 @@ function formatEstimatedCost(costUsd: number): string {
 export function formatTurnTelemetry(
 	telemetry: TurnTelemetrySnapshot,
 	theme: Theme,
-	glyphs: IconGlyphs = resolveGlyphs("unicode"),
 ): string {
 	const parts: string[] = [];
 	const speed = telemetry.tokensPerSecond === null
@@ -66,31 +63,28 @@ export function formatTurnTelemetry(
 		: `${formatTokensPerSecond(telemetry.tokensPerSecond)} tok/s`;
 	parts.push(theme.fg(
 		getTtftColor(telemetry.ttftMs),
-		`${glyphs.latency} ${formatTelemetryDuration(telemetry.ttftMs)}`,
+		`TTFT ${formatTelemetryDuration(telemetry.ttftMs)}`,
 	));
 	parts.push(theme.fg(
 		telemetry.tokensPerSecond === null ? "muted" : "accent",
-		`${glyphs.speed} ${speed}`,
+		speed,
 	));
-	const contextParts: string[] = [];
 	if (telemetry.inputTokens > 0) {
-		contextParts.push(theme.fg("muted", `${glyphs.inputTokens}${formatTokenCount(telemetry.inputTokens)}`));
+		parts.push(theme.fg("text", `↑${formatTokenCount(telemetry.inputTokens)}`));
 	}
 	if (telemetry.outputTokens > 0) {
-		contextParts.push(theme.fg("muted", `${glyphs.outputTokens}${formatTokenCount(telemetry.outputTokens)}`));
+		parts.push(theme.fg("success", `↓${formatTokenCount(telemetry.outputTokens)}`));
 	}
 	if (
 		telemetry.cacheReadTokens !== null
 		&& telemetry.cacheWriteTokens !== null
 		&& (telemetry.cacheReadTokens > 0 || telemetry.cacheWriteTokens > 0)
 	) {
-		contextParts.push(theme.fg("muted", `R${formatTokenCount(telemetry.cacheReadTokens)}`));
+		parts.push(theme.fg("muted", `R${formatTokenCount(telemetry.cacheReadTokens)}`));
 	}
-	if (contextParts.length > 0) parts.push(contextParts.join(" "));
 	if (telemetry.costUsd > 0) {
-		parts.push(theme.fg("warning", formatEstimatedCost(telemetry.costUsd)));
+		parts.push(theme.fg("warning", `Cost ${formatEstimatedCost(telemetry.costUsd)}`));
 	}
 
-	const separator = glyphs.cost === "$" ? "|" : "·";
-	return parts.join(` ${theme.fg("dim", separator)} `);
+	return parts.join(" ");
 }
