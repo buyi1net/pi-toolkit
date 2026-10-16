@@ -14,7 +14,7 @@ import {
 import { sanitizeStyledSingleLine } from "../../../shared/sanitize.ts";
 import { deriveSessionShortId } from "../../../shared/short-id.ts";
 import { resolveGlyphs, type IconGlyphs } from "../renderer/icons.ts";
-import { formatProjectStatusLine } from "../status/project-status.ts";
+import { renderProjectStatusLine } from "../status/project-status.ts";
 import { renderStatusLineSegments } from "../status/segment-layout.ts";
 import { buildEditorUsageSegments } from "../status/session-status.ts";
 import type {
@@ -23,8 +23,6 @@ import type {
 	SessionStatusSource,
 	StatusAppearance,
 } from "./status-sources.ts";
-
-const FOOTER_PADDING_X = 1;
 
 /** 会话快照缺省值：宿主会话管理器未就绪时的零值占位（结构与旧行为一致） */
 const EMPTY_SESSION_STATUS: SessionStatusSnapshot = Object.freeze({
@@ -96,14 +94,14 @@ export class ProjectStatusFooter implements Component {
 	render(width: number): string[] {
 		const glyphs = this.getGlyphs();
 		const settings = this.getSettings();
-		const paddingX = width >= FOOTER_PADDING_X * 2 + 1 ? FOOTER_PADDING_X : 0;
-		const contentWidth = Math.max(1, width - paddingX * 2);
+		// Pi 原生 Footer 直接占用整行，不额外增加左右内边距。
+		const contentWidth = Math.max(1, width);
 		// 会话短码段（工单 48 起进段位系统）：会话 id 直读宿主会话管理器（不经 status
 		// 句柄，status 关闭时仍显示），作为 session 段与路径同组布局，位置由
 		// footerPrimary 决定（默认 路径 · 短码 · git）；取不到合法 id 时该段隐藏。
 		const sessionId = this.getSessionId();
 		const sessionShortId = sessionId ? deriveSessionShortId(sessionId) : null;
-		const projectLineText = formatProjectStatusLine(
+		const projectLine = renderProjectStatusLine(
 			{
 				// 快照未接线时仍保留占位，保证 Footer 结构从首帧起定型。
 				...(this.getProjectStatus?.() ?? { cwd: this.cwd, branch: null }),
@@ -112,12 +110,12 @@ export class ProjectStatusFooter implements Component {
 				sessionShort: sessionShortId,
 			},
 			contentWidth,
+			this.theme,
 			undefined,
 			glyphs,
 			settings.footerPrimary,
 			false,
 		);
-		const projectLine = projectLineText ? this.theme.fg("dim", projectLineText) : "";
 		// 第二行沿用 Pi 原生 Footer 排版，保留实际上下文占用和自动压缩标记。
 		const contextUsage = this.getContextUsage();
 		const usageSegments = buildEditorUsageSegments(
@@ -154,7 +152,7 @@ export class ProjectStatusFooter implements Component {
 			lines.push(truncateToWidth(statuses.join(" · "), contentWidth, this.theme.fg("dim", "…")));
 		}
 		this.reportHeight?.(lines.length);
-		return paddingX > 0 ? lines.map((line) => `${" ".repeat(paddingX)}${line}`) : lines;
+		return lines;
 	}
 
 	dispose(): void {

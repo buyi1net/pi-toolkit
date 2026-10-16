@@ -251,6 +251,102 @@ function joinProjectStatusGroups(
 		: [{ text: groupSeparator, role: "separator" } as ProjectStatusPart, ...group]);
 }
 
+function projectStatusPartsText(parts: readonly ProjectStatusPart[]): string {
+	return parts.map((part) => part.text).join("");
+}
+
+function truncateProjectStatusParts(parts: readonly ProjectStatusPart[], width: number): ProjectStatusPart[] {
+	if (width <= 0) return [];
+	const result: ProjectStatusPart[] = [];
+	let remaining = width;
+	for (const part of parts) {
+		if (remaining <= 0) break;
+		const partWidth = visibleWidth(part.text);
+		if (partWidth <= remaining) {
+			result.push(part);
+			remaining -= partWidth;
+			continue;
+		}
+		const truncated = truncateToWidth(part.text, remaining, "");
+		if (truncated) result.push({ ...part, text: truncated });
+		break;
+	}
+	return result;
+}
+
+function nativeFooterStatusParts(
+	snapshot: ProjectStatusSnapshot,
+	glyphs: IconGlyphs,
+	order: readonly ProjectStatusSegmentId[],
+): ProjectStatusPart[] {
+	const groups: ProjectStatusPart[][] = [];
+	if (order.includes("git")) groups.push(projectGitParts(snapshot, glyphs, true));
+	if (order.includes("duration")) groups.push(projectDurationParts(snapshot, glyphs, true));
+	if (order.includes("runtime")) groups.push(projectRuntimeParts(snapshot, glyphs, true));
+	return groups
+		.filter((group) => group.length > 0)
+		.flatMap((group, index) => index === 0
+			? group
+			: [{ text: SEPARATOR, role: "separator" } as ProjectStatusPart, ...group]);
+}
+
+function nativeFooterProjectStatusParts(
+	snapshot: ProjectStatusSnapshot,
+	width: number,
+	home: string | undefined,
+	glyphs: IconGlyphs,
+	segments: readonly ProjectStatusSegmentId[],
+): ProjectStatusPart[] {
+	if (width <= 0) return [];
+	const order = [...new Set(segments)];
+	const pathText = order.includes("project") ? formatProjectPath(snapshot.cwd, home) : "";
+	const sessionText = order.includes("session") && snapshot.sessionShort ? `#${snapshot.sessionShort}` : "";
+	const pathParts: ProjectStatusPart[] = pathText ? [{ text: pathText, role: "path" }] : [];
+	const sessionParts: ProjectStatusPart[] = sessionText ? [{ text: sessionText, role: "session" }] : [];
+	const pathAndSession = pathParts.length > 0 && sessionParts.length > 0
+		? [...pathParts, { text: SEPARATOR, role: "separator" } as ProjectStatusPart, ...sessionParts]
+		: [...pathParts, ...sessionParts];
+	const statusParts = nativeFooterStatusParts(snapshot, glyphs, order);
+	const full = statusParts.length > 0 && pathAndSession.length > 0
+		? [...pathAndSession, { text: SEPARATOR, role: "separator" } as ProjectStatusPart, ...statusParts]
+		: [...pathAndSession, ...statusParts];
+	if (partsWidth(full) <= width) return full;
+
+	if (sessionParts.length > 0) {
+		if (partsWidth(pathAndSession) <= width) {
+			const statusBudget = width - partsWidth(pathAndSession) - visibleWidth(SEPARATOR);
+			if (statusParts.length > 0 && statusBudget >= MIN_GIT_WIDTH) {
+				return [
+					...pathAndSession,
+					{ text: SEPARATOR, role: "separator" },
+					...truncateProjectStatusParts(statusParts, statusBudget),
+				];
+			}
+			return pathAndSession;
+		}
+		if (width < partsWidth(sessionParts)) {
+			const fallback = pathText || projectStatusPartsText(statusParts);
+			return fallback
+				? [{ text: truncateToWidth(fallback, width, "…"), role: pathText ? "path" : "branch" }]
+				: [];
+		}
+		const pathBudget = width - partsWidth(sessionParts) - visibleWidth(SEPARATOR);
+		if (pathBudget > 0 && pathParts.length > 0) {
+			return [
+				{ ...pathParts[0]!, text: truncateFromStart(pathText, pathBudget) },
+				{ text: SEPARATOR, role: "separator" },
+				...sessionParts,
+			];
+		}
+		return [{ ...sessionParts[0]!, text: truncateToWidth(sessionText, width, "…") }];
+	}
+
+	const fullText = projectStatusPartsText(full);
+	return fullText
+		? [{ text: truncateToWidth(fullText, width, "…"), role: pathText ? "path" : "branch" }]
+		: [];
+}
+
 function formatNativeFooterProjectStatusLine(
 	snapshot: ProjectStatusSnapshot,
 	width: number,
@@ -258,42 +354,27 @@ function formatNativeFooterProjectStatusLine(
 	glyphs: IconGlyphs,
 	segments: readonly ProjectStatusSegmentId[],
 ): string {
-	if (width <= 0) return "";
-	const order = [...new Set(segments)];
-	const pathText = order.includes("project") ? formatProjectPath(snapshot.cwd, home) : "";
-	const sessionText = order.includes("session") && snapshot.sessionShort ? `#${snapshot.sessionShort}` : "";
-	const statusParts: string[] = [];
-	if (order.includes("git")) {
-		statusParts.push(projectGitParts(snapshot, glyphs, true).map((part) => part.text).join(""));
-	}
-	if (order.includes("duration")) {
-		statusParts.push(projectDurationParts(snapshot, glyphs, true).map((part) => part.text).join(""));
-	}
-	if (order.includes("runtime")) {
-		statusParts.push(projectRuntimeParts(snapshot, glyphs, true).map((part) => part.text).join(""));
-	}
-	const statusText = statusParts.filter(Boolean).join(SEPARATOR);
-	const pathAndSession = [pathText, sessionText].filter(Boolean).join(SEPARATOR);
-	const full = [pathAndSession, statusText].filter(Boolean).join(SEPARATOR);
-	if (visibleWidth(full) <= width) return full;
-	if (sessionText) {
-		if (visibleWidth(pathAndSession) <= width) {
-			const statusBudget = width - visibleWidth(pathAndSession) - visibleWidth(SEPARATOR);
-			if (statusText && statusBudget >= MIN_GIT_WIDTH) {
-				return `${pathAndSession}${SEPARATOR}${truncateToWidth(statusText, statusBudget, "")}`;
-			}
-			return pathAndSession;
-		}
-		if (width < visibleWidth(sessionText)) {
-			return truncateToWidth(pathText || statusText, width, "…");
-		}
-		const pathBudget = width - visibleWidth(sessionText) - visibleWidth(SEPARATOR);
-		if (pathBudget > 0 && pathText) {
-			return `${truncateFromStart(pathText, pathBudget)}${SEPARATOR}${sessionText}`;
-		}
-		return truncateToWidth(sessionText, width, "…");
-	}
-	return truncateToWidth(full, width, "…");
+	return projectStatusPartsText(nativeFooterProjectStatusParts(snapshot, width, home, glyphs, segments));
+}
+
+function renderNativeFooterProjectStatusLine(
+	snapshot: ProjectStatusSnapshot,
+	width: number,
+	theme: Theme,
+	home: string | undefined,
+	glyphs: IconGlyphs,
+	segments: readonly ProjectStatusSegmentId[],
+): string {
+	return nativeFooterProjectStatusParts(snapshot, width, home, glyphs, segments)
+		.map((part) => {
+			const color = part.role === "path" || part.role === "separator"
+				? "dim"
+				: part.role === "duration"
+					? durationStatusColor(snapshot.duration?.state ?? "idle")
+					: ROLE_COLORS[part.role];
+			return theme.fg(color, part.text);
+		})
+		.join("");
 }
 
 export function layoutProjectStatusLine(
@@ -430,6 +511,9 @@ export function renderProjectStatusLine(
 	segments: readonly ProjectStatusSegmentId[] = DEFAULT_PROJECT_STATUS_SEGMENTS,
 	showIcons = true,
 ): string {
+	if (!showIcons) {
+		return renderNativeFooterProjectStatusLine(snapshot, width, theme, home, glyphs, segments);
+	}
 	return layoutProjectStatusLine(snapshot, width, home, glyphs, segments, showIcons)
 		.map((part) => {
 			if (showIcons && part.role === "path" && part.text.startsWith(glyphs.project)) {
