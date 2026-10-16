@@ -22,7 +22,6 @@ import {
 	resolveStatusSettings,
 	type EditorLeftSegmentId,
 	type ResolvedStatusSettings,
-	type TurnTimerSnapshot,
 } from "../../status/api.ts";
 import { sanitizeSingleLine } from "../../../shared/sanitize.ts";
 import { deriveSessionShortId } from "../../../shared/short-id.ts";
@@ -31,11 +30,7 @@ import {
 	splitNativeEditorRender,
 } from "../renderer/editor.ts";
 import { resolveGlyphs, type IconGlyphs } from "../renderer/icons.ts";
-import {
-	durationStatusColor,
-	formatElapsed,
-	thinkingStatusColor,
-} from "../status/status-segments.ts";
+import { thinkingStatusColor } from "../status/status-segments.ts";
 import { layoutEditorStatus, type StatusSegment } from "../status/segment-layout.ts";
 import { buildEditorProviderSegments } from "../status/provider-status.ts";
 import type {
@@ -81,7 +76,6 @@ function getFrameStatus(
 	settings: ResolvedStatusSettings,
 	sessionId: string | null,
 	providerState: UsageRuntimeState | undefined,
-	timer: TurnTimerSnapshot,
 ): { left: string; right: string } {
 	const thinking = ctx.thinkingLevel ?? "off";
 	const color = (role: Parameters<Theme["fg"]>[0], text: string): string => theme.fg(role, text);
@@ -108,9 +102,8 @@ function getFrameStatus(
 		},
 		duration: {
 			id: "duration",
-			text: timer.state === "idle"
-				? ""
-				: color(durationStatusColor(timer.state), formatElapsed(timer.elapsedMs)),
+			// 保留旧段位键以兼容配置；计时器已迁到 Working 与回合遥测尾部。
+			text: "",
 			priority: 1,
 		},
 		balance: provider?.balance ?? {
@@ -147,7 +140,6 @@ export class PiUiEditor extends CustomEditor {
 	private readonly getSettings: () => ResolvedStatusSettings;
 	private readonly getFooterHeight: () => number;
 	private readonly getProviderStatus: () => UsageRuntimeState | undefined;
-	private readonly getTimer: () => TurnTimerSnapshot | undefined;
 	private readonly getSessionId: () => string | null;
 	private readonly appKeybindings: KeybindingsManager;
 	private readonly autocompleteOverlay: Component & { setLines(lines: readonly string[]): void };
@@ -182,7 +174,6 @@ export class PiUiEditor extends CustomEditor {
 		this.getFooterHeight = layout.getFooterHeight ?? (() => 0);
 		this.getProviderStatus = provider.getState ?? (() => undefined);
 		this.hooks = hooks;
-		this.getTimer = session.getTimer ?? (() => undefined);
 		this.getSessionId = session.getSessionId ?? (() => null);
 		this.appKeybindings = keybindings;
 		this.autocompleteOverlay = {
@@ -223,7 +214,6 @@ export class PiUiEditor extends CustomEditor {
 			this.getSettings(),
 			this.getSessionId(),
 			this.getProviderStatus(),
-			this.getTimer() ?? { state: "idle", elapsedMs: 0 },
 		);
 		const renderedLines = insertTopBorderStatus(baseLines, {
 			left: frameStatus.left,

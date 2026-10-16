@@ -51,9 +51,9 @@ export function formatTurnTelemetry(
 ): string {
 	const parts: string[] = [];
 	const speed = telemetry.tokensPerSecond === null
-		? "—"
-		: `${formatTokensPerSecond(telemetry.tokensPerSecond)} tok/s`;
-	parts.push(`TTFT ${formatTelemetryDuration(telemetry.ttftMs)}`);
+		? "TPS:—"
+		: `TPS:${formatTokensPerSecond(telemetry.tokensPerSecond)}tok/s`;
+	parts.push(`TTFT:${formatTelemetryDuration(telemetry.ttftMs)}`);
 	parts.push(speed);
 	if (telemetry.inputTokens > 0) {
 		parts.push(`↑${formatTokenCount(telemetry.inputTokens)}`);
@@ -69,8 +69,9 @@ export function formatTurnTelemetry(
 		parts.push(`R${formatTokenCount(telemetry.cacheReadTokens)}`);
 	}
 	if (telemetry.costUsd > 0) {
-		parts.push(`Cost ${formatEstimatedCost(telemetry.costUsd)}`);
+		parts.push(`Cost:${formatEstimatedCost(telemetry.costUsd)}`);
 	}
+	parts.push(`Total:${formatElapsed(telemetry.totalMs)}`);
 
 	return parts.join(" ");
 }

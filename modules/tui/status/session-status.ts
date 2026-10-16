@@ -69,6 +69,7 @@ export function buildEditorUsageSegments(
 	const cacheHitText = snapshot.cacheHitPercent !== undefined && (cacheReadTokens > 0 || cacheWriteTokens > 0)
 		? `CH${formatCacheHitPercent(snapshot.cacheHitPercent)}%`
 		: "";
+	const turnsText = snapshot.turns > 0 ? `Turns:${snapshot.turns}` : "";
 	const statsParts = nativeFooter
 		? [
 			inputTokens > 0 ? `↑${formatTokenCount(inputTokens)}` : "",
@@ -76,6 +77,7 @@ export function buildEditorUsageSegments(
 			cacheReadTokens > 0 ? `R${formatTokenCount(cacheReadTokens)}` : "",
 			cacheWriteTokens > 0 ? `W${formatTokenCount(cacheWriteTokens)}` : "",
 			cacheHitText,
+			turnsText,
 		].filter(Boolean)
 		: [
 			theme.fg("muted", `${glyphs.inputTokens}${formatTokenCount(inputTokens)}`),

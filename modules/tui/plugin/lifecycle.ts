@@ -13,6 +13,7 @@ import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import { PiTuiHeader } from "../renderer/header.ts";
 import { resolveGlyphs } from "../renderer/icons.ts";
 import { registerTurnTelemetryRenderers } from "../status/turn-telemetry.ts";
+import { formatElapsed } from "../status/status-segments.ts";
 import {
 	loadStandaloneTuiConfig,
 	type LoadedPiTuiConfig,
@@ -54,11 +55,17 @@ import {
 	type StatusWorkspaceService,
 } from "../../status/api.ts";
 
-export function formatWorkingMessage(tokensPerSecond: number | null | undefined): string {
+export function formatWorkingMessage(
+	tokensPerSecond: number | null | undefined,
+	elapsedMs?: number,
+): string {
 	const speed = tokensPerSecond !== null && tokensPerSecond !== undefined && Number.isFinite(tokensPerSecond)
 		? tokensPerSecond
 		: 0;
-	return `Working · LiveTPS:${speed.toString()}tok/s`;
+	const elapsed = elapsedMs !== undefined && Number.isFinite(elapsedMs) && elapsedMs >= 0
+		? ` · ${formatElapsed(elapsedMs)}`
+		: "";
+	return `Working${elapsed} · ${speed.toString()} tok/s`;
 }
 
 export interface PiTuiPluginDependencies {
@@ -154,8 +161,18 @@ export function registerPiTuiLifecycle(
 		: dependencies.transitionGate ?? (
 			output === process.stdout && isInteractiveLaunch() ? getTerminalTransitionGate() : undefined
 		);
+	const updateWorkingMessage = (
+		ctx: ExtensionContext | undefined,
+		timerSnapshot = statusTimer?.snapshot(),
+	): void => {
+		if (!ctx) return;
+		const elapsedMs = timerSnapshot?.state === "working" ? timerSnapshot.elapsedMs : undefined;
+		ctx.ui.setWorkingMessage?.(formatWorkingMessage(statusTelemetry?.liveSnapshot()?.tokensPerSecond, elapsedMs));
+	};
 	const requestStatusRender = () => {
 		if (transitionGate?.isHolding()) return;
+		const timerSnapshot = statusTimer?.snapshot();
+		if (timerSnapshot?.state === "working") updateWorkingMessage(lastContext, timerSnapshot);
 		installedTui?.requestRender();
 	};
 	let transitionRevealEnabled = true;
@@ -550,19 +567,19 @@ export function registerPiTuiLifecycle(
 
 	pi.on("turn_start", (_event, ctx) => {
 		if (!active) return;
-		ctx.ui.setWorkingMessage?.(formatWorkingMessage(statusTelemetry?.liveSnapshot()?.tokensPerSecond));
+		updateWorkingMessage(ctx);
 		requestStatusRender();
 	});
 	pi.on("message_update", (_event, ctx) => {
 		if (!active) return;
-		ctx.ui.setWorkingMessage?.(formatWorkingMessage(statusTelemetry?.liveSnapshot()?.tokensPerSecond));
+		updateWorkingMessage(ctx);
 		requestStatusRender();
 	});
 
 	// 回合计时与遥测的事件接线归 status 模块（turn/message/agent 事件）。
 	pi.on("message_end", (_event, ctx) => {
 		if (active) {
-			ctx.ui.setWorkingMessage?.(formatWorkingMessage(statusTelemetry?.liveSnapshot()?.tokensPerSecond));
+			updateWorkingMessage(ctx);
 			requestStatusRender();
 		}
 	});

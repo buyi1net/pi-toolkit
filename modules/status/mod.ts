@@ -6,8 +6,8 @@
 // - 重绘节奏属于 tui（工单 18）：控制器不持重绘回调；句柄快照带变更序号（内容变化时递增），
 //   tui 心跳按序号变化重绘（句柄默认契约是 snapshot/refresh，telemetry 另有 liveSnapshot）。
 //
-// 事件接线：session_start 绑定会话并按段位创建控制器；session_shutdown 释放；
-// 回合计时与遥测由 turn/agent 事件驱动。工具执行后的数据刷新由消费方
+// 事件接线：session_start 绑定会话并按段位创建工作区控制器；session_shutdown 释放；
+// status 模块启用时回合计时始终创建，独立于顶边段位，供 Working 与回合遥测复用；回合遥测由 turn/agent 事件驱动。工具执行后的数据刷新由消费方
 // （tui 的 tool_execution_end 处理器）调句柄 refresh() 触发，取数策略仍在控制器内部
 // （防抖、在途合并、1 秒轮询），与 providers.usage 的消费形式一致。
 
@@ -155,12 +155,10 @@ export function registerStatus(
 			);
 			runtimeStatus.connect();
 		}
-		if (settings.editorLeft.includes("duration")) {
-			timer = new TurnTimerController(
-				Date.now,
-				readLatestTurnDuration(ctx.sessionManager?.getEntries?.() ?? []),
-			);
-		}
+		timer = new TurnTimerController(
+			Date.now,
+			readLatestTurnDuration(ctx.sessionManager?.getEntries?.() ?? []),
+		);
 		if (settings.footerUsage.includes("context")) {
 			compaction = new AutoCompactionStatusController(
 				() => readCompactionEnabled(ctx, agentDir),
