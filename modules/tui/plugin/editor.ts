@@ -25,6 +25,7 @@ import {
 	type TurnTimerSnapshot,
 } from "../../status/api.ts";
 import { sanitizeSingleLine } from "../../../shared/sanitize.ts";
+import { deriveSessionShortId } from "../../../shared/short-id.ts";
 import {
 	insertTopBorderStatus,
 	splitNativeEditorRender,
@@ -78,6 +79,7 @@ function getFrameStatus(
 	glyphs: IconGlyphs,
 	width: number,
 	settings: ResolvedStatusSettings,
+	sessionId: string | null,
 	providerState: UsageRuntimeState | undefined,
 	timer: TurnTimerSnapshot,
 ): { left: string; right: string } {
@@ -123,8 +125,15 @@ function getFrameStatus(
 		},
 	};
 	const left = settings.editorLeft.map((id) => leftById[id]).filter((segment) => segment.text);
-	// 顶边右侧已让位：会话遥测整体移入 Footer 第二行，顶边只保留左侧身份段
-	return layoutEditorStatus(left, [], width);
+	const sessionShortId = sessionId ? deriveSessionShortId(sessionId) : null;
+	const right: StatusSegment[] = settings.editorRight.includes("session") && sessionShortId
+		? [{
+			id: "session",
+			text: color("warning", `#${sessionShortId}`),
+			priority: 5,
+		}]
+		: [];
+	return layoutEditorStatus(left, right, width);
 }
 
 export interface PiUiEditorHooks {
@@ -139,6 +148,7 @@ export class PiUiEditor extends CustomEditor {
 	private readonly getFooterHeight: () => number;
 	private readonly getProviderStatus: () => UsageRuntimeState | undefined;
 	private readonly getTimer: () => TurnTimerSnapshot | undefined;
+	private readonly getSessionId: () => string | null;
 	private readonly appKeybindings: KeybindingsManager;
 	private readonly autocompleteOverlay: Component & { setLines(lines: readonly string[]): void };
 	private readonly autocompleteOverlayOptions: OverlayOptions;
@@ -173,6 +183,7 @@ export class PiUiEditor extends CustomEditor {
 		this.getProviderStatus = provider.getState ?? (() => undefined);
 		this.hooks = hooks;
 		this.getTimer = session.getTimer ?? (() => undefined);
+		this.getSessionId = session.getSessionId ?? (() => null);
 		this.appKeybindings = keybindings;
 		this.autocompleteOverlay = {
 			setLines: (lines) => { this.autocompleteOverlayLines = [...lines]; },
@@ -204,16 +215,19 @@ export class PiUiEditor extends CustomEditor {
 		}
 
 		const baseLines = super.render(width);
+		const frameStatus = getFrameStatus(
+			this.ctx,
+			this.ctx.ui.theme,
+			this.getGlyphs(),
+			width,
+			this.getSettings(),
+			this.getSessionId(),
+			this.getProviderStatus(),
+			this.getTimer() ?? { state: "idle", elapsedMs: 0 },
+		);
 		const renderedLines = insertTopBorderStatus(baseLines, {
-			left: getFrameStatus(
-				this.ctx,
-				this.ctx.ui.theme,
-				this.getGlyphs(),
-				width,
-				this.getSettings(),
-				this.getProviderStatus(),
-				this.getTimer() ?? { state: "idle", elapsedMs: 0 },
-			).left,
+			left: frameStatus.left,
+			right: frameStatus.right,
 			borderColor: (text) => this.borderColor(text),
 		});
 		return this.finishRender(this.renderWithAutocompleteOverlay(baseLines, renderedLines, width));

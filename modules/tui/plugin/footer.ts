@@ -12,7 +12,6 @@ import {
 	type TurnTimerSnapshot,
 } from "../../status/api.ts";
 import { sanitizeStyledSingleLine } from "../../../shared/sanitize.ts";
-import { deriveSessionShortId } from "../../../shared/short-id.ts";
 import { resolveGlyphs, type IconGlyphs } from "../renderer/icons.ts";
 import { renderProjectStatusLine } from "../status/project-status.ts";
 import { renderStatusLineSegments } from "../status/segment-layout.ts";
@@ -53,7 +52,6 @@ export class ProjectStatusFooter implements Component {
 	private readonly reportHeight: ((height: number) => void) | undefined;
 	private readonly getTimer: () => TurnTimerSnapshot | undefined;
 	private readonly getSessionStatus: () => SessionStatusSnapshot;
-	private readonly getSessionId: () => string | null;
 	private readonly getContextUsage: () => ContextUsage | undefined;
 	private readonly getContextWindow: () => number | undefined;
 	private readonly getAutoCompactionEnabled: () => boolean;
@@ -82,7 +80,6 @@ export class ProjectStatusFooter implements Component {
 		this.reportHeight = layout.reportHeight;
 		this.getTimer = session.getTimer ?? (() => undefined);
 		this.getSessionStatus = () => session.getSessionStatus?.() ?? EMPTY_SESSION_STATUS;
-		this.getSessionId = session.getSessionId ?? (() => null);
 		this.getContextUsage = session.getContextUsage ?? (() => undefined);
 		this.getContextWindow = session.getContextWindow ?? (() => undefined);
 		this.getAutoCompactionEnabled = () => session.getAutoCompactionEnabled?.() ?? false;
@@ -96,18 +93,13 @@ export class ProjectStatusFooter implements Component {
 		const settings = this.getSettings();
 		// Pi 原生 Footer 直接占用整行，不额外增加左右内边距。
 		const contentWidth = Math.max(1, width);
-		// 会话短码段（工单 48 起进段位系统）：会话 id 直读宿主会话管理器（不经 status
-		// 句柄，status 关闭时仍显示），作为 session 段与路径同组布局，位置由
-		// footerPrimary 决定（默认 路径 · 短码 · git）；取不到合法 id 时该段隐藏。
-		const sessionId = this.getSessionId();
-		const sessionShortId = sessionId ? deriveSessionShortId(sessionId) : null;
+		// Footer 第一行只展示项目路径与 Git 状态；会话短码位于编辑框顶边右侧。
 		const projectLine = renderProjectStatusLine(
 			{
 				// 快照未接线时仍保留占位，保证 Footer 结构从首帧起定型。
 				...(this.getProjectStatus?.() ?? { cwd: this.cwd, branch: null }),
 				runtime: this.getRuntimeStatus?.(),
 				duration: this.getTimer(),
-				sessionShort: sessionShortId,
 			},
 			contentWidth,
 			this.theme,

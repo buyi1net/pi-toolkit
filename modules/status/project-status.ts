@@ -46,7 +46,7 @@ export interface ProjectStatusSnapshot extends Partial<GitStatusDetails> {
 	refreshState?: GitRefreshState;
 	runtime?: RuntimeStatusSnapshot | null;
 	duration?: TurnTimerSnapshot;
-	/** 会话短码（工单 48，不带 #）：由 footer 现场注入；取不到时该段隐藏 */
+	/** 会话短码（兼容旧项目状态布局调用，不再由 Footer 注入） */
 	sessionShort?: string | null;
 }
 

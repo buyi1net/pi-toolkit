@@ -64,6 +64,7 @@ export type { PersistedTurnDuration, PersistedTurnTelemetry, TurnTelemetryLiveSn
 /** 段位设置（status-config.ts 的语言） */
 export type {
 	EditorLeftSegmentId,
+	EditorRightSegmentId,
 	FooterExtraSegmentId,
 	ResolvedStatusSettings,
 	StatusPresetName,

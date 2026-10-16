@@ -42,11 +42,12 @@ export function splitNativeEditorRender(lines: readonly string[]): {
 
 export interface TopBorderStatusOptions {
 	left: string;
+	right?: string;
 	borderColor: (text: string) => string;
 }
 
 /**
- * 轻插入：Pi 原生上下横线边框保持原样，只在顶边左端嵌入状态文本。
+ * 轻插入：Pi 原生上下横线边框保持原样，只在顶边左右两端嵌入状态文本。
  * 顶边不是纯横线（滚动标签等原生动态形态）时原样返回，不与原生行为竞争。
  */
 export function insertTopBorderStatus(
@@ -58,13 +59,13 @@ export function insertTopBorderStatus(
 	const plain = plainLine(top);
 	if (!/^─+$/.test(plain)) return [...baseLines];
 
-	const segment = options.left ? ` ${options.left} ` : "";
-	const segmentWidth = visibleWidth(segment);
+	const leftSegment = options.left ? ` ${options.left} ` : "";
+	const rightSegment = options.right ? ` ${options.right} ` : "";
 	const lineWidth = visibleWidth(plain);
+	const fillWidth = lineWidth - visibleWidth(leftSegment) - visibleWidth(rightSegment) - 4;
 	// 两侧至少各留两列横线；放不下时保持原生顶边
-	if (segmentWidth === 0 || segmentWidth > lineWidth - 4) return [...baseLines];
+	if (!leftSegment && !rightSegment || fillWidth < 1) return [...baseLines];
 
-	const fill = "─".repeat(lineWidth - segmentWidth - 2);
-	const decorated = `${options.borderColor("──")}${segment}${options.borderColor(fill)}`;
+	const decorated = `${options.borderColor("──")}${leftSegment}${options.borderColor("─".repeat(fillWidth))}${rightSegment}${options.borderColor("──")}`;
 	return [decorated, ...baseLines.slice(1)];
 }

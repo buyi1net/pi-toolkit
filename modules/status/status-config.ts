@@ -22,9 +22,11 @@ export const STATUS_SECTION_LABEL = `modules.${STATUS_MODULE_ID}`;
 
 export type StatusPresetName = "minimal" | "default" | "full";
 export type EditorLeftSegmentId = "provider" | "model" | "thinking" | "balance" | "subscription" | "duration";
+export type EditorRightSegmentId = "session";
 export type FooterExtraSegmentId = "extensions";
 export type StatusSegmentId =
 	| EditorLeftSegmentId
+	| EditorRightSegmentId
 	| EditorUsageSegmentId
 	| ProjectStatusSegmentId
 	| FooterExtraSegmentId;
@@ -32,6 +34,7 @@ export type StatusSegmentId =
 export interface ResolvedStatusSettings {
 	preset: StatusPresetName;
 	editorLeft: EditorLeftSegmentId[];
+	editorRight: EditorRightSegmentId[];
 	footerUsage: EditorUsageSegmentId[];
 	footerPrimary: ProjectStatusSegmentId[];
 	footerExtra: FooterExtraSegmentId[];
@@ -51,8 +54,9 @@ const PRESET_SEGMENTS: Readonly<Record<StatusPresetName, readonly StatusSegmentI
 const VALID_PRESETS = new Set<StatusPresetName>(["minimal", "default", "full"]);
 const VALID_SEGMENTS = new Set<StatusSegmentId>(PRESET_SEGMENTS.full);
 const EDITOR_LEFT = new Set<StatusSegmentId>(["provider", "model", "thinking", "balance", "subscription", "duration"]);
+const EDITOR_RIGHT = new Set<StatusSegmentId>(["session"]);
 const FOOTER_USAGE = new Set<StatusSegmentId>(["tokens", "cache", "context"]);
-const FOOTER_PRIMARY = new Set<StatusSegmentId>(["project", "session", "git", "runtime"]);
+const FOOTER_PRIMARY = new Set<StatusSegmentId>(["project", "git", "runtime"]);
 const FOOTER_EXTRA = new Set<StatusSegmentId>(["extensions"]);
 
 export const STATUS_PRESET_NAMES: readonly StatusPresetName[] = ["minimal", "default", "full"];
@@ -107,6 +111,7 @@ export function resolveStatusSettings(
 	return {
 		preset,
 		editorLeft: segments.filter((segment): segment is EditorLeftSegmentId => EDITOR_LEFT.has(segment)),
+		editorRight: segments.filter((segment): segment is EditorRightSegmentId => EDITOR_RIGHT.has(segment)),
 		footerUsage: segments.filter((segment): segment is EditorUsageSegmentId => FOOTER_USAGE.has(segment)),
 		footerPrimary: segments.filter((segment): segment is ProjectStatusSegmentId => FOOTER_PRIMARY.has(segment)),
 		footerExtra: segments.filter((segment): segment is FooterExtraSegmentId => FOOTER_EXTRA.has(segment)),

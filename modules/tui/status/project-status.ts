@@ -16,6 +16,7 @@ import { formatLeadingIcon, type IconGlyphs, resolveGlyphs } from "../renderer/i
 import { durationStatusColor, formatElapsed } from "./status-segments.ts";
 
 const SEPARATOR = " · ";
+const NATIVE_FOOTER_SEPARATOR = " ";
 const MIN_SEGMENT_WIDTH = 8;
 // git 段低于此宽度整段丢弃（工单 48 修正：短码优先于 git，git 先裁）
 const MIN_GIT_WIDTH = 8;
@@ -287,7 +288,7 @@ function nativeFooterStatusParts(
 		.filter((group) => group.length > 0)
 		.flatMap((group, index) => index === 0
 			? group
-			: [{ text: SEPARATOR, role: "separator" } as ProjectStatusPart, ...group]);
+			: [{ text: NATIVE_FOOTER_SEPARATOR, role: "separator" } as ProjectStatusPart, ...group]);
 }
 
 function nativeFooterProjectStatusParts(
@@ -304,21 +305,21 @@ function nativeFooterProjectStatusParts(
 	const pathParts: ProjectStatusPart[] = pathText ? [{ text: pathText, role: "path" }] : [];
 	const sessionParts: ProjectStatusPart[] = sessionText ? [{ text: sessionText, role: "session" }] : [];
 	const pathAndSession = pathParts.length > 0 && sessionParts.length > 0
-		? [...pathParts, { text: SEPARATOR, role: "separator" } as ProjectStatusPart, ...sessionParts]
+		? [...pathParts, { text: NATIVE_FOOTER_SEPARATOR, role: "separator" } as ProjectStatusPart, ...sessionParts]
 		: [...pathParts, ...sessionParts];
 	const statusParts = nativeFooterStatusParts(snapshot, glyphs, order);
 	const full = statusParts.length > 0 && pathAndSession.length > 0
-		? [...pathAndSession, { text: SEPARATOR, role: "separator" } as ProjectStatusPart, ...statusParts]
+		? [...pathAndSession, { text: NATIVE_FOOTER_SEPARATOR, role: "separator" } as ProjectStatusPart, ...statusParts]
 		: [...pathAndSession, ...statusParts];
 	if (partsWidth(full) <= width) return full;
 
 	if (sessionParts.length > 0) {
 		if (partsWidth(pathAndSession) <= width) {
-			const statusBudget = width - partsWidth(pathAndSession) - visibleWidth(SEPARATOR);
+			const statusBudget = width - partsWidth(pathAndSession) - visibleWidth(NATIVE_FOOTER_SEPARATOR);
 			if (statusParts.length > 0 && statusBudget >= MIN_GIT_WIDTH) {
 				return [
 					...pathAndSession,
-					{ text: SEPARATOR, role: "separator" },
+					{ text: NATIVE_FOOTER_SEPARATOR, role: "separator" },
 					...truncateProjectStatusParts(statusParts, statusBudget),
 				];
 			}
@@ -330,11 +331,11 @@ function nativeFooterProjectStatusParts(
 				? [{ text: truncateToWidth(fallback, width, "…"), role: pathText ? "path" : "branch" }]
 				: [];
 		}
-		const pathBudget = width - partsWidth(sessionParts) - visibleWidth(SEPARATOR);
+		const pathBudget = width - partsWidth(sessionParts) - visibleWidth(NATIVE_FOOTER_SEPARATOR);
 		if (pathBudget > 0 && pathParts.length > 0) {
 			return [
 				{ ...pathParts[0]!, text: truncateFromStart(pathText, pathBudget) },
-				{ text: SEPARATOR, role: "separator" },
+				{ text: NATIVE_FOOTER_SEPARATOR, role: "separator" },
 				...sessionParts,
 			];
 		}
