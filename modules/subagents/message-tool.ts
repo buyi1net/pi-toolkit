@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { normalizeSubagentName } from "./names.ts";
 import { routeExceptionFromResult } from "./route-error.ts";
 import { announceCompletion, settleCompletionFromResult } from "./dependencies.ts";

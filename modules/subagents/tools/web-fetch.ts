@@ -12,7 +12,7 @@
  * 旧 Node 上该变量是 no-op，fetch 直连（目标不可达时报清晰的 fetch 失败）。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { assertFetchableUrl, htmlToText, urlForMessage } from "./web-html.ts";
 
 export const BROWSER_USER_AGENT =

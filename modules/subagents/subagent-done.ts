@@ -14,7 +14,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { renameSync, writeFileSync } from "node:fs";
 
 /** sidecar 协议文件(.exit/.ask)原子写:tmp+rename,避免部分写入被父侧读走。 */

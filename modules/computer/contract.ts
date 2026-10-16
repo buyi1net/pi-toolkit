@@ -7,7 +7,7 @@
 // 类型与 schema 的关系：入参类型从 TypeBox schema 派生（Static<typeof ...>），
 // 模型面与函数面是同一份定义，照 subagents/params.ts 的既有写法。
 
-import { Type, type Static, type TSchema } from "@sinclair/typebox";
+import { Type, type Static, type TSchema } from "typebox";
 
 // ---------------------------------------------------------------------------
 // 引用与状态（规划书第 4 节、第 10 节）
@@ -778,8 +778,22 @@ const COMPUTER_ACTION_SCHEMA = Type.Object(
   { additionalProperties: false },
 );
 
-/** 动作条目入参：运行期由状态层按 COMPUTER_ACTION_CONTRACTS 校验必填字段与目标类型 */
-export type ComputerAction = Static<typeof COMPUTER_ACTION_SCHEMA>;
+/** 动作条目运行时类型：与上方 schema 的 JSON 形状一致；显式声明避免 TypeBox 1.x 对动态 union map 推导为 never。 */
+export interface ComputerAction {
+  action: ComputerActionName;
+  delivery?: ComputerActionDelivery;
+  ref?: string;
+  x?: number;
+  y?: number;
+  toX?: number;
+  toY?: number;
+  deltaX?: number;
+  deltaY?: number;
+  text?: string;
+  keys?: string[];
+  button?: ComputerMouseButton;
+  count?: ComputerClickCount;
+}
 
 /** run 的整体预算字段：护栏与 wait 同一套（50ms 防抖 - 1 小时），默认值不同（两分钟） */
 const RUN_TIMEOUT_FIELD = Type.Integer({

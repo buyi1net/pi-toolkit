@@ -6,7 +6,7 @@
 // 只做参数形状与结果呈现，不含判定逻辑。
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { describePeersReason, deliverPeersMessage, type PeersSendDeps, type PeersSendReport, type PeersTargetStatusSnapshot } from "./messaging.ts";
 
 export interface PeersSendToolDeps extends PeersSendDeps {

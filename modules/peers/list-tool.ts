@@ -9,7 +9,7 @@
 // （英文），不随界面语言变化；人类界面的工具显示名走三语键表（mod.ts 装配时解析）。
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { deriveSessionShortId } from "../../shared/short-id.ts";
 import type { PeersDiscoverySnapshot, PeersSnapshotError } from "./api.ts";
 import { peerDisplayStatus, type PeerDisplayStatus } from "./discovery.ts";

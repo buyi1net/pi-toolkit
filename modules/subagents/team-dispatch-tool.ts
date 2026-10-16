@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
 import { randomUUID } from "node:crypto";
 import { normalizeSubagentName } from "./names.ts";

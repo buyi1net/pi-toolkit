@@ -10,7 +10,7 @@
  * 时可能空手而归——此时返回明确的原因与状态码，不编造结果。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { assertFetchableUrl, decodeDuckRedirect, htmlToText } from "./web-html.ts";
 import { BROWSER_USER_AGENT, FETCH_TIMEOUT_MS } from "./web-fetch.ts";
 

@@ -23,6 +23,7 @@
 // 标记、旧询问标记）与旧实现逐条一致；validateResumeTarget 一并搬入本模块。
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Static } from "typebox";
 import { dirname, join, resolve, sep } from "node:path";
 import { existsSync, mkdirSync, statSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -90,7 +91,7 @@ export { supportedThinkingLevels, resolveModelThinkingSupport };
 import { getSubagentActivityFile, isTerminalDoneActivity, readSubagentActivityFile } from "./activity.ts";
 import { createStatusState } from "./status.ts";
 import { normalizeSubagentName, sanitizeSubagentFileName } from "./names.ts";
-import { normalizeCohortId, validateCohortId, type SubagentParams } from "./params.ts";
+import { normalizeCohortId, SubagentParams, validateCohortId } from "./params.ts";
 import { buildTeamRoundPrompt, findRosterMember, rosterPath, upsertRosterMember } from "./team.ts";
 import type { RuntimeRecord, RuntimeRegistry } from "./registry.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
@@ -163,7 +164,7 @@ export interface SpawnPlanOptions {
  * 因此启动时看到的是规范化后的 name / task。
  */
 export interface SpawnPlan {
-  params: typeof SubagentParams.static;
+  params: Static<typeof SubagentParams>;
   cohortId: string | null;
   agentDefs: AgentDefaults | null;
   effectiveCwd: string | null;
@@ -306,7 +307,7 @@ export interface SubagentStartupDeps {
 export interface SubagentStartup {
   /** fresh 第一阶段：校验入参与运行类别，产出启动计划（不启动进程）。 */
   planSpawn(
-    params: typeof SubagentParams.static,
+    params: Static<typeof SubagentParams>,
     ctx: SpawnContext,
     options?: SpawnPlanOptions,
   ): PlanOutcome<SpawnPlan>;
@@ -478,7 +479,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
   }
 
   function planSpawn(
-    params: typeof SubagentParams.static,
+    params: Static<typeof SubagentParams>,
     ctx: SpawnContext,
     planOptions?: SpawnPlanOptions,
   ): PlanOutcome<SpawnPlan> {
