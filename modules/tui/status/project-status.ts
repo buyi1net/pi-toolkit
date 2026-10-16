@@ -6,7 +6,7 @@
 
 import { posix, win32 } from "node:path";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { sanitizeSingleLine } from "../../../shared/sanitize.ts";
 import type {
 	ProjectStatusSegmentId,
@@ -251,6 +251,51 @@ function joinProjectStatusGroups(
 		: [{ text: groupSeparator, role: "separator" } as ProjectStatusPart, ...group]);
 }
 
+function formatNativeFooterProjectStatusLine(
+	snapshot: ProjectStatusSnapshot,
+	width: number,
+	home: string | undefined,
+	glyphs: IconGlyphs,
+	segments: readonly ProjectStatusSegmentId[],
+): string {
+	if (width <= 0) return "";
+	const order = [...new Set(segments)];
+	const pathText = order.includes("project") ? formatProjectPath(snapshot.cwd, home) : "";
+	const sessionText = order.includes("session") && snapshot.sessionShort ? `#${snapshot.sessionShort}` : "";
+	const statusParts: string[] = [];
+	if (order.includes("git")) {
+		statusParts.push(projectGitParts(snapshot, glyphs, true).map((part) => part.text).join(""));
+	}
+	if (order.includes("duration")) {
+		statusParts.push(projectDurationParts(snapshot, glyphs, true).map((part) => part.text).join(""));
+	}
+	if (order.includes("runtime")) {
+		statusParts.push(projectRuntimeParts(snapshot, glyphs, true).map((part) => part.text).join(""));
+	}
+	const statusText = statusParts.filter(Boolean).join(SEPARATOR);
+	const pathAndSession = [pathText, sessionText].filter(Boolean).join(SEPARATOR);
+	const full = [pathAndSession, statusText].filter(Boolean).join(SEPARATOR);
+	if (visibleWidth(full) <= width) return full;
+	if (sessionText) {
+		if (visibleWidth(pathAndSession) <= width) {
+			const statusBudget = width - visibleWidth(pathAndSession) - visibleWidth(SEPARATOR);
+			if (statusText && statusBudget >= MIN_GIT_WIDTH) {
+				return `${pathAndSession}${SEPARATOR}${truncateToWidth(statusText, statusBudget, "")}`;
+			}
+			return pathAndSession;
+		}
+		if (width < visibleWidth(sessionText)) {
+			return truncateToWidth(pathText || statusText, width, "…");
+		}
+		const pathBudget = width - visibleWidth(sessionText) - visibleWidth(SEPARATOR);
+		if (pathBudget > 0 && pathText) {
+			return `${truncateFromStart(pathText, pathBudget)}${SEPARATOR}${sessionText}`;
+		}
+		return truncateToWidth(sessionText, width, "…");
+	}
+	return truncateToWidth(full, width, "…");
+}
+
 export function layoutProjectStatusLine(
 	snapshot: ProjectStatusSnapshot,
 	width: number,
@@ -368,6 +413,9 @@ export function formatProjectStatusLine(
 	segments: readonly ProjectStatusSegmentId[] = DEFAULT_PROJECT_STATUS_SEGMENTS,
 	showIcons = true,
 ): string {
+	if (!showIcons) {
+		return formatNativeFooterProjectStatusLine(snapshot, width, home, glyphs, segments);
+	}
 	return layoutProjectStatusLine(snapshot, width, home, glyphs, segments, showIcons)
 		.map((part) => part.text)
 		.join("");
