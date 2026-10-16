@@ -53,6 +53,12 @@ function buildTurnTelemetrySegments(telemetry: TurnTelemetrySnapshot): StatusSeg
 		: `TPS:${formatTokensPerSecond(telemetry.tokensPerSecond)}tok/s`;
 	return [
 		{
+			id: "total",
+			text: `Total:${formatElapsed(telemetry.totalMs)}`,
+			priority: 0,
+			required: true,
+		},
+		{
 			id: "ttft",
 			text: `TTFT:${formatTelemetryDuration(telemetry.ttftMs)}`,
 			priority: 0,
@@ -60,7 +66,7 @@ function buildTurnTelemetrySegments(telemetry: TurnTelemetrySnapshot): StatusSeg
 		},
 		{ id: "tps", text: speed, priority: 0, required: true },
 		telemetry.inputTokens > 0
-			? { id: "input", text: `↑${formatTokenCount(telemetry.inputTokens)}`, priority: 2 }
+			? { id: "input", text: `↑${formatTokenCount(telemetry.inputTokens)}`, priority: 3 }
 			: undefined,
 		telemetry.outputTokens > 0
 			? { id: "output", text: `↓${formatTokenCount(telemetry.outputTokens)}`, priority: 2 }
@@ -68,17 +74,11 @@ function buildTurnTelemetrySegments(telemetry: TurnTelemetrySnapshot): StatusSeg
 		telemetry.cacheReadTokens !== null
 		&& telemetry.cacheWriteTokens !== null
 		&& (telemetry.cacheReadTokens > 0 || telemetry.cacheWriteTokens > 0)
-			? { id: "cache", text: `R${formatTokenCount(telemetry.cacheReadTokens)}`, priority: 3 }
+			? { id: "cache", text: `R${formatTokenCount(telemetry.cacheReadTokens)}`, priority: 4 }
 			: undefined,
 		telemetry.costUsd > 0
-			? { id: "cost", text: `Cost:${formatEstimatedCost(telemetry.costUsd)}`, priority: 0, required: true }
+			? { id: "cost", text: formatEstimatedCost(telemetry.costUsd), priority: 0, required: true }
 			: undefined,
-		{
-			id: "total",
-			text: `Total:${formatElapsed(telemetry.totalMs)}`,
-			priority: 0,
-			required: true,
-		},
 	].filter((segment): segment is StatusSegment => segment !== undefined);
 }
 
