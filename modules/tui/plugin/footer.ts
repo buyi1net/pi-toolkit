@@ -14,7 +14,7 @@ import {
 import { sanitizeStyledSingleLine } from "../../../shared/sanitize.ts";
 import { deriveSessionShortId } from "../../../shared/short-id.ts";
 import { resolveGlyphs, type IconGlyphs } from "../renderer/icons.ts";
-import { renderProjectStatusLine } from "../status/project-status.ts";
+import { formatProjectStatusLine } from "../status/project-status.ts";
 import { renderStatusLineSegments } from "../status/segment-layout.ts";
 import { buildEditorUsageSegments } from "../status/session-status.ts";
 import type {
@@ -103,7 +103,7 @@ export class ProjectStatusFooter implements Component {
 		// footerPrimary 决定（默认 路径 · 短码 · git）；取不到合法 id 时该段隐藏。
 		const sessionId = this.getSessionId();
 		const sessionShortId = sessionId ? deriveSessionShortId(sessionId) : null;
-		const projectLine = renderProjectStatusLine(
+		const projectLineText = formatProjectStatusLine(
 			{
 				// 快照未接线时仍保留占位，保证 Footer 结构从首帧起定型。
 				...(this.getProjectStatus?.() ?? { cwd: this.cwd, branch: null }),
@@ -112,14 +112,13 @@ export class ProjectStatusFooter implements Component {
 				sessionShort: sessionShortId,
 			},
 			contentWidth,
-			this.theme,
 			undefined,
 			glyphs,
 			settings.footerPrimary,
 			false,
 		);
-		// 第二行：会话遥测（in/out R/CH ctx），Footer 使用纯文字，保留实际上下文占用。
-		// 上下文未就绪时不展示零值 token 段，但保留 Context、auto、轮数与压缩次数。
+		const projectLine = projectLineText ? this.theme.fg("dim", projectLineText) : "";
+		// 第二行沿用 Pi 原生 Footer 排版，保留实际上下文占用和自动压缩标记。
 		const contextUsage = this.getContextUsage();
 		const usageSegments = buildEditorUsageSegments(
 			this.getSessionStatus(),
@@ -131,11 +130,16 @@ export class ProjectStatusFooter implements Component {
 				? settings.footerUsage.filter((segment) => segment === "context")
 				: settings.footerUsage,
 			this.getAutoCompactionEnabled() ?? false,
-			false,
+			true,
 		);
-		const renderedUsageSegments = renderStatusLineSegments(usageSegments, contentWidth, this.theme.fg("muted", " · "));
+		const nativeFooterSeparator = " ";
+		const renderedUsageSegments = renderStatusLineSegments(
+			usageSegments,
+			contentWidth,
+			nativeFooterSeparator,
+		);
 		const usageLine = usageSegments.length > 0
-			? truncateToWidth(renderedUsageSegments, contentWidth)
+			? this.theme.fg("dim", truncateToWidth(renderedUsageSegments, contentWidth))
 			: "";
 		const showExtensions = settings.footerExtra.includes("extensions");
 		const statuses = showExtensions

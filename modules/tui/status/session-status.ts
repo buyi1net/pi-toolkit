@@ -60,29 +60,47 @@ export function buildEditorUsageSegments(
 	glyphs: IconGlyphs,
 	segments: readonly EditorUsageSegmentId[],
 	autoCompactionEnabled = false,
-	showIcons = true,
+	nativeFooter = false,
 ): StatusSegment[] {
-	// 统计组一体：输入/输出与缓存读默认灰色，只有全局缓存命中率 CH 保留档位色
-	const inputLabel = showIcons ? glyphs.inputTokens : "in ";
-	const outputLabel = showIcons ? glyphs.outputTokens : "out ";
-	const statsParts = [
-		theme.fg("muted", `${inputLabel}${formatTokenCount(safeAmount(snapshot.inputTokens))}`),
-		theme.fg("muted", `${outputLabel}${formatTokenCount(safeAmount(snapshot.outputTokens))}`),
-		theme.fg("muted", `R${safeAmount(snapshot.cacheReadTokens) > 0 ? formatTokenCount(snapshot.cacheReadTokens) : "0k"}`),
-	];
-	const cacheHit = theme.fg(
-		cacheHitStatusColor(snapshot.cacheHitPercent),
-		`CH${formatCacheHitPercent(snapshot.cacheHitPercent)}%`,
-	);
-	const statsSeparator = theme.fg("muted", " · ");
-	const statsText = `${statsParts.join(" ")}${statsSeparator}${cacheHit}`;
-	const statsCompact = `${statsParts[2]!}${statsSeparator}${cacheHit}`;
+	const inputTokens = safeAmount(snapshot.inputTokens);
+	const outputTokens = safeAmount(snapshot.outputTokens);
+	const cacheReadTokens = safeAmount(snapshot.cacheReadTokens);
+	const cacheWriteTokens = safeAmount(snapshot.cacheWriteTokens);
+	const cacheHitText = snapshot.cacheHitPercent !== undefined && (cacheReadTokens > 0 || cacheWriteTokens > 0)
+		? `CH${formatCacheHitPercent(snapshot.cacheHitPercent)}%`
+		: "";
+	const statsParts = nativeFooter
+		? [
+			inputTokens > 0 ? `↑${formatTokenCount(inputTokens)}` : "",
+			outputTokens > 0 ? `↓${formatTokenCount(outputTokens)}` : "",
+			cacheReadTokens > 0 ? `R${formatTokenCount(cacheReadTokens)}` : "",
+			cacheWriteTokens > 0 ? `W${formatTokenCount(cacheWriteTokens)}` : "",
+			cacheHitText,
+		].filter(Boolean)
+		: [
+			theme.fg("muted", `${glyphs.inputTokens}${formatTokenCount(inputTokens)}`),
+			theme.fg("muted", `${glyphs.outputTokens}${formatTokenCount(outputTokens)}`),
+			theme.fg("muted", `R${cacheReadTokens > 0 ? formatTokenCount(cacheReadTokens) : "0k"}`),
+		];
+	const cacheHit = nativeFooter
+		? ""
+		: theme.fg(
+			cacheHitStatusColor(snapshot.cacheHitPercent),
+			`CH${formatCacheHitPercent(snapshot.cacheHitPercent)}%`,
+		);
+	const statsSeparator = nativeFooter ? "" : theme.fg("muted", " · ");
+	const statsText = nativeFooter
+		? statsParts.join(" ")
+		: `${statsParts.join(" ")}${statsSeparator}${cacheHit}`;
+	const statsCompact = nativeFooter
+		? statsText
+		: `${statsParts[2]!}${statsSeparator}${cacheHit}`;
 	const contextWindow = contextUsage?.contextWindow ?? contextWindowFallback;
 	const contextTokens = contextUsage?.tokens ?? 0;
 	const contextValue = contextWindow
 		? `${formatContextUsageTokenCount(contextTokens)}/${formatContextTokenCount(contextWindow)}`
 		: `${formatContextUsageTokenCount(contextTokens)}/?`;
-	const contextText = `${showIcons ? `${glyphs.context} ` : ""}${contextValue}`;
+	const contextText = `${nativeFooter ? "" : `${glyphs.context} `}${contextValue}${nativeFooter && autoCompactionEnabled ? " (auto)" : ""}`;
 	const stats = {
 		id: "tokens",
 		text: statsText,
@@ -100,23 +118,25 @@ export function buildEditorUsageSegments(
 			required: true,
 		},
 	};
-	const showConversationCounts = segments.includes("tokens")
+	const showConversationCounts = !nativeFooter && (segments.includes("tokens")
 		|| segments.includes("cache")
 		|| snapshot.turns > 0
-		|| snapshot.compactions > 0;
+		|| snapshot.compactions > 0);
 	const turnStatus: StatusSegment = {
 		id: "turns",
-		text: snapshot.turns > 0
-			? theme.fg(turnStatusColor(snapshot.turns), `${showIcons ? `${glyphs.turns} ` : ""}T${snapshot.turns}`)
-			: "",
+		text: nativeFooter || snapshot.turns <= 0
+			? ""
+			: theme.fg(turnStatusColor(snapshot.turns), `${glyphs.turns} T${snapshot.turns}`),
 		priority: 6,
 	};
 	const compactionStatus: StatusSegment = {
 		id: "compactions",
-		text: theme.fg(
-			compactionStatusColor(snapshot.compactions),
-			`${showIcons ? `${glyphs.compaction} ` : ""}${autoCompactionEnabled ? "Auto" : "Off"}${snapshot.compactions > 0 ? `（C${snapshot.compactions}）` : ""}`,
-		),
+		text: nativeFooter
+			? ""
+			: theme.fg(
+				compactionStatusColor(snapshot.compactions),
+				`${glyphs.compaction} ${autoCompactionEnabled ? "Auto" : "Off"}${snapshot.compactions > 0 ? `（C${snapshot.compactions}）` : ""}`,
+			),
 		priority: 5,
 	};
 	const seen = new Set<string>();

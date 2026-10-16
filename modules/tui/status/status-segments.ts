@@ -32,10 +32,9 @@ export function cacheHitStatusColor(percent: number | null | undefined): ThemeCo
 
 export function contextUsageStatusColor(percent: number | null | undefined): ThemeColor {
 	if (percent === null || percent === undefined || !Number.isFinite(percent) || percent <= 0) return "muted";
-	if (percent <= 10) return "success";
-	if (percent <= 30) return "accent";
-	if (percent <= 60) return "warning";
-	return "error";
+	if (percent > 90) return "error";
+	if (percent > 70) return "warning";
+	return "muted";
 }
 
 export function turnStatusColor(turns: number): ThemeColor {

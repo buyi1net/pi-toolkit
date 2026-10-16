@@ -141,10 +141,10 @@ function projectGitParts(
 	}
 
 	const parts: ProjectStatusPart[] = [
-		{ text: showIcons ? `${glyphs.gitBranch} ${branch}` : branch, role: "branch" },
+		{ text: showIcons ? `${glyphs.gitBranch} ${branch}` : `(${branch})`, role: "branch" },
 	];
-	if (changed > 0) parts.push({ text: showIcons ? ` ${glyphs.changed}${changed}` : `+${changed}`, role: "changed" });
-	if (untracked > 0) parts.push({ text: showIcons ? ` ${glyphs.untracked}${untracked}` : `~${untracked}`, role: "untracked" });
+	if (changed > 0) parts.push({ text: showIcons ? ` ${glyphs.changed}${changed}` : ` +${changed}`, role: "changed" });
+	if (untracked > 0) parts.push({ text: showIcons ? ` ${glyphs.untracked}${untracked}` : ` ~${untracked}`, role: "untracked" });
 	if ((snapshot.ahead ?? 0) > 0) {
 		parts.push({ text: showIcons ? ` ${glyphs.ahead}${snapshot.ahead}` : ` ahead ${snapshot.ahead}`, role: "ahead" });
 	}
@@ -235,6 +235,7 @@ function joinProjectStatusGroups(
 	duration: ProjectStatusPart[],
 	runtime: ProjectStatusPart[],
 	order: readonly ProjectStatusSegmentId[],
+	groupSeparator = SEPARATOR,
 ): ProjectStatusPart[] {
 	const groups = order
 		.map((segment) => {
@@ -247,7 +248,7 @@ function joinProjectStatusGroups(
 	if (groups.length === 0) return [];
 	return groups.flatMap((group, index) => index === 0
 		? group
-		: [{ text: SEPARATOR, role: "separator" } as ProjectStatusPart, ...group]);
+		: [{ text: groupSeparator, role: "separator" } as ProjectStatusPart, ...group]);
 }
 
 export function layoutProjectStatusLine(
@@ -291,12 +292,13 @@ export function layoutProjectStatusLine(
 			? [{ ...fullRuntime[0]!, text: truncateFromEnd(fullRuntime[0]!.text, width) }]
 			: [];
 	}
-	const allGroups = joinProjectStatusGroups(fullPath, fullGit, fullDuration, fullRuntime, order);
+	const groupSeparator = showIcons ? SEPARATOR : " ";
+	const allGroups = joinProjectStatusGroups(fullPath, fullGit, fullDuration, fullRuntime, order, groupSeparator);
 	if (partsWidth(allGroups) <= width) return allGroups;
 
 	if (fullDuration.length > 0) {
 		const durationWidth = partsWidth(fullDuration);
-		const baseWidth = width - durationWidth - visibleWidth(SEPARATOR);
+		const baseWidth = width - durationWidth - visibleWidth(groupSeparator);
 		if (baseWidth >= MIN_SEGMENT_WIDTH) {
 			const baseOrder = order.filter(
 				(segment): segment is ProjectStatusSegmentId =>
@@ -311,7 +313,7 @@ export function layoutProjectStatusLine(
 				showIcons,
 			);
 			if (base.length > 0) {
-				return [...base, { text: SEPARATOR, role: "separator" }, ...fullDuration];
+				return [...base, { text: groupSeparator, role: "separator" }, ...fullDuration];
 			}
 		}
 	}
@@ -323,11 +325,11 @@ export function layoutProjectStatusLine(
 	if (!showPath) {
 		if (sessionWidth === 0) return fitGitParts(snapshot, width, glyphs, showIcons);
 		// 无项目段：短码原样优先，git 只用剩余宽度，放不下整段丢
-		const gitBudget = width - sessionWidth - visibleWidth(SEPARATOR);
+		const gitBudget = width - sessionWidth - visibleWidth(groupSeparator);
 		if (fullGit.length > 0 && gitBudget >= MIN_GIT_WIDTH) {
 			return [
 				...sessionParts,
-				{ text: SEPARATOR, role: "separator" },
+				{ text: groupSeparator, role: "separator" },
 				...fitGitParts(snapshot, gitBudget, glyphs, showIcons),
 			];
 		}
@@ -338,21 +340,22 @@ export function layoutProjectStatusLine(
 		return fitPathSessionParts(path, sessionParts, width, glyphs, showIcons);
 	}
 
-	const fullWidth = partsWidth(fullPath) + visibleWidth(SEPARATOR) + partsWidth(fullGit);
+	const fullWidth = partsWidth(fullPath) + visibleWidth(groupSeparator) + partsWidth(fullGit);
 	if (fullWidth <= width) {
-		return joinProjectStatusGroups(fullPath, fullGit, [], [], reducedOrder);
+		return joinProjectStatusGroups(fullPath, fullGit, [], [], reducedOrder, groupSeparator);
 	}
 	// 超宽降级（工单 48 修正）：git 只用「路径 + 短码」之外的剩余宽度并在不足时整段丢，
 	// 短码尽量保到最后一档，路径随后才压缩与截断。
-	const gitBudget = width - partsWidth(fullPath) - visibleWidth(SEPARATOR);
+	const gitBudget = width - partsWidth(fullPath) - visibleWidth(groupSeparator);
 	if (gitBudget >= MIN_GIT_WIDTH) {
-		return joinProjectStatusGroups(
-			fullPath,
-			fitGitParts(snapshot, gitBudget, glyphs, showIcons),
-			[],
-			[],
-			reducedOrder,
-		);
+			return joinProjectStatusGroups(
+				fullPath,
+				fitGitParts(snapshot, gitBudget, glyphs, showIcons),
+				[],
+				[],
+				reducedOrder,
+				groupSeparator,
+			);
 	}
 	return fitPathSessionParts(path, sessionParts, width, glyphs, showIcons);
 }
