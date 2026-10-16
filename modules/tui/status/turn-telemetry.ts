@@ -3,7 +3,7 @@
 // 数据半（采集器、条目 schema、解析函数）在 modules/status/：渲染器注册与
 // 遥测行排版留在 tui，条目类型与解析从 status 模块的静态导出面取。
 
-import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import {
 	TURN_DURATION_ENTRY_TYPE,
@@ -21,10 +21,10 @@ export function registerTurnTelemetryRenderers(
 ): void {
 	pi.registerEntryRenderer?.<PersistedTurnTelemetry>(
 		TURN_TELEMETRY_ENTRY_TYPE,
-		(entry, _options, theme) => {
+		(entry) => {
 			const telemetry = readTurnTelemetryEntryData(entry.data);
 			if (!telemetry) return undefined;
-			return new Text(formatTurnTelemetry(telemetry, theme), 1, 0);
+			return new Text(formatTurnTelemetry(telemetry), 1, 0);
 		},
 	);
 	pi.registerEntryRenderer?.<PersistedTurnDuration>(TURN_DURATION_ENTRY_TYPE, () => undefined);
@@ -32,13 +32,6 @@ export function registerTurnTelemetryRenderers(
 
 function formatTelemetryDuration(ms: number): string {
 	return ms < 60_000 ? `${(Math.max(0, ms) / 1_000).toFixed(1)}s` : formatElapsed(ms);
-}
-
-function getTtftColor(ttftMs: number): "success" | "accent" | "warning" | "error" {
-	if (ttftMs < 3_000) return "success";
-	if (ttftMs < 8_000) return "accent";
-	if (ttftMs < 15_000) return "warning";
-	return "error";
 }
 
 function formatTokensPerSecond(value: number): string {
@@ -55,35 +48,28 @@ function formatEstimatedCost(costUsd: number): string {
 
 export function formatTurnTelemetry(
 	telemetry: TurnTelemetrySnapshot,
-	theme: Theme,
 ): string {
 	const parts: string[] = [];
 	const speed = telemetry.tokensPerSecond === null
 		? "—"
 		: `${formatTokensPerSecond(telemetry.tokensPerSecond)} tok/s`;
-	parts.push(theme.fg(
-		getTtftColor(telemetry.ttftMs),
-		`TTFT ${formatTelemetryDuration(telemetry.ttftMs)}`,
-	));
-	parts.push(theme.fg(
-		telemetry.tokensPerSecond === null ? "muted" : "accent",
-		speed,
-	));
+	parts.push(`TTFT ${formatTelemetryDuration(telemetry.ttftMs)}`);
+	parts.push(speed);
 	if (telemetry.inputTokens > 0) {
-		parts.push(theme.fg("text", `↑${formatTokenCount(telemetry.inputTokens)}`));
+		parts.push(`↑${formatTokenCount(telemetry.inputTokens)}`);
 	}
 	if (telemetry.outputTokens > 0) {
-		parts.push(theme.fg("success", `↓${formatTokenCount(telemetry.outputTokens)}`));
+		parts.push(`↓${formatTokenCount(telemetry.outputTokens)}`);
 	}
 	if (
 		telemetry.cacheReadTokens !== null
 		&& telemetry.cacheWriteTokens !== null
 		&& (telemetry.cacheReadTokens > 0 || telemetry.cacheWriteTokens > 0)
 	) {
-		parts.push(theme.fg("muted", `R${formatTokenCount(telemetry.cacheReadTokens)}`));
+		parts.push(`R${formatTokenCount(telemetry.cacheReadTokens)}`);
 	}
 	if (telemetry.costUsd > 0) {
-		parts.push(theme.fg("warning", `Cost ${formatEstimatedCost(telemetry.costUsd)}`));
+		parts.push(`Cost ${formatEstimatedCost(telemetry.costUsd)}`);
 	}
 
 	return parts.join(" ");
