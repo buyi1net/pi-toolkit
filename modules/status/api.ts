@@ -5,16 +5,16 @@
 // 消费方（tui）经服务注册表的 `status.*` 句柄取快照与触发刷新（工单 07 定案 2）。
 //
 // 句柄契约：`{ snapshot(): T | undefined; refresh(): Promise<void> }`。
-// 唯一补充：`status.workspace` 额外带 `settings()` —— 段位配置（preset/segments）
-// 按定案 4 归本模块配置节后，渲染侧（tui）必须能读到解析结果，见接口注释。
+// 唯一补充：`status.workspace` 额外带 `settings()`，`status.telemetry` 额外带
+// `liveSnapshot()` 读取当前流式消息的速率；二者都只读，不承担变更通知。
 //
 // 工单 18（决策 9）：快照对象上带变更序号（内容变化时递增），由本模块内部维护，
-// 供 tui 心跳做重绘检测；句柄方法集不变，仍只有 snapshot/refresh。
+// 供 tui 心跳做重绘检测；默认句柄方法集保持 snapshot/refresh，telemetry 的 liveSnapshot 只读当前流式速率。
 
 import type { ProjectStatusSnapshot } from "./project-status.ts";
 import type { ResolvedStatusSettings } from "./status-config.ts";
 import type { SessionStatusSnapshot } from "./session-status.ts";
-import type { TurnTelemetrySnapshot } from "./turn-telemetry.ts";
+import type { TurnTelemetryLiveSnapshot, TurnTelemetrySnapshot } from "./turn-telemetry.ts";
 import type { TurnTimerSnapshot } from "./turn-timer.ts";
 import type { AutoCompactionSnapshot } from "./auto-compaction.ts";
 
@@ -60,7 +60,7 @@ export type { EditorUsageSegmentId, SessionStatusSnapshot, SessionStatusSegmentI
 /** 回合计时 */
 export type { TurnTimerSnapshot, TurnTimerState } from "./turn-timer.ts";
 /** 回合遥测：快照、条目数据与落盘条目类型 */
-export type { PersistedTurnDuration, PersistedTurnTelemetry, TurnTelemetrySnapshot } from "./turn-telemetry.ts";
+export type { PersistedTurnDuration, PersistedTurnTelemetry, TurnTelemetryLiveSnapshot, TurnTelemetrySnapshot } from "./turn-telemetry.ts";
 /** 段位设置（status-config.ts 的语言） */
 export type {
 	EditorLeftSegmentId,
@@ -125,10 +125,11 @@ export interface StatusTimerService {
 	refresh(): Promise<void>;
 }
 
-/** `status.telemetry` 句柄：最近一次落盘的回合遥测（刷新是空操作，状态由事件驱动） */
+/** `status.telemetry` 句柄：最近一次落盘遥测与当前流式速率 */
 export interface StatusTelemetryService {
 	readonly id: "status";
 	snapshot(): TurnTelemetrySnapshot | undefined;
+	liveSnapshot(): TurnTelemetryLiveSnapshot | undefined;
 	refresh(): Promise<void>;
 }
 

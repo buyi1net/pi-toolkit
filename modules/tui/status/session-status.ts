@@ -1,4 +1,4 @@
-// tui 渲染半：会话遥测行（↑↓ R CH / ctx）的段位构造与渲染
+// tui 渲染半：会话遥测行（tokens / cache / context）的段位构造与渲染
 // （工单 11 从原 status/session-status.ts 切出）。
 //
 // 数据半（collectSessionStatus 与会话快照类型）已迁 modules/status/：本文件只从
@@ -60,11 +60,14 @@ export function buildEditorUsageSegments(
 	glyphs: IconGlyphs,
 	segments: readonly EditorUsageSegmentId[],
 	autoCompactionEnabled = false,
+	showIcons = true,
 ): StatusSegment[] {
-	// 统计组一体：↑↓ R 默认灰色，只有全局缓存命中率 CH 保留档位色
+	// 统计组一体：输入/输出与缓存读默认灰色，只有全局缓存命中率 CH 保留档位色
+	const inputLabel = showIcons ? glyphs.inputTokens : "in ";
+	const outputLabel = showIcons ? glyphs.outputTokens : "out ";
 	const statsParts = [
-		theme.fg("muted", `${glyphs.inputTokens}${formatTokenCount(safeAmount(snapshot.inputTokens))}`),
-		theme.fg("muted", `${glyphs.outputTokens}${formatTokenCount(safeAmount(snapshot.outputTokens))}`),
+		theme.fg("muted", `${inputLabel}${formatTokenCount(safeAmount(snapshot.inputTokens))}`),
+		theme.fg("muted", `${outputLabel}${formatTokenCount(safeAmount(snapshot.outputTokens))}`),
 		theme.fg("muted", `R${safeAmount(snapshot.cacheReadTokens) > 0 ? formatTokenCount(snapshot.cacheReadTokens) : "0k"}`),
 	];
 	const cacheHit = theme.fg(
@@ -79,7 +82,7 @@ export function buildEditorUsageSegments(
 	const contextValue = contextWindow
 		? `${formatContextUsageTokenCount(contextTokens)}/${formatContextTokenCount(contextWindow)}`
 		: `${formatContextUsageTokenCount(contextTokens)}/?`;
-	const contextText = `${glyphs.context} ${contextValue}`;
+	const contextText = `${showIcons ? `${glyphs.context} ` : ""}${contextValue}`;
 	const stats = {
 		id: "tokens",
 		text: statsText,
@@ -103,14 +106,16 @@ export function buildEditorUsageSegments(
 		|| snapshot.compactions > 0;
 	const turnStatus: StatusSegment = {
 		id: "turns",
-		text: snapshot.turns > 0 ? theme.fg(turnStatusColor(snapshot.turns), `${glyphs.turns} T${snapshot.turns}`) : "",
+		text: snapshot.turns > 0
+			? theme.fg(turnStatusColor(snapshot.turns), `${showIcons ? `${glyphs.turns} ` : ""}T${snapshot.turns}`)
+			: "",
 		priority: 6,
 	};
 	const compactionStatus: StatusSegment = {
 		id: "compactions",
 		text: theme.fg(
 			compactionStatusColor(snapshot.compactions),
-			`${glyphs.compaction} ${autoCompactionEnabled ? "Auto" : "Off"}${snapshot.compactions > 0 ? `（C${snapshot.compactions}）` : ""}`,
+			`${showIcons ? `${glyphs.compaction} ` : ""}${autoCompactionEnabled ? "Auto" : "Off"}${snapshot.compactions > 0 ? `（C${snapshot.compactions}）` : ""}`,
 		),
 		priority: 5,
 	};

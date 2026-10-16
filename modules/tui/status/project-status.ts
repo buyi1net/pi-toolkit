@@ -98,10 +98,10 @@ function truncateFromEnd(text: string, width: number): string {
 	return `${prefix}…`;
 }
 
-function fitProjectPath(path: string, width: number, glyphs: IconGlyphs): string {
-	const prefix = formatLeadingIcon(glyphs.project);
+function fitProjectPath(path: string, width: number, glyphs: IconGlyphs, showIcons: boolean): string {
+	const prefix = showIcons ? formatLeadingIcon(glyphs.project) : "";
 	const prefixWidth = visibleWidth(prefix);
-	if (width <= prefixWidth) return truncateFromEnd(glyphs.project, width);
+	if (width <= prefixWidth) return truncateFromEnd(showIcons ? glyphs.project : path, width);
 	return `${prefix}${truncateFromStart(path, width - prefixWidth)}`;
 }
 
@@ -120,6 +120,7 @@ function branchName(snapshot: ProjectStatusSnapshot): string | null {
 function projectGitParts(
 	snapshot: ProjectStatusSnapshot,
 	glyphs: IconGlyphs,
+	showIcons: boolean,
 ): ProjectStatusPart[] {
 	const branch = branchName(snapshot);
 	// Git 未就绪时保留弱化占位：Footer 结构首帧定型，查询完成后原地替换，
@@ -127,7 +128,7 @@ function projectGitParts(
 	// 仅在控制器处于查询流程（loading，含首轮）时占位；未启用 Git 段不渲染。
 	if (!branch) {
 		if (snapshot.refreshState === "loading" || snapshot.refreshState === "idle") {
-			return [{ text: `${glyphs.gitBranch} …`, role: "branch-pending" }];
+			return [{ text: showIcons ? `${glyphs.gitBranch} …` : "…", role: "branch-pending" }];
 		}
 		return [];
 	}
@@ -140,15 +141,15 @@ function projectGitParts(
 	}
 
 	const parts: ProjectStatusPart[] = [
-		{ text: `${glyphs.gitBranch} ${branch}`, role: "branch" },
+		{ text: showIcons ? `${glyphs.gitBranch} ${branch}` : branch, role: "branch" },
 	];
-	if (changed > 0) parts.push({ text: ` ${glyphs.changed}${changed}`, role: "changed" });
-	if (untracked > 0) parts.push({ text: ` ${glyphs.untracked}${untracked}`, role: "untracked" });
+	if (changed > 0) parts.push({ text: showIcons ? ` ${glyphs.changed}${changed}` : `+${changed}`, role: "changed" });
+	if (untracked > 0) parts.push({ text: showIcons ? ` ${glyphs.untracked}${untracked}` : `~${untracked}`, role: "untracked" });
 	if ((snapshot.ahead ?? 0) > 0) {
-		parts.push({ text: ` ${glyphs.ahead}${snapshot.ahead}`, role: "ahead" });
+		parts.push({ text: showIcons ? ` ${glyphs.ahead}${snapshot.ahead}` : ` ahead ${snapshot.ahead}`, role: "ahead" });
 	}
 	if ((snapshot.behind ?? 0) > 0) {
-		parts.push({ text: ` ${glyphs.behind}${snapshot.behind}`, role: "behind" });
+		parts.push({ text: showIcons ? ` ${glyphs.behind}${snapshot.behind}` : ` behind ${snapshot.behind}`, role: "behind" });
 	}
 	return parts;
 }
@@ -156,13 +157,16 @@ function projectGitParts(
 function projectRuntimeParts(
 	snapshot: ProjectStatusSnapshot,
 	glyphs: IconGlyphs,
+	showIcons: boolean,
 ): ProjectStatusPart[] {
 	if (!snapshot.runtime) return [];
 	const name = sanitizeSingleLine(snapshot.runtime.name);
 	if (!name) return [];
 	const version = sanitizeSingleLine(snapshot.runtime.version ?? "");
 	return [{
-		text: `${glyphs.runtime} ${name}${version ? ` ${version}` : ""}`,
+		text: showIcons
+			? `${glyphs.runtime} ${name}${version ? ` ${version}` : ""}`
+			: `${name}${version ? ` ${version}` : ""}`,
 		role: "runtime",
 	}];
 }
@@ -170,10 +174,11 @@ function projectRuntimeParts(
 function projectDurationParts(
 	snapshot: ProjectStatusSnapshot,
 	glyphs: IconGlyphs,
+	showIcons: boolean,
 ): ProjectStatusPart[] {
 	if (!snapshot.duration) return [];
 	return [{
-		text: `${glyphs.duration} ${formatElapsed(snapshot.duration.elapsedMs)}`,
+		text: showIcons ? `${glyphs.duration} ${formatElapsed(snapshot.duration.elapsedMs)}` : formatElapsed(snapshot.duration.elapsedMs),
 		role: "duration",
 	}];
 }
@@ -182,9 +187,10 @@ function fitGitParts(
 	snapshot: ProjectStatusSnapshot,
 	width: number,
 	glyphs: IconGlyphs,
+	showIcons: boolean,
 ): ProjectStatusPart[] {
 	if (width <= 0) return [];
-	const full = projectGitParts(snapshot, glyphs);
+	const full = projectGitParts(snapshot, glyphs, showIcons);
 	if (partsWidth(full) <= width) return full;
 
 	const branch = full[0];
@@ -192,7 +198,7 @@ function fitGitParts(
 	const suffix = full.slice(1);
 	while (
 		suffix.length > 0 &&
-		visibleWidth(`${glyphs.gitBranch} …`) + partsWidth(suffix) > width
+		visibleWidth(showIcons ? `${glyphs.gitBranch} …` : "…") + partsWidth(suffix) > width
 	) {
 		suffix.pop();
 	}
@@ -207,6 +213,7 @@ function fitPathSessionParts(
 	sessionParts: readonly ProjectStatusPart[],
 	width: number,
 	glyphs: IconGlyphs,
+	showIcons: boolean,
 ): ProjectStatusPart[] {
 	if (width <= 0) return [];
 	const sessionWidth = partsWidth(sessionParts);
@@ -214,12 +221,12 @@ function fitPathSessionParts(
 	if (sessionWidth <= width) {
 		const pathWidth = width - sessionWidth;
 		if (pathWidth > 0) {
-			return [{ text: fitProjectPath(path, pathWidth, glyphs), role: "path" }, ...sessionParts];
+			return [{ text: fitProjectPath(path, pathWidth, glyphs, showIcons), role: "path" }, ...sessionParts];
 		}
 		return [...sessionOnly];
 	}
 	if (partsWidth(sessionOnly) <= width) return [...sessionOnly];
-	return [{ text: fitProjectPath(path, width, glyphs), role: "path" }];
+	return [{ text: fitProjectPath(path, width, glyphs, showIcons), role: "path" }];
 }
 
 function joinProjectStatusGroups(
@@ -249,6 +256,7 @@ export function layoutProjectStatusLine(
 	home = process.env.HOME ?? process.env.USERPROFILE,
 	glyphs: IconGlyphs = DEFAULT_GLYPHS,
 	segments: readonly ProjectStatusSegmentId[] = DEFAULT_PROJECT_STATUS_SEGMENTS,
+	showIcons = true,
 ): ProjectStatusPart[] {
 	if (width <= 0) return [];
 	const order = [...new Set(segments)].filter(
@@ -266,7 +274,7 @@ export function layoutProjectStatusLine(
 	const showRuntime = order.includes("runtime");
 	if (!showPath && !showSession && !showGit && !showDuration && !showRuntime) return [];
 	const path = formatProjectPath(snapshot.cwd, home);
-	const projectPath = `${formatLeadingIcon(glyphs.project)}${path}`;
+	const projectPath = showIcons ? `${formatLeadingIcon(glyphs.project)}${path}` : path;
 	const fullPath: ProjectStatusPart[] = showPath ? [{ text: projectPath, role: "path" }] : [];
 	// 会话短码与路径同组（工单 48）：组内自带分隔符，随路径一起参与压缩与降级；
 	// 取不到合法短码时整段隐藏
@@ -275,9 +283,9 @@ export function layoutProjectStatusLine(
 		if (fullPath.length > 0) fullPath.push({ text: SEPARATOR, role: "separator" });
 		fullPath.push({ text: `#${snapshot.sessionShort}`, role: "session" });
 	}
-	const fullGit = showGit ? projectGitParts(snapshot, glyphs) : [];
-	const fullDuration = showDuration ? projectDurationParts(snapshot, glyphs) : [];
-	const fullRuntime = showRuntime ? projectRuntimeParts(snapshot, glyphs) : [];
+	const fullGit = showGit ? projectGitParts(snapshot, glyphs, showIcons) : [];
+	const fullDuration = showDuration ? projectDurationParts(snapshot, glyphs, showIcons) : [];
+	const fullRuntime = showRuntime ? projectRuntimeParts(snapshot, glyphs, showIcons) : [];
 	if (fullPath.length === 0 && fullGit.length === 0 && fullDuration.length === 0) {
 		return fullRuntime.length > 0
 			? [{ ...fullRuntime[0]!, text: truncateFromEnd(fullRuntime[0]!.text, width) }]
@@ -300,6 +308,7 @@ export function layoutProjectStatusLine(
 				home,
 				glyphs,
 				baseOrder,
+				showIcons,
 			);
 			if (base.length > 0) {
 				return [...base, { text: SEPARATOR, role: "separator" }, ...fullDuration];
@@ -312,21 +321,21 @@ export function layoutProjectStatusLine(
 	const sessionParts = showPath ? fullPath.slice(1) : fullPath;
 	const sessionWidth = partsWidth(sessionParts);
 	if (!showPath) {
-		if (sessionWidth === 0) return fitGitParts(snapshot, width, glyphs);
+		if (sessionWidth === 0) return fitGitParts(snapshot, width, glyphs, showIcons);
 		// 无项目段：短码原样优先，git 只用剩余宽度，放不下整段丢
 		const gitBudget = width - sessionWidth - visibleWidth(SEPARATOR);
 		if (fullGit.length > 0 && gitBudget >= MIN_GIT_WIDTH) {
 			return [
 				...sessionParts,
 				{ text: SEPARATOR, role: "separator" },
-				...fitGitParts(snapshot, gitBudget, glyphs),
+				...fitGitParts(snapshot, gitBudget, glyphs, showIcons),
 			];
 		}
 		return sessionWidth <= width ? [...sessionParts] : [];
 	}
 	if (fullGit.length === 0) {
 		// 无 git 段：路径按剩余宽度拟合，会话短码原样保留（工单 48）
-		return fitPathSessionParts(path, sessionParts, width, glyphs);
+		return fitPathSessionParts(path, sessionParts, width, glyphs, showIcons);
 	}
 
 	const fullWidth = partsWidth(fullPath) + visibleWidth(SEPARATOR) + partsWidth(fullGit);
@@ -339,13 +348,13 @@ export function layoutProjectStatusLine(
 	if (gitBudget >= MIN_GIT_WIDTH) {
 		return joinProjectStatusGroups(
 			fullPath,
-			fitGitParts(snapshot, gitBudget, glyphs),
+			fitGitParts(snapshot, gitBudget, glyphs, showIcons),
 			[],
 			[],
 			reducedOrder,
 		);
 	}
-	return fitPathSessionParts(path, sessionParts, width, glyphs);
+	return fitPathSessionParts(path, sessionParts, width, glyphs, showIcons);
 }
 
 export function formatProjectStatusLine(
@@ -354,8 +363,9 @@ export function formatProjectStatusLine(
 	home = process.env.HOME ?? process.env.USERPROFILE,
 	glyphs: IconGlyphs = DEFAULT_GLYPHS,
 	segments: readonly ProjectStatusSegmentId[] = DEFAULT_PROJECT_STATUS_SEGMENTS,
+	showIcons = true,
 ): string {
-	return layoutProjectStatusLine(snapshot, width, home, glyphs, segments)
+	return layoutProjectStatusLine(snapshot, width, home, glyphs, segments, showIcons)
 		.map((part) => part.text)
 		.join("");
 }
@@ -367,10 +377,11 @@ export function renderProjectStatusLine(
 	home = process.env.HOME ?? process.env.USERPROFILE,
 	glyphs: IconGlyphs = DEFAULT_GLYPHS,
 	segments: readonly ProjectStatusSegmentId[] = DEFAULT_PROJECT_STATUS_SEGMENTS,
+	showIcons = true,
 ): string {
-	return layoutProjectStatusLine(snapshot, width, home, glyphs, segments)
+	return layoutProjectStatusLine(snapshot, width, home, glyphs, segments, showIcons)
 		.map((part) => {
-			if (part.role === "path" && part.text.startsWith(glyphs.project)) {
+			if (showIcons && part.role === "path" && part.text.startsWith(glyphs.project)) {
 				return `${theme.fg("accent", glyphs.project)}${theme.fg(
 					ROLE_COLORS.path,
 					part.text.slice(glyphs.project.length),

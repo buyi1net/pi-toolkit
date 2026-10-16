@@ -396,7 +396,16 @@ function cloneCapture(capture: ComputerCaptureRecord): ComputerCaptureRecord {
     image: { ...capture.image },
     region: { ...capture.region },
     ...(capture.display !== undefined ? { display: { ...capture.display } } : {}),
-    ...(capture.window !== undefined ? { window: { ...capture.window } } : {}),
+    ...(capture.displays !== undefined ? { displays: capture.displays.map((display) => ({ ...display })) } : {}),
+    ...(capture.window !== undefined
+      ? {
+          window: {
+            ...capture.window,
+            ...(capture.window.startIdentity !== undefined ? { startIdentity: { ...capture.window.startIdentity } } : {}),
+            ...(capture.window.bounds !== undefined ? { bounds: { ...capture.window.bounds } } : {}),
+          },
+        }
+      : {}),
     ...(capture.source !== undefined ? { source: capture.source } : {}),
     ...(capture.mayBeObscured !== undefined ? { mayBeObscured: capture.mayBeObscured } : {}),
   };

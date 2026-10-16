@@ -164,7 +164,7 @@ export class PiUiEditor extends CustomEditor {
 		layout: EditorLayoutSource = {},
 		hooks: PiUiEditorHooks = {},
 	) {
-		super(tui, theme, keybindings);
+		super(tui, theme, keybindings, { embedWorkingStatus: true });
 		this.ctx = ctx;
 		this.getGlyphs = appearance.getGlyphs ?? (() => resolveGlyphs("unicode"));
 		this.getSettings = appearance.getSettings ?? (() => resolveStatusSettings({}));

@@ -31,6 +31,7 @@ import {
   type ComputerResult,
   type ComputerRootKind,
   type ComputerStatusData,
+  type ComputerWindowIdentity,
 } from "./contract.ts";
 import type { ComputerObservedNode, ComputerRootDescriptor } from "./state.ts";
 
@@ -192,6 +193,53 @@ export function parseDisplaysResult(value: unknown): readonly ComputerDisplayInf
 }
 
 /** 单个显示器条目：id 与几何是非负/正整数，scaleFactor 为正数，primary 是布尔 */
+function parseDisplayList(value: unknown): readonly ComputerDisplayInfo[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const parsed: ComputerDisplayInfo[] = [];
+  for (const entry of value) {
+    const display = parseDisplayInfo(entry);
+    if (display === undefined) return undefined;
+    parsed.push(display);
+  }
+  if (parsed.length === 0 || parsed.filter((display) => display.primary).length !== 1) return undefined;
+  return parsed;
+}
+
+function parseWindowIdentity(value: Record<string, unknown>): ComputerWindowIdentity | undefined {
+  const key = value.key;
+  if (typeof key !== "string" || key.length === 0) return undefined;
+  let parsed: ComputerWindowIdentity = { key };
+  if (value.pid !== undefined) {
+    if (typeof value.pid !== "number" || !Number.isSafeInteger(value.pid) || value.pid <= 0) return undefined;
+    parsed = { ...parsed, pid: value.pid };
+  }
+  if (value.startIdentity !== undefined) {
+    if (!isRecord(value.startIdentity)) return undefined;
+    const { seconds, microseconds } = value.startIdentity;
+    if (
+      typeof seconds !== "number" ||
+      typeof microseconds !== "number" ||
+      !Number.isSafeInteger(seconds) ||
+      !Number.isSafeInteger(microseconds) ||
+      seconds < 0 ||
+      microseconds < 0
+    ) return undefined;
+    parsed = { ...parsed, startIdentity: { seconds, microseconds } };
+  }
+  if (value.windowId !== undefined) {
+    if (typeof value.windowId !== "number" || !Number.isSafeInteger(value.windowId) || value.windowId < 0) return undefined;
+    parsed = { ...parsed, windowId: value.windowId };
+  }
+  if (value.app !== undefined && (typeof value.app !== "string" || value.app.length === 0)) return undefined;
+  if (value.app !== undefined) parsed = { ...parsed, app: value.app };
+  if (value.bounds !== undefined) {
+    const bounds = parseComputerBounds(value.bounds);
+    if (bounds === undefined || bounds.width <= 0 || bounds.height <= 0) return undefined;
+    parsed = { ...parsed, bounds };
+  }
+  return parsed;
+}
+
 function parseDisplayInfo(value: unknown): ComputerDisplayInfo | undefined {
   if (!isRecord(value)) return undefined;
   const { id, device, originX, originY, width, height, scaleFactor, primary } = value;
@@ -220,6 +268,7 @@ export function parseCaptureResult(value: unknown): ComputerCaptureRecord | unde
     window: capturedWindow,
     source,
     mayBeObscured,
+    displays,
   } = value;
   if (typeof capturedPath !== "string" || capturedPath.length === 0) return undefined;
   if (!isRecord(image)) return undefined;
@@ -238,19 +287,26 @@ export function parseCaptureResult(value: unknown): ComputerCaptureRecord | unde
     parsedDisplay = parseDisplayInfo(display);
     if (parsedDisplay === undefined) return undefined;
   }
+  let parsedDisplays: readonly ComputerDisplayInfo[] | undefined;
+  if (displays !== undefined) {
+    parsedDisplays = parseDisplayList(displays);
+    if (parsedDisplays === undefined) return undefined;
+  }
   // 窗口采集的字段成组出现且与 display 互斥：window 在就必须有合法的 source 与 mayBeObscured
   let windowFields: Pick<ComputerCaptureRecord, "window" | "source" | "mayBeObscured"> = {};
   if (capturedWindow !== undefined) {
     if (!isRecord(capturedWindow)) return undefined;
     const key = capturedWindow.key;
     if (typeof key !== "string" || key.length === 0) return undefined;
+    const parsedWindow = parseWindowIdentity(capturedWindow);
+    if (parsedWindow === undefined) return undefined;
     if (source !== "print_window" && source !== "screen_region" && source !== "quartz_window") return undefined;
     if (typeof mayBeObscured !== "boolean") return undefined;
     // 协议不变量：回退屏幕区域就是可能被遮挡，PrintWindow 就是没有
     if (mayBeObscured !== (source === "screen_region")) return undefined;
     if (parsedDisplay !== undefined) return undefined;
     windowFields = {
-      window: { key },
+      window: parsedWindow,
       source: source as ComputerCaptureSource,
       mayBeObscured,
     };
@@ -263,6 +319,7 @@ export function parseCaptureResult(value: unknown): ComputerCaptureRecord | unde
     image: { width, height, bytes, format, scale },
     region: parsedRegion,
     ...(parsedDisplay !== undefined ? { display: parsedDisplay } : {}),
+    ...(parsedDisplays !== undefined ? { displays: parsedDisplays } : {}),
     ...windowFields,
   };
 }
@@ -511,12 +568,39 @@ export function createNativeComputerBackend(options: NativeComputerBackendOption
 
 /**
  * 接缝动作 → 桥的 act args（线上形状按桥协议登记）：只发 helper 需要的字段——动作名、
- * setText/typeText 的文本、keypress 的键名序列、坐标与滚轮步进（工具层已把图面像素换成虚拟桌面
- * 物理像素）、坐标点击的 button/count、结构路径与观察时的身份；契约动作里的 ref 供工具层解析目标，不出线。
+ * setText/typeText 的文本、keypress 的键名序列、坐标与滚轮步进（工具层已转换为 Windows 物理像素
+ * 或 macOS Quartz 屏幕点）、坐标点击的 button/count、结构路径与观察时的身份；ref 供工具层解析，不出线。
  */
 function actPayload(request: ComputerBackendActRequest): Record<string, unknown> {
   return {
     key: request.rootKey,
+    ...(request.coordinateSnapshot !== undefined
+      ? {
+          coordinateSnapshot: {
+            window: {
+              key: request.coordinateSnapshot.window.key,
+              bounds: { ...request.coordinateSnapshot.window.bounds },
+              ...(request.coordinateSnapshot.window.pid !== undefined ? { pid: request.coordinateSnapshot.window.pid } : {}),
+              ...(request.coordinateSnapshot.window.startIdentity !== undefined
+                ? { startIdentity: { ...request.coordinateSnapshot.window.startIdentity } }
+                : {}),
+              ...(request.coordinateSnapshot.window.windowId !== undefined ? { windowId: request.coordinateSnapshot.window.windowId } : {}),
+              ...(request.coordinateSnapshot.window.app !== undefined ? { app: request.coordinateSnapshot.window.app } : {}),
+            },
+            ...(request.coordinateSnapshot.capture !== undefined
+              ? {
+                  capture: {
+                    image: { ...request.coordinateSnapshot.capture.image },
+                    region: { ...request.coordinateSnapshot.capture.region },
+                  },
+                }
+              : {}),
+            ...(request.coordinateSnapshot.displays !== undefined
+              ? { displays: request.coordinateSnapshot.displays.map((display) => ({ ...display })) }
+              : {}),
+          },
+        }
+      : {}),
     actions: request.actions.map((entry) => ({
       action: entry.command.action,
       ...(entry.command.delivery !== undefined ? { delivery: entry.command.delivery } : {}),

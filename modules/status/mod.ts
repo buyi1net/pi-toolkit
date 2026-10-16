@@ -4,7 +4,7 @@
 // - 控制器在模块装配时创建、随会话绑定重建；注册句柄后 tui lifecycle 只从句柄取快照；
 // - 取数策略（什么时候刷 git / 运行时、哪些段位启用）留在本模块；
 // - 重绘节奏属于 tui（工单 18）：控制器不持重绘回调；句柄快照带变更序号（内容变化时递增），
-//   tui 心跳按序号变化重绘（句柄契约仍只有 snapshot/refresh）。
+//   tui 心跳按序号变化重绘（句柄默认契约是 snapshot/refresh，telemetry 另有 liveSnapshot）。
 //
 // 事件接线：session_start 绑定会话并按段位创建控制器；session_shutdown 释放；
 // 回合计时与遥测由 turn/agent 事件驱动。工具执行后的数据刷新由消费方
@@ -199,6 +199,7 @@ export function registerStatus(
 	context.services.register(STATUS_TELEMETRY_SERVICE_NAME, {
 		id: "status",
 		snapshot: () => telemetry.getSnapshot(),
+		liveSnapshot: () => telemetry.getLiveSnapshot(),
 		refresh: async () => {},
 	} satisfies StatusTelemetryService);
 

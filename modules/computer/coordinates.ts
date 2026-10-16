@@ -1,4 +1,4 @@
-// 坐标换算链（工单 17）：截图像素 ↔ 虚拟桌面物理坐标。
+// 坐标换算链（工单 17/43）：截图像素 ↔ 平台桌面单位（Windows 物理像素、macOS Quartz 屏幕点）。
 //
 // 口径定稿 screenshot_pixels：观察带图时，图的像素坐标系由采集记录定义——
 //   image.x = (desktop.x − region.x) × (image.width / region.width)
@@ -14,16 +14,19 @@ import type { ComputerBounds, ComputerCaptureRecord } from "./contract.ts";
 
 /** 图的像素坐标系：由采集记录里的 region 与图像尺寸定义 */
 export interface ComputerImageFrame {
-  /** 采集区域左上角在虚拟桌面物理坐标里的位置（可为负） */
+  /** 采集区域左上角的桌面坐标（Windows 像素或 macOS 屏幕点，可为负） */
   readonly originX: number;
   readonly originY: number;
-  /** 采集区域尺寸（物理像素，正数） */
+  /** 采集区域尺寸（与 origin 相同的平台单位，正数） */
   readonly width: number;
   readonly height: number;
   /** 横向比例：image.width / region.width（与采集记录的 scale 同值） */
   readonly scaleX: number;
   /** 纵向比例：image.height / region.height（逐边取整时与 scaleX 可差万分之一） */
   readonly scaleY: number;
+  /** 图像实际像素边界；动作输入必须严格落在这个范围内，绝不夹紧。 */
+  readonly imageWidth: number;
+  readonly imageHeight: number;
 }
 
 export interface ComputerImagePoint {
@@ -63,6 +66,8 @@ export function imageFrameOf(capture: ComputerCaptureRecord): ComputerImageFrame
     height: region.height,
     scaleX: image.width / region.width,
     scaleY: image.height / region.height,
+    imageWidth: image.width,
+    imageHeight: image.height,
   };
 }
 
@@ -83,6 +88,23 @@ export function imagePointToDesktop(frame: ComputerImageFrame, x: number, y: num
     x: frame.originX + x / frame.scaleX,
     y: frame.originY + y / frame.scaleY,
   };
+}
+
+/** 截图像素 → Quartz 屏幕点（左上原点、Y 向下）；Cocoa 的 Y 翻转仅在覆盖层内部进行。 */
+export const imagePointToScreenPoint = imagePointToDesktop;
+
+/** 虚拟桌面 screen point → 目标窗口局部 point；窗口 frame 原点固定，不猜标题栏或边框。 */
+export function screenPointToWindowLocal(
+  windowFrame: ComputerBounds,
+  x: number,
+  y: number,
+): ComputerImagePoint {
+  return { x: x - windowFrame.x, y: y - windowFrame.y };
+}
+
+/** 坐标必须在本次截图像素的半开区间内；边界外不夹紧。 */
+export function isImagePointInFrame(frame: ComputerImageFrame, x: number, y: number): boolean {
+  return Number.isFinite(x) && Number.isFinite(y) && x >= 0 && y >= 0 && x < frame.imageWidth && y < frame.imageHeight;
 }
 
 /**

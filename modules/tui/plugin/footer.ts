@@ -1,7 +1,6 @@
 import type { ContextUsage, ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-coding-agent";
 import {
 	truncateToWidth,
-	visibleWidth,
 	type Component,
 	type TUI,
 } from "@earendil-works/pi-tui";
@@ -14,7 +13,7 @@ import {
 } from "../../status/api.ts";
 import { sanitizeStyledSingleLine } from "../../../shared/sanitize.ts";
 import { deriveSessionShortId } from "../../../shared/short-id.ts";
-import { formatLeadingIcon, resolveGlyphs, type IconGlyphs } from "../renderer/icons.ts";
+import { resolveGlyphs, type IconGlyphs } from "../renderer/icons.ts";
 import { renderProjectStatusLine } from "../status/project-status.ts";
 import { renderStatusLineSegments } from "../status/segment-layout.ts";
 import { buildEditorUsageSegments } from "../status/session-status.ts";
@@ -117,8 +116,9 @@ export class ProjectStatusFooter implements Component {
 			undefined,
 			glyphs,
 			settings.footerPrimary,
+			false,
 		);
-		// 第二行：会话遥测（↑↓ R/CH ctx），行首 usage 图标作视觉锚点。
+		// 第二行：会话遥测（in/out R/CH ctx），Footer 使用纯文字，保留实际上下文占用。
 		// 上下文未就绪时不展示零值 token 段，但保留 Context、auto、轮数与压缩次数。
 		const contextUsage = this.getContextUsage();
 		const usageSegments = buildEditorUsageSegments(
@@ -131,22 +131,11 @@ export class ProjectStatusFooter implements Component {
 				? settings.footerUsage.filter((segment) => segment === "context")
 				: settings.footerUsage,
 			this.getAutoCompactionEnabled() ?? false,
+			false,
 		);
-		// 行首图标属于状态行的一部分，必须先从可用宽度中扣除；最后的截断
-		// 只是防御性兜底，避免宽字符或第三方状态文本再次把整行顶出终端。
-		// required 段（上下文用量）由统一段位模块保护：只压缩不隐藏，
-		// 宽度吃紧时走截断兜底。
-		const usageIconText = formatLeadingIcon(glyphs.usage);
-		const usageIconWidth = visibleWidth(usageIconText);
-		const usageSegmentsWidth = Math.max(0, contentWidth - usageIconWidth);
-		const renderedUsageSegments = usageSegmentsWidth > 0
-			? renderStatusLineSegments(usageSegments, usageSegmentsWidth, this.theme.fg("muted", " · "))
-			: "";
+		const renderedUsageSegments = renderStatusLineSegments(usageSegments, contentWidth, this.theme.fg("muted", " · "));
 		const usageLine = usageSegments.length > 0
-			? truncateToWidth(
-				`${this.theme.fg("muted", usageIconText)}${renderedUsageSegments}`,
-				contentWidth,
-			)
+			? truncateToWidth(renderedUsageSegments, contentWidth)
 			: "";
 		const showExtensions = settings.footerExtra.includes("extensions");
 		const statuses = showExtensions

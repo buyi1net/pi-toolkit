@@ -64,7 +64,7 @@ export interface ComputerBounds {
   /**
    * 矩形的口径随载荷走：
    * - 工具层与快照里的 bounds：同一 stateId 所绑图像的图面像素（工单 17，`screenshot_pixels`）；无图快照不带 bounds。
-   * - 原生层回执里的 bounds（observe 节点）与 `capture.region`：虚拟桌面物理像素。
+   * - 原生层回执里的 bounds（observe 节点）、`capture.region` 与桥动作坐标：Windows 为桌面物理像素，macOS 为 Quartz 屏幕点。
    * 两边的换算链见 coordinates.ts（image = (desktop − region 原点) × 各自方向的比例）。
    */
   readonly x: number;
@@ -107,7 +107,12 @@ export interface ComputerCapabilities {
   readonly capture: boolean;
   readonly input: boolean;
   readonly coordinateMode: ComputerCoordinateMode;
+  /** 后台键盘能力；不代表后台指针能力。 */
   readonly backgroundInput: ComputerBackgroundInput;
+  /** 后台鼠标/指针能力；没有跨应用证据时必须是 none 或 partial。 */
+  readonly backgroundPointer: ComputerBackgroundInput;
+  /** partial/full 必带的结构化限制；none 时不做要求（规格 §7）。缺字段是旧 helper 的兼容状态，不是畸形。 */
+  readonly backgroundPointerLimits?: ComputerBackgroundPointerLimits;
   readonly permissions: Readonly<Record<ComputerPermission, ComputerPermissionState>>;
   /** 本平台或本会话的已知限制，照实上报，不藏 */
   readonly limits: readonly string[];
@@ -136,6 +141,7 @@ export function unavailableCapabilities(platform: ComputerPlatform): ComputerCap
     // 坐标口径未探测时按截图像素：坐标兜底只在带图的当前状态下发起，与坐标换算链（P2）同一口径
     coordinateMode: "screenshot_pixels",
     backgroundInput: "none",
+    backgroundPointer: "none",
     permissions: {
       accessibility: "unknown",
       screen_recording: "unknown",
@@ -143,6 +149,102 @@ export function unavailableCapabilities(platform: ComputerPlatform): ComputerCap
     },
     limits: [],
   };
+}
+
+// ---------------------------------------------------------------------------
+// 后台指针的结构化限制（工单 47）：规格 §7 要的五要素拆成可判定的字段，取值域与 Rust helper 两侧各写一份，
+// 靠两侧测试对牢。渲染在 tools.ts，校验在 bridge.ts。
+// ---------------------------------------------------------------------------
+
+/** 证据里的窗口/目标类型标签；验证过的进 verified，没验证的进 unverified */
+export const BACKGROUND_POINTER_WINDOW_TYPES = [
+  "appkit_window", // 原生 AppKit 窗口（含标题栏与边框 chrome）
+  "chromium_content", // Chromium/Electron 渲染层内容（DOM 事件到达）
+  "canvas_webgl", // 网页 canvas / WebGL 内容层
+  "floating_panel", // 悬浮面板（NSPanel，不属普通窗口层）
+  "modal_sheet", // 模态 sheet
+  "menu_owned_window", // 菜单或弹层所属窗口
+] as const;
+export type ComputerBackgroundPointerWindowType = (typeof BACKGROUND_POINTER_WINDOW_TYPES)[number];
+
+/** 证据里的鼠标事件类型标签；wheelHorizontal 尚无到达证据 */
+export const BACKGROUND_POINTER_EVENT_TYPES = [
+  "move",
+  "click",
+  "doubleClick",
+  "rightClick",
+  "middleClick",
+  "drag",
+  "wheel",
+  "wheelHorizontal",
+] as const;
+export type ComputerBackgroundPointerEventType = (typeof BACKGROUND_POINTER_EVENT_TYPES)[number];
+
+/** 证据覆盖到的坐标情形 */
+export const BACKGROUND_POINTER_COORDINATE_CASES = [
+  "single_display_primary", // 单屏、主屏原点、Quartz 屏幕点
+  "retina_scale_2", // Retina 缩放
+  "multi_display", // 多屏
+  "mixed_dpi", // 混合 DPI
+  "negative_origin", // 副屏在主屏左侧或上方，坐标为负
+  "window_moved", // 窗口移动或缩放后重新观察
+] as const;
+export type ComputerBackgroundPointerCoordinateCase = (typeof BACKGROUND_POINTER_COORDINATE_CASES)[number];
+
+/** 投递点口径；现在只有一种，写成枚举是为了以后扩展时不改形状 */
+export const BACKGROUND_POINTER_COORDINATE_CONDITIONS = ["window_frame_relative"] as const;
+export type ComputerBackgroundPointerCoordinateCondition =
+  (typeof BACKGROUND_POINTER_COORDINATE_CONDITIONS)[number];
+
+/** 目标类别：application 是真实应用，fixture 是自建夹具；两者证据力不同 */
+export const BACKGROUND_POINTER_TARGET_KINDS = ["application", "fixture"] as const;
+export type ComputerBackgroundPointerTargetKind = (typeof BACKGROUND_POINTER_TARGET_KINDS)[number];
+
+export interface ComputerBackgroundPointerApp {
+  /** bundle identifier；取不到时退化成进程名，此时带 "name:" 前缀以便区分 */
+  readonly id: string;
+  /** 验证时该目标的版本（CFBundleShortVersionString）；取不到写 "unknown" */
+  readonly version: string;
+  readonly kind: ComputerBackgroundPointerTargetKind;
+  /** 该目标上验证过的窗口类型 */
+  readonly windowTypes: readonly ComputerBackgroundPointerWindowType[];
+  /** 该目标上验证过的事件类型，不是全局并集；空数组不该出现（没有到达证据的目标不进表） */
+  readonly eventTypes: readonly ComputerBackgroundPointerEventType[];
+  /** 应用侧判据：凭什么算到达（AX 回读、夹具视图日志、DOM 事件） */
+  readonly verifiedBy: string;
+}
+
+export interface ComputerBackgroundPointerCoordinate {
+  /** 投递点口径：窗口 frame 相对点，含标题栏与边框 */
+  readonly condition: ComputerBackgroundPointerCoordinateCondition;
+  /** 是否每次坐标动作都必须带坐标快照；当前恒 true */
+  readonly requiresSnapshot: boolean;
+  readonly verifiedCases: readonly ComputerBackgroundPointerCoordinateCase[];
+  readonly unverifiedCases: readonly ComputerBackgroundPointerCoordinateCase[];
+}
+
+export interface ComputerBackgroundPointerLimits {
+  /** 证据版本：证据集换代时递增，格式 `<阶段>-<采集日期>.<序号>` */
+  readonly evidenceVersion: string;
+  /** 证据采集日期 YYYY-MM-DD，给人读，不参与判定 */
+  readonly evidenceDate: string;
+  /** 投递路线摘要，与投递门禁探针同一份来源，不允许各写一份 */
+  readonly mechanism: string;
+  /** 有到达证据的目标清单；空数组意味着没有任何证据，此时不该报 partial */
+  readonly apps: readonly ComputerBackgroundPointerApp[];
+  /** verified 是 apps 的并集，具体目标类型以 apps 为准 */
+  readonly windowTypes: {
+    readonly verified: readonly ComputerBackgroundPointerWindowType[];
+    readonly unverified: readonly ComputerBackgroundPointerWindowType[];
+  };
+  /** verified 是 apps 的并集；私有符号缺失时 wheel 会被收回到 unverified */
+  readonly eventTypes: {
+    readonly verified: readonly ComputerBackgroundPointerEventType[];
+    readonly unverified: readonly ComputerBackgroundPointerEventType[];
+  };
+  readonly coordinate: ComputerBackgroundPointerCoordinate;
+  /** 环境级降级：运行时不满足前置时会发生什么（例如私有符号缺失时滚轮整批拒绝） */
+  readonly degradations: readonly string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -301,16 +403,27 @@ export interface ComputerCaptureImage {
 export type ComputerCaptureSource = "print_window" | "screen_region" | "quartz_window";
 
 /**
- * 一次采集的回执：文件路径、图像元数据与采集区域（虚拟桌面物理坐标）。
+ * 一次采集的回执：图像使用像素，region 使用平台桌面单位（Windows 物理像素、macOS Quartz 屏幕点）。
  * 显示器采集带 display；窗口采集带 window/source/mayBeObscured（三者成组出现，不同时带 display）。
  * region + image + scale 构成图面坐标系（coordinates.ts 的 imageFrameOf），是坐标换算的唯一依据。
  */
+export interface ComputerWindowIdentity {
+  readonly key: string;
+  /** 原生窗口身份快照；旧平台回执缺少时仍可读图，但坐标动作必须由原生层安全拒绝。 */
+  readonly pid?: number;
+  readonly startIdentity?: { readonly seconds: number; readonly microseconds: number };
+  readonly windowId?: number;
+  readonly app?: string;
+  readonly bounds?: ComputerBounds;
+}
+
 export interface ComputerCaptureRecord {
   readonly path: string;
   readonly image: ComputerCaptureImage;
   readonly region: ComputerBounds;
   readonly display?: ComputerDisplayInfo;
-  readonly window?: { readonly key: string };
+  readonly displays?: readonly ComputerDisplayInfo[];
+  readonly window?: ComputerWindowIdentity;
   readonly source?: ComputerCaptureSource;
   /** 屏幕回退的采集可能包含遮挡物；source 为 screen_region 时为 true，窗口专用采集为 false */
   readonly mayBeObscured?: boolean;
@@ -724,7 +837,7 @@ export const COMPUTER_TOOL_CONTRACTS: Readonly<Record<ComputerToolName, Computer
     title: "Computer capabilities",
     description:
       "Report what this machine can do: platform, accessibility tree, screen capture, native input, coordinate mode, " +
-      "background input, permission states and the platform's known limits, plus whether the native helper is ready. " +
+      "background keyboard and pointer input separately, permission states and the platform's known limits, plus whether the native helper is ready. " +
       "Read it before promising an operation; unsupported operations fail with capability_unsupported instead of pretending.",
     promptSnippet: "Report platform capabilities and native helper readiness before promising desktop operations",
     promptGuidelines: [
@@ -843,6 +956,9 @@ export const COMPUTER_TOOL_CONTRACTS: Readonly<Record<ComputerToolName, Computer
     promptGuidelines: [
       "Every action needs an explicit target: an @eN/@rN ref or coordinates; nothing is sent to the current focus implicitly.",
       "Coordinate actions (click/scroll/drag/moveMouse with x/y) need the stateId of an observation taken with capture: true; x/y/toX/toY are pixels of that image, and the tool converts them before dispatch.",
+      "On macOS, coordinate pointer batches default to background delivery. Judge this dispatch against the structure computer_status reports: outside the verified scope the batch fails with the background_unavailable: prefix — report the limitation instead of retrying.",
+      "On macOS, moving the real cursor needs an explicit delivery: \"foreground\" and a target window that is already frontmost; the helper does not activate windows or take focus.",
+      "A background failure is never automatically retried as foreground; pass delivery: \"foreground\" explicitly and only when moving the real cursor is acceptable.",
       "Clicks at coordinates accept button (left default, middle, right) and count (1 default, 2 for double click); element clicks take neither.",
       "Continue with the stateId returned by computer_act; do not reuse refs from the state that was acted on.",
       "When an action is rejected as stale_ref, observe the root again and resolve the target once more.",
@@ -956,6 +1072,8 @@ export const COMPUTER_TOOL_CONTRACTS: Readonly<Record<ComputerToolName, Computer
       "Every ref and coordinate in every step is resolved against the stateId passed to this call before the first step runs; a changed target stops the run as stale_ref, and the receipt carries the completed steps and the last trusted stateId.",
       "A step with only an expectation is a checkpoint; when it fails the run stops and the receipt carries the scene at that moment under the top-level stateId.",
       "When the receipt reports effectsUnknown or status \"timeout\", the top-level stateId may be out of date: observe the root again before acting on it.",
+      "On macOS, coordinate pointer actions inside a step default to background delivery. Judge them against the structure computer_status reports: outside the verified scope the action is not dispatched, the run stops with the background_unavailable: prefix, effectsUnknown stays false, and the limitation should be reported instead of retried.",
+      "A background failure inside a run never falls back to foreground; pass delivery: \"foreground\" on the action, and only when moving the real cursor is acceptable.",
       "A receipt without a top-level stateId means the closing observation failed: call computer_observe before acting.",
     ],
     readOnly: false,

@@ -43,14 +43,23 @@ import { PROVIDERS_USAGE_SERVICE_NAME, type ProvidersUsageService } from "../../
 import {
 	STATUS_COMPACTION_SERVICE_NAME,
 	STATUS_SESSION_SERVICE_NAME,
+	STATUS_TELEMETRY_SERVICE_NAME,
 	STATUS_TIMER_SERVICE_NAME,
 	STATUS_WORKSPACE_SERVICE_NAME,
 	resolveStatusSettings,
 	type StatusCompactionService,
 	type StatusSessionService,
+	type StatusTelemetryService,
 	type StatusTimerService,
 	type StatusWorkspaceService,
 } from "../../status/api.ts";
+
+function formatWorkingMessage(tokensPerSecond: number | null | undefined): string | undefined {
+	if (tokensPerSecond === null || tokensPerSecond === undefined || !Number.isFinite(tokensPerSecond)) {
+		return undefined;
+	}
+	return `Working · ${tokensPerSecond.toString()} tok/s`;
+}
 
 export interface PiTuiPluginDependencies {
 	agentDir?: string;
@@ -105,6 +114,7 @@ export function registerPiTuiLifecycle(
 	let statusWorkspace: StatusWorkspaceService | undefined;
 	let statusSession: StatusSessionService | undefined;
 	let statusTimer: StatusTimerService | undefined;
+	let statusTelemetry: StatusTelemetryService | undefined;
 	let statusCompaction: StatusCompactionService | undefined;
 	/** 供应商运行态句柄（providers 模块注册；未装配时为 undefined） */
 	let providerUsage: ProvidersUsageService | undefined;
@@ -178,7 +188,7 @@ export function registerPiTuiLifecycle(
 		if (statusQueriesStarted || !active || transitionGate?.isHolding()) return;
 		statusQueriesStarted = true;
 		// 首次消费触发 providers 模块的周期刷新；刷新完成后补一帧
-		// （句柄契约只有 snapshot/refresh，变更通知由消费方自己的事件驱动）
+		// （句柄默认契约是 snapshot/refresh，变更通知由消费方自己的事件驱动）
 		void providerUsage?.refresh().then(requestStatusRender);
 	};
 	const scheduleStatusQueries = (): void => {
@@ -217,6 +227,7 @@ export function registerPiTuiLifecycle(
 		statusWorkspace = undefined;
 		statusSession = undefined;
 		statusTimer = undefined;
+		statusTelemetry = undefined;
 		statusCompaction = undefined;
 		cleanupFooter = undefined;
 		cleanupHeader = undefined;
@@ -253,10 +264,12 @@ export function registerPiTuiLifecycle(
 		const workspace = dependencies.services?.get<StatusWorkspaceService>(STATUS_WORKSPACE_SERVICE_NAME);
 		const session = dependencies.services?.get<StatusSessionService>(STATUS_SESSION_SERVICE_NAME);
 		const timer = dependencies.services?.get<StatusTimerService>(STATUS_TIMER_SERVICE_NAME);
+		const telemetry = dependencies.services?.get<StatusTelemetryService>(STATUS_TELEMETRY_SERVICE_NAME);
 		const compaction = dependencies.services?.get<StatusCompactionService>(STATUS_COMPACTION_SERVICE_NAME);
 		statusWorkspace = workspace;
 		statusSession = session;
 		statusTimer = timer;
+		statusTelemetry = telemetry;
 		statusCompaction = compaction;
 		providerUsage = usage;
 		let activeTui: TUI | undefined;
@@ -382,6 +395,7 @@ export function registerPiTuiLifecycle(
 			repaintRhythm.stop();
 			installedEditor?.dispose();
 			ctx.ui.setWorkingIndicator?.();
+			ctx.ui.setWorkingMessage?.();
 			ctx.ui.setWorkingVisible?.(true);
 			try {
 				if (footerInstalled) ctx.ui.setFooter(undefined);
@@ -416,6 +430,7 @@ export function registerPiTuiLifecycle(
 		cleanupHeader = headerInstalled ? () => ctx.ui.setHeader(undefined) : undefined;
 		cleanupSpinner = () => {
 			ctx.ui.setWorkingIndicator?.();
+			ctx.ui.setWorkingMessage?.();
 			ctx.ui.setWorkingVisible?.(true);
 		};
 		active = true;
@@ -433,7 +448,7 @@ export function registerPiTuiLifecycle(
 
 	const uninstallUi = (): void => {
 		if (
-			!active && !providerUsage && !statusWorkspace && !statusSession && !statusTimer && !statusCompaction &&
+			!active && !providerUsage && !statusWorkspace && !statusSession && !statusTimer && !statusTelemetry && !statusCompaction &&
 			!cleanupEditor && !cleanupFooter && !cleanupHeader && !cleanupSpinner
 		) return;
 		active = false;
@@ -448,6 +463,7 @@ export function registerPiTuiLifecycle(
 		statusWorkspace = undefined;
 		statusSession = undefined;
 		statusTimer = undefined;
+		statusTelemetry = undefined;
 		statusCompaction = undefined;
 		cleanupFooter = undefined;
 		cleanupHeader = undefined;
@@ -532,13 +548,28 @@ export function registerPiTuiLifecycle(
 		scheduleModelSwitchRepaint();
 	});
 
+	pi.on("turn_start", (_event, ctx) => {
+		if (!active) return;
+		ctx.ui.setWorkingMessage?.();
+		requestStatusRender();
+	});
+	pi.on("message_update", (_event, ctx) => {
+		if (!active) return;
+		ctx.ui.setWorkingMessage?.(formatWorkingMessage(statusTelemetry?.liveSnapshot()?.tokensPerSecond));
+		requestStatusRender();
+	});
+
 	// 回合计时与遥测的事件接线归 status 模块（turn/message/agent 事件）。
-	pi.on("message_end", requestStatusRender);
+	pi.on("message_end", (_event, ctx) => {
+		if (active) ctx.ui.setWorkingMessage?.();
+		requestStatusRender();
+	});
 	pi.on("session_info_changed", requestStatusRender);
 	pi.on("session_compact", requestStatusRender);
 	pi.on("session_tree", requestStatusRender);
 
 	pi.on("agent_settled", (_event, ctx) => {
+		ctx.ui.setWorkingMessage?.();
 		void providerUsage?.refresh(ctx.model).then(requestStatusRender);
 		requestStatusRender();
 	});

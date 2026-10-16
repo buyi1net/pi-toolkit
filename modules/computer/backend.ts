@@ -16,6 +16,7 @@ import {
   type ComputerCaptureRecord,
   type ComputerCaptureSource,
   type ComputerDisplayInfo,
+  type ComputerWindowIdentity,
   type ComputerResult,
   type ComputerStatusData,
 } from "./contract.ts";
@@ -44,10 +45,27 @@ export interface ComputerBackendAction {
   readonly target?: ComputerBackendTarget;
 }
 
+/**
+ * 坐标动作捕获时的目标快照。它和动作一起过桥，原生层执行前必须复核窗口身份与几何；
+ * 缺失或不一致时安全失败，不能拿当前窗口几何猜坐标。
+ */
+export interface ComputerCoordinateSnapshot {
+  readonly window: ComputerWindowIdentity & { readonly key: string; readonly bounds: ComputerBounds };
+  /** 捕获时的图面元数据随动作进入原生层，禁止原生层自行猜比例。 */
+  readonly capture?: {
+    readonly image: ComputerCaptureImage;
+    readonly region: ComputerBounds;
+  };
+  /** 捕获时的完整显示器几何；用于检测重排、DPI 与负坐标布局变化。 */
+  readonly displays?: readonly ComputerDisplayInfo[];
+}
+
 export interface ComputerBackendActRequest {
   /** 目标根的稳定 key（工具层从当前快照的作用域取） */
   readonly rootKey: string;
   readonly actions: readonly ComputerBackendAction[];
+  /** 旧调用可省略；含坐标的 macOS 原生动作会在缺失时安全失败。 */
+  readonly coordinateSnapshot?: ComputerCoordinateSnapshot;
 }
 
 /**

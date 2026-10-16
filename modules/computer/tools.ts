@@ -14,7 +14,13 @@ import { join } from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-coding-agent";
 import type { Translator } from "../../i18n/index.ts";
 import type { ModuleContext } from "../../kit/module.ts";
-import type { ComputerBackend, ComputerBackendAction, ComputerBackendObservation, ComputerBackendTarget } from "./backend.ts";
+import type {
+  ComputerBackend,
+  ComputerBackendAction,
+  ComputerBackendObservation,
+  ComputerBackendTarget,
+  ComputerCoordinateSnapshot,
+} from "./backend.ts";
 import {
   COMPUTER_ACTION_CONTRACTS,
   COMPUTER_CAPTURE_LONG_EDGE,
@@ -35,6 +41,8 @@ import {
   type ComputerActData,
   type ComputerAction,
   type ComputerActionField,
+  type ComputerBackgroundPointerApp,
+  type ComputerCapabilities,
   type ComputerCaptureRecord,
   type ComputerError,
   type ComputerErrorCode,
@@ -64,7 +72,7 @@ import {
 import type { ComputerActionLogEntry, ComputerActionLogSink } from "./log.ts";
 import { parseComputerKeyEntries } from "./key-names.ts";
 import { COMPUTER_ERROR_MESSAGE_KEYS } from "./messages/index.ts";
-import { imageFrameOf, imagePointToDesktop } from "./coordinates.ts";
+import { imageFrameOf, imagePointToDesktop, isImagePointInFrame } from "./coordinates.ts";
 import {
   createComputerState,
   flattenObservedComputerTree,
@@ -376,7 +384,12 @@ export function registerComputerTools(
           detail: `the observed root ${snapshot.data.root} is no longer registered`,
         });
       }
-      const receipt = await backend.act({ rootKey: root.key, actions: prepared.data });
+      const coordinateSnapshot = coordinateSnapshotFor(snapshot.data, root.key);
+      const receipt = await backend.act({
+        rootKey: root.key,
+        actions: prepared.data,
+        ...(coordinateSnapshot !== undefined ? { coordinateSnapshot } : {}),
+      });
       // 动作日志（工单 06）：派发出去的动作逐条记，成功失败都记；写失败不改变动作结果，只在文本里标注
       let logNote = "";
       try {
@@ -976,7 +989,11 @@ const RUN_CANCELLED_IN_FLIGHT: ComputerError = {
 
 /** 失败步的错误是否属于「已发出的动作结果未知」：桥超时 / 干扰中断（原生层固定前缀） */
 function runEffectsUnknown(error: ComputerError): boolean {
-  return error.code === "bridge_timeout" || (error.detail?.startsWith("user_interference_result_unknown:") ?? false);
+  return (
+    error.code === "bridge_timeout" ||
+    error.detail?.startsWith("user_interference_result_unknown:") === true ||
+    error.detail?.startsWith("target_changed_result_unknown:") === true
+  );
 }
 
 /** 安全点上的取消（不在途）：与 computer_wait 同纪律，如实抛，不装作跑完 */
@@ -1393,7 +1410,14 @@ async function executeComputerRun(
 
     if (step.actions.length > 0) {
       throwIfRunAborted(run.signal);
-      const actPromise = Promise.resolve(backend.act({ rootKey: root.key, actions: step.actions }));
+      const coordinateSnapshot = coordinateSnapshotFor(snapshot, root.key);
+      const actPromise = Promise.resolve(
+        backend.act({
+          rootKey: root.key,
+          actions: step.actions,
+          ...(coordinateSnapshot !== undefined ? { coordinateSnapshot } : {}),
+        }),
+      );
       // 取消竞态下桥侧拒绝不得变成未处理拒绝（赢不了赛跑的 promise 也要挂上处理）
       actPromise.catch(() => undefined);
       const receipt = await raceRunActWithAbort(actPromise, run.signal);
@@ -1589,21 +1613,75 @@ function yesNo(value: boolean): string {
   return value ? "yes" : "no";
 }
 
+/** 结构化限制的渲染上限（工单 47）：真机矩阵铺开后不能让这几行把 status 文本撑爆，超出补 `(+N more)` */
+const STATUS_LIMITS_APPS_MAX = 8;
+const STATUS_LIMITS_UNVERIFIED_MAX = 12;
+
+function capList(items: readonly string[], max: number, separator: string): string {
+  if (items.length <= max) return items.join(separator);
+  return `${items.slice(0, max).join(separator)}${separator}(+${items.length - max} more)`;
+}
+
+/** 一条目标证据：`id@version (kind) [窗口类型: 已验事件]`，夹具与真实应用一眼分得开 */
+function renderBackgroundPointerApp(app: ComputerBackgroundPointerApp): string {
+  return `${app.id}@${app.version} (${app.kind}) [${app.windowTypes.join(", ")}: ${app.eventTypes.join(", ")}]`;
+}
+
+/**
+ * 后台指针的结构化限制行（工单 47）：借 computer_status 的结构判断投递在不在已验证范围内。
+ * 等级 none 时一行不出；partial/full 缺结构时只留一行「结构缺失」，不把未知范围包装成已知。
+ */
+function renderBackgroundPointerLimits(caps: ComputerCapabilities): string[] {
+  if (caps.backgroundPointer === "none") return [];
+  const limits = caps.backgroundPointerLimits;
+  if (limits === undefined) {
+    return [
+      `background pointer evidence: missing (the helper reports ${caps.backgroundPointer} without a limits structure; ` +
+        "treat the verified scope as unknown)",
+    ];
+  }
+  const groups: string[] = [];
+  if (limits.windowTypes.unverified.length > 0) {
+    groups.push(`window types ${capList(limits.windowTypes.unverified, STATUS_LIMITS_UNVERIFIED_MAX, ", ")}`);
+  }
+  if (limits.eventTypes.unverified.length > 0) {
+    groups.push(`events ${capList(limits.eventTypes.unverified, STATUS_LIMITS_UNVERIFIED_MAX, ", ")}`);
+  }
+  if (limits.coordinate.unverifiedCases.length > 0) {
+    groups.push(`coordinate ${capList(limits.coordinate.unverifiedCases, STATUS_LIMITS_UNVERIFIED_MAX, ", ")}`);
+  }
+  const apps =
+    limits.apps.length > 0
+      ? capList(limits.apps.map(renderBackgroundPointerApp), STATUS_LIMITS_APPS_MAX, "; ")
+      : "(none)";
+  return [
+    `background pointer evidence: ${limits.evidenceVersion} (${limits.evidenceDate})`,
+    `background pointer apps: ${apps}`,
+    `background pointer unverified: ${groups.length > 0 ? groups.join("; ") : "(none)"}`,
+    // mechanism 逐字取快照：与投递门禁探针同一份来源，渲染层不加工
+    `background pointer mechanism: ${limits.mechanism}`,
+  ];
+}
+
 function renderStatus(data: ComputerStatusData): string {
   const caps = data.capabilities;
   const permissions = Object.entries(caps.permissions)
     .map(([name, value]) => `${name}=${value}`)
     .join(", ");
+  // 降级项并进 limits 行：它们也是「本会话已知的限制」，单独占行只会让模型少看一条
+  const limits = [...caps.limits, ...(caps.backgroundPointerLimits?.degradations ?? [])];
   return [
     `platform: ${caps.platform}`,
     `accessibility: ${yesNo(caps.accessibility)}`,
     `capture: ${yesNo(caps.capture)}`,
     `input: ${yesNo(caps.input)}`,
     `coordinate mode: ${caps.coordinateMode}`,
-    `background input: ${caps.backgroundInput}`,
+    `background keyboard: ${caps.backgroundInput}`,
+    `background pointer: ${caps.backgroundPointer}`,
+    ...renderBackgroundPointerLimits(caps),
     `permissions: ${permissions}`,
     `native helper: ${data.bridge.ready ? "ready" : "not ready"} (protocol version: ${data.bridge.protocolVersion ?? "none"})`,
-    `limits: ${caps.limits.length > 0 ? caps.limits.join("; ") : "(none reported)"}`,
+    `limits: ${limits.length > 0 ? limits.join("; ") : "(none reported)"}`,
   ].join("\n");
 }
 
@@ -1987,9 +2065,28 @@ function logEntries(
 /**
  * 把契约动作解析成后端动作：先按动作目录校验目标形态与必填字段（缺目标一律 invalid_params，
  * 不允许对「当前焦点」盲动），再用状态层解析引用；任何一条不合法就整批拒绝，一个动作都不发。
- * 坐标动作的图面像素在这里按快照绑定的采集记录换成虚拟桌面物理像素（工单 21）：
- * 后端与桥不认识图面坐标系，上桥的坐标一律是桌面物理像素。
+ * 坐标动作按快照绑定的采集记录换成平台桌面单位（工单 21/43）：
+ * Windows 为物理像素，macOS 为 Quartz 屏幕点；桥还携带原始采集记录供原生层复核。
  */
+function coordinateSnapshotFor(snapshot: ComputerSnapshot, rootKey: string): ComputerCoordinateSnapshot | undefined {
+  const capture = snapshot.capture;
+  if (capture?.window === undefined || capture.window.key !== rootKey) return undefined;
+  return {
+    window: {
+      key: capture.window.key,
+      // 保留窗口身份里捕获时的 frame；若旧回执没有 bounds 才退回 capture.region。
+      // 原生层会同时核对两份几何，不能在工具层静默丢掉不一致的 frame。
+      bounds: { ...(capture.window.bounds ?? capture.region) },
+      ...(capture.window.pid !== undefined ? { pid: capture.window.pid } : {}),
+      ...(capture.window.startIdentity !== undefined ? { startIdentity: { ...capture.window.startIdentity } } : {}),
+      ...(capture.window.windowId !== undefined ? { windowId: capture.window.windowId } : {}),
+      ...(capture.window.app !== undefined ? { app: capture.window.app } : {}),
+    },
+    capture: { image: { ...capture.image }, region: { ...capture.region } },
+    ...(capture.displays !== undefined ? { displays: capture.displays.map((display) => ({ ...display })) } : {}),
+  };
+}
+
 function prepareActions(
   state: ComputerStateStore,
   stateId: string,
@@ -2059,11 +2156,47 @@ function convertActionPoint(
       },
     };
   }
+  if (!isImagePointInFrame(frame, action.x!, action.y!)) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_params",
+        detail: `action ${index + 1} (${action.action}): coordinate (${action.x}, ${action.y}) is outside the captured image ` +
+          `[0, ${frame.imageWidth}) × [0, ${frame.imageHeight}); coordinates are never clamped`,
+      },
+    };
+  }
+  if (
+    action.toX !== undefined &&
+    action.toY !== undefined &&
+    !isImagePointInFrame(frame, action.toX, action.toY)
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_params",
+        detail: `action ${index + 1} (${action.action}): drag endpoint (${action.toX}, ${action.toY}) is outside the captured image ` +
+          `[0, ${frame.imageWidth}) × [0, ${frame.imageHeight}); coordinates are never clamped`,
+      },
+    };
+  }
   const start = imagePointToDesktop(frame, action.x!, action.y!);
   const end =
     action.toX !== undefined && action.toY !== undefined
       ? imagePointToDesktop(frame, action.toX, action.toY)
       : undefined;
+  const nativeRange = (point: { readonly x: number; readonly y: number }): boolean =>
+    Number.isFinite(point.x) && Number.isFinite(point.y) &&
+    point.x >= -2147483648 && point.x <= 2147483647 && point.y >= -2147483648 && point.y <= 2147483647;
+  if (!nativeRange(start) || (end !== undefined && !nativeRange(end))) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_params",
+        detail: `action ${index + 1} (${action.action}): converted screen point exceeds the native range; coordinates are never clamped`,
+      },
+    };
+  }
   return {
     ok: true,
     data: {

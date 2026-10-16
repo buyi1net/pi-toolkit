@@ -37,6 +37,8 @@ type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 interface MessageTiming {
 	firstOutputMs: number | null;
+	outputChars: number;
+	reportedOutputTokens: number;
 }
 
 interface TurnTiming {
@@ -57,6 +59,13 @@ export interface TurnTelemetrySnapshot {
 	cacheWriteTokens: number | null;
 	generationMs: number;
 	costUsd: number;
+}
+
+/** 当前 assistant 流式消息的实时速率；消息结束后由 tracker 清除。 */
+export interface TurnTelemetryLiveSnapshot {
+	tokensPerSecond: number | null;
+	outputTokens: number;
+	generationMs: number;
 }
 
 export interface PersistedTurnTelemetry {
@@ -161,8 +170,13 @@ export class TurnTelemetryController {
 		return this.latest;
 	}
 
+	/** 当前流式 assistant 消息的实时速率；没有正在生成的消息时返回 undefined。 */
+	getLiveSnapshot(): TurnTelemetryLiveSnapshot | undefined {
+		return this.tracker.getLiveSnapshot();
+	}
+
 	handle(event: Exclude<TurnTelemetryEvent, AgentSettledEvent> | AgentEndEvent): void {
-		const { isEnabled, getTimer, appendEntry } = this.dependencies;
+		const { getTimer, appendEntry } = this.dependencies;
 		// 耗时段独立于回复尾遥测开关，禁用采集仍需冻结并恢复本轮耗时。
 		if (event.type === "agent_end") {
 			const elapsedMs = getTimer()?.end();
@@ -171,15 +185,17 @@ export class TurnTelemetryController {
 			}
 			return;
 		}
-		if (isEnabled()) this.tracker.handle(event);
+		// 当前流式速率只存在内存中，始终采集；isEnabled 只控制回合遥测落盘。
+		this.tracker.handle(event);
 		if (event.type === "agent_start") getTimer()?.start();
 	}
 
 	settle(event: AgentSettledEvent, mode: ExtensionContext["mode"]): void {
 		const { isEnabled, getTimer, appendEntry } = this.dependencies;
-		if (!isEnabled()) return;
 		// agent_end 后宿主可能继续重试；settled 才是整次回复的落盘时机。
+		// 关闭历史遥测时仍执行 tracker.handle，只是不写入 custom entry。
 		const telemetry = this.tracker.handle(event);
+		if (!isEnabled()) return;
 		if (!telemetry) return;
 		this.latest = telemetry;
 		if (mode !== "tui") return;
@@ -305,6 +321,8 @@ export class TurnTelemetryTracker {
 		if (!this.turn || !isAssistantMessage(message)) return;
 		this.turn.currentMessage = {
 			firstOutputMs: null,
+			outputChars: 0,
+			reportedOutputTokens: 0,
 		};
 	}
 
@@ -326,6 +344,27 @@ export class TurnTelemetryTracker {
 			current.firstOutputMs = now;
 			turn.firstTokenMs ??= now;
 		}
+		current.outputChars += streamEvent.delta.length;
+		current.reportedOutputTokens = Math.max(
+			current.reportedOutputTokens,
+			finitePositive(event.message.usage?.output),
+		);
+	}
+
+	getLiveSnapshot(): TurnTelemetryLiveSnapshot | undefined {
+		const current = this.turn?.currentMessage;
+		if (!current || current.firstOutputMs === null) return undefined;
+
+		const generationMs = Math.max(0, this.now() - current.firstOutputMs);
+		const estimatedOutputTokens = Math.ceil(current.outputChars / 3.5);
+		const outputTokens = Math.max(current.reportedOutputTokens, estimatedOutputTokens);
+		return {
+			tokensPerSecond: outputTokens > 0 && generationMs > 0
+				? round(outputTokens / (generationMs / 1_000), 1)
+				: null,
+			outputTokens,
+			generationMs,
+		};
 	}
 
 	private endMessage(message: AgentMessage): void {

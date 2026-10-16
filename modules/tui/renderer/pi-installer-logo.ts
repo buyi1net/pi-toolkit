@@ -172,7 +172,7 @@ addFrame(4, "none", 0, 0, false, false, 100);
 addFrame(5, "none", 0, 0, false, false, 450);
 addFrame(5, "none", 0, 0, false, true, 120);
 addFrame(5, "none", 0, 0, false, false, 120);
-addFrame(5, "none", 0, 0, false, true, 450);
+addFrame(5, "none", 0, 0, false, false, 450);
 
 function frameWidth(frame: PiInstallerLogoFrame): number {
 	let maxCell = 0;

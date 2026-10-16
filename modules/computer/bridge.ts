@@ -10,12 +10,25 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import {
   BACKGROUND_INPUT_LEVELS,
+  BACKGROUND_POINTER_COORDINATE_CASES,
+  BACKGROUND_POINTER_COORDINATE_CONDITIONS,
+  BACKGROUND_POINTER_EVENT_TYPES,
+  BACKGROUND_POINTER_TARGET_KINDS,
+  BACKGROUND_POINTER_WINDOW_TYPES,
   COMPUTER_ERROR_CODES,
   COMPUTER_PERMISSIONS,
   COMPUTER_PLATFORMS,
   COORDINATE_MODES,
   PERMISSION_STATES,
   type ComputerBackgroundInput,
+  type ComputerBackgroundPointerApp,
+  type ComputerBackgroundPointerCoordinate,
+  type ComputerBackgroundPointerCoordinateCase,
+  type ComputerBackgroundPointerCoordinateCondition,
+  type ComputerBackgroundPointerEventType,
+  type ComputerBackgroundPointerLimits,
+  type ComputerBackgroundPointerTargetKind,
+  type ComputerBackgroundPointerWindowType,
   type ComputerCapabilities,
   type ComputerCoordinateMode,
   type ComputerError,
@@ -238,6 +251,133 @@ function parseDomain<T extends string>(value: unknown, allowed: readonly string[
   return typeof value === "string" && allowed.includes(value) ? (value as T) : undefined;
 }
 
+/** 非空字符串校验（证据版本、目标标识这类文本不能是空串） */
+function parseText(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** 对象校验：数组与 null 都不算对象（快照里的嵌套结构共用） */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+/**
+ * 取值域数组校验：每项都在允许取值里；`minLength` 用于「必须有内容」的语义校验。
+ * 不允许空串与表外值，未验证清单允许空数组（全验完时它就是空的）。
+ */
+function parseDomainList<T extends string>(value: unknown, allowed: readonly string[], minLength = 0): T[] | undefined {
+  if (!Array.isArray(value) || value.length < minLength) return undefined;
+  const parsed: T[] = [];
+  for (const item of value) {
+    const entry = parseDomain<T>(item, allowed);
+    if (entry === undefined) return undefined;
+    parsed.push(entry);
+  }
+  return parsed;
+}
+
+/** 验证过的/未验证的窗口类型对（windowTypes 与 eventTypes 同形） */
+function parseVerifiedPair<T extends string>(
+  value: unknown,
+  allowed: readonly string[],
+): { verified: T[]; unverified: T[] } | undefined {
+  const record = asRecord(value);
+  if (record === undefined) return undefined;
+  const verified = parseDomainList<T>(record.verified, allowed);
+  if (verified === undefined) return undefined;
+  const unverified = parseDomainList<T>(record.unverified, allowed);
+  if (unverified === undefined) return undefined;
+  return { verified, unverified };
+}
+
+function parseBackgroundPointerApp(value: unknown): ComputerBackgroundPointerApp | undefined {
+  const record = asRecord(value);
+  if (record === undefined) return undefined;
+  const id = parseText(record.id);
+  if (id === undefined) return undefined;
+  const version = parseText(record.version);
+  if (version === undefined) return undefined;
+  const kind = parseDomain<ComputerBackgroundPointerTargetKind>(record.kind, BACKGROUND_POINTER_TARGET_KINDS);
+  if (kind === undefined) return undefined;
+  const verifiedBy = parseText(record.verifiedBy);
+  if (verifiedBy === undefined) return undefined;
+  // 空 eventTypes 与「有到达证据的目标才进表」的语义矛盾，判畸形；windowTypes 同理
+  const windowTypes = parseDomainList<ComputerBackgroundPointerWindowType>(record.windowTypes, BACKGROUND_POINTER_WINDOW_TYPES, 1);
+  if (windowTypes === undefined) return undefined;
+  const eventTypes = parseDomainList<ComputerBackgroundPointerEventType>(record.eventTypes, BACKGROUND_POINTER_EVENT_TYPES, 1);
+  if (eventTypes === undefined) return undefined;
+  return { id, version, kind, windowTypes, eventTypes, verifiedBy };
+}
+
+function parseBackgroundPointerCoordinate(value: unknown): ComputerBackgroundPointerCoordinate | undefined {
+  const record = asRecord(value);
+  if (record === undefined) return undefined;
+  const condition = parseDomain<ComputerBackgroundPointerCoordinateCondition>(
+    record.condition,
+    BACKGROUND_POINTER_COORDINATE_CONDITIONS,
+  );
+  if (condition === undefined) return undefined;
+  if (typeof record.requiresSnapshot !== "boolean") return undefined;
+  const verifiedCases = parseDomainList<ComputerBackgroundPointerCoordinateCase>(
+    record.verifiedCases,
+    BACKGROUND_POINTER_COORDINATE_CASES,
+  );
+  if (verifiedCases === undefined) return undefined;
+  const unverifiedCases = parseDomainList<ComputerBackgroundPointerCoordinateCase>(
+    record.unverifiedCases,
+    BACKGROUND_POINTER_COORDINATE_CASES,
+  );
+  if (unverifiedCases === undefined) return undefined;
+  return { condition, requiresSnapshot: record.requiresSnapshot, verifiedCases, unverifiedCases };
+}
+
+/**
+ * 后台指针的结构化限制（工单 47）：缺字段原样返回 undefined（旧 helper 兼容，不判畸形），
+ * 报了就必须合法，否则整份能力快照判畸形。未知键忽略，与 parseCapabilities 的既有口径一致。
+ */
+function parseBackgroundPointerLimits(value: unknown): ComputerBackgroundPointerLimits | undefined {
+  const record = asRecord(value);
+  if (record === undefined) return undefined;
+  const evidenceVersion = parseText(record.evidenceVersion);
+  if (evidenceVersion === undefined) return undefined;
+  const evidenceDate = parseText(record.evidenceDate);
+  if (evidenceDate === undefined) return undefined;
+  const mechanism = parseText(record.mechanism);
+  if (mechanism === undefined) return undefined;
+  if (!Array.isArray(record.apps)) return undefined;
+  const apps: ComputerBackgroundPointerApp[] = [];
+  for (const entry of record.apps) {
+    const app = parseBackgroundPointerApp(entry);
+    if (app === undefined) return undefined;
+    apps.push(app);
+  }
+  const windowTypes = parseVerifiedPair<ComputerBackgroundPointerWindowType>(
+    record.windowTypes,
+    BACKGROUND_POINTER_WINDOW_TYPES,
+  );
+  if (windowTypes === undefined) return undefined;
+  const eventTypes = parseVerifiedPair<ComputerBackgroundPointerEventType>(
+    record.eventTypes,
+    BACKGROUND_POINTER_EVENT_TYPES,
+  );
+  if (eventTypes === undefined) return undefined;
+  const coordinate = parseBackgroundPointerCoordinate(record.coordinate);
+  if (coordinate === undefined) return undefined;
+  const degradations = record.degradations;
+  if (!Array.isArray(degradations) || !degradations.every((entry) => typeof entry === "string")) return undefined;
+  return {
+    evidenceVersion,
+    evidenceDate,
+    mechanism,
+    apps,
+    windowTypes,
+    eventTypes,
+    coordinate,
+    degradations: degradations as readonly string[],
+  };
+}
+
 /**
  * 能力快照的字段级校验（工单 13）：类型与取值域都对着 contract.ts 的 ComputerCapabilities 查，
  * 未知字段忽略；必填字段缺失或越界一律判 undefined，由调用方按 bridge_unavailable 处理，不把垃圾当能力用。
@@ -255,6 +395,15 @@ function parseCapabilities(value: unknown): ComputerCapabilities | undefined {
   if (coordinateMode === undefined) return undefined;
   const backgroundInput = parseDomain<ComputerBackgroundInput>(record.backgroundInput, BACKGROUND_INPUT_LEVELS);
   if (backgroundInput === undefined) return undefined;
+  // 旧 helper 没有独立后台指针字段时按 none 兼容；缺字段不能继承后台键盘能力。
+  const backgroundPointer =
+    record.backgroundPointer === undefined
+      ? "none"
+      : parseDomain<ComputerBackgroundInput>(record.backgroundPointer, BACKGROUND_INPUT_LEVELS);
+  if (backgroundPointer === undefined) return undefined;
+  // 结构只在 helper 报出来时校验：缺失不判畸形（旧 helper 兼容），报出来就必须合法
+  const backgroundPointerLimits = parseBackgroundPointerLimits(record.backgroundPointerLimits);
+  if (backgroundPointerLimits === undefined && record.backgroundPointerLimits !== undefined) return undefined;
   const permissions = record.permissions;
   if (typeof permissions !== "object" || permissions === null || Array.isArray(permissions)) return undefined;
   const permissionRecord = permissions as Record<string, unknown>;
@@ -273,6 +422,9 @@ function parseCapabilities(value: unknown): ComputerCapabilities | undefined {
     input,
     coordinateMode,
     backgroundInput,
+    backgroundPointer,
+    // 缺省时不加这个键：旧 helper 的能力快照原样透传，不凭空造结构
+    ...(backgroundPointerLimits !== undefined ? { backgroundPointerLimits } : {}),
     // 循环按 COMPUTER_PERMISSIONS 逐个赋值，三个键必然齐备；Partial 只是循环赋值的类型代价
     permissions: parsedPermissions as Record<ComputerPermission, ComputerPermissionState>,
     limits: limits as readonly string[],
