@@ -54,11 +54,11 @@ import {
 	type StatusWorkspaceService,
 } from "../../status/api.ts";
 
-function formatWorkingMessage(tokensPerSecond: number | null | undefined): string | undefined {
-	if (tokensPerSecond === null || tokensPerSecond === undefined || !Number.isFinite(tokensPerSecond)) {
-		return undefined;
-	}
-	return `Working · ${tokensPerSecond.toString()} tok/s`;
+export function formatWorkingMessage(tokensPerSecond: number | null | undefined): string {
+	const speed = tokensPerSecond !== null && tokensPerSecond !== undefined && Number.isFinite(tokensPerSecond)
+		? tokensPerSecond
+		: 0;
+	return `Working · ${speed.toString()} tok/s`;
 }
 
 export interface PiTuiPluginDependencies {
@@ -550,7 +550,7 @@ export function registerPiTuiLifecycle(
 
 	pi.on("turn_start", (_event, ctx) => {
 		if (!active) return;
-		ctx.ui.setWorkingMessage?.();
+		ctx.ui.setWorkingMessage?.(formatWorkingMessage(statusTelemetry?.liveSnapshot()?.tokensPerSecond));
 		requestStatusRender();
 	});
 	pi.on("message_update", (_event, ctx) => {
@@ -561,8 +561,10 @@ export function registerPiTuiLifecycle(
 
 	// 回合计时与遥测的事件接线归 status 模块（turn/message/agent 事件）。
 	pi.on("message_end", (_event, ctx) => {
-		if (active) ctx.ui.setWorkingMessage?.();
-		requestStatusRender();
+		if (active) {
+			ctx.ui.setWorkingMessage?.(formatWorkingMessage(statusTelemetry?.liveSnapshot()?.tokensPerSecond));
+			requestStatusRender();
+		}
 	});
 	pi.on("session_info_changed", requestStatusRender);
 	pi.on("session_compact", requestStatusRender);
