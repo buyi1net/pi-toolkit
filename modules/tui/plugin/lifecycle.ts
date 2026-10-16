@@ -58,7 +58,7 @@ export function formatWorkingMessage(tokensPerSecond: number | null | undefined)
 	const speed = tokensPerSecond !== null && tokensPerSecond !== undefined && Number.isFinite(tokensPerSecond)
 		? tokensPerSecond
 		: 0;
-	return `Working · ${speed.toString()} tok/s`;
+	return `Working · LiveTPS:${speed.toString()}tok/s`;
 }
 
 export interface PiTuiPluginDependencies {
