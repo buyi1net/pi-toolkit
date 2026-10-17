@@ -8,7 +8,7 @@
 // - toFile 只允许临时/缓存目录（路径安全见 restore.ts）；
 // - 执行链在引擎（engine.executeDecompress）：collectBlockContent 只读收集 →
 //   内联登记（markBlockRestoredInline，支持 K2 原地重折叠）→ sidecar 落盘；
-// - 会话未命中 ACP 时返回引导文本，不触碰任何状态。
+// - 模块关闭或会话未命中 ACP 时返回标准拒绝结果（工单 01），不触碰任何状态。
 //
 // 未移植（上游裁剪）：omp 宿主 refused 口径、abort 信号细粒度检查、祖先
 // 会话日志回溯与 live-* 引用桥接（归后续工单）。
@@ -21,6 +21,7 @@ import type {
 import { Type } from "typebox";
 import type { Translator } from "../../../i18n/index.ts";
 import type { AcpCompressionEngine } from "./engine.ts";
+import { acpToolUnavailable } from "./tool-guard.ts";
 
 const DecompressParams = Type.Object({
   blockId: Type.String({
@@ -48,14 +49,15 @@ const DecompressParams = Type.Object({
 });
 
 export interface AcpDecompressToolDeps {
-  readonly engine: AcpCompressionEngine;
+  /** Lazy engine 代理（工单 01）：未启用或非 ACP 模式时不取用（不会创建引擎） */
+  readonly engine: () => AcpCompressionEngine | undefined;
   readonly t: Translator;
-  /** 当前会话是否命中 ACP 策略（mod.ts 每次调用时解析） */
+  /** 当前会话是否走 ACP（模块启用且模型命中 ACP 策略；mod.ts 每次调用时解析） */
   readonly isSessionActive: (ctx: ExtensionContext) => boolean;
 }
 
 export function makeAcpDecompressTool(deps: AcpDecompressToolDeps): ToolDefinition<typeof DecompressParams> {
-  const { engine, t } = deps;
+  const { t } = deps;
   return {
     name: "decompress",
     label: "Decompress",
@@ -73,12 +75,9 @@ export function makeAcpDecompressTool(deps: AcpDecompressToolDeps): ToolDefiniti
     ],
     parameters: DecompressParams,
     async execute(toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
-      if (!deps.isSessionActive(ctx)) {
-        return {
-          details: undefined,
-          content: [{ type: "text", text: t("module.compression.acp.toolNotActive") }],
-        };
-      }
+      if (!deps.isSessionActive(ctx)) return acpToolUnavailable(t);
+      const engine = deps.engine();
+      if (!engine) return acpToolUnavailable(t);
       // 状态不可用等硬错误按异常抛出（isError 落日志，不伪装成功）
       const outcome = await engine.executeDecompress(
         {

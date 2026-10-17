@@ -54,7 +54,7 @@ export class ProjectStatusFooter implements Component {
 	private readonly getSessionStatus: () => SessionStatusSnapshot;
 	private readonly getContextUsage: () => ContextUsage | undefined;
 	private readonly getContextWindow: () => number | undefined;
-	private readonly getAutoCompactionEnabled: () => boolean;
+	private readonly getCompressionLabel: (compact: boolean) => string;
 	private disposed = false;
 
 	// 宿主回调参数（tui/theme/footerData）保持原位；其余入参按数据源分组，
@@ -82,7 +82,7 @@ export class ProjectStatusFooter implements Component {
 		this.getSessionStatus = () => session.getSessionStatus?.() ?? EMPTY_SESSION_STATUS;
 		this.getContextUsage = session.getContextUsage ?? (() => undefined);
 		this.getContextWindow = session.getContextWindow ?? (() => undefined);
-		this.getAutoCompactionEnabled = () => session.getAutoCompactionEnabled?.() ?? false;
+		this.getCompressionLabel = session.getCompressionLabel ?? (() => "");
 		this.beforeDispose = hooks.beforeDispose;
 	}
 
@@ -108,7 +108,8 @@ export class ProjectStatusFooter implements Component {
 			settings.footerPrimary,
 			false,
 		);
-		// 第二行沿用 Pi 原生 Footer 排版，保留实际上下文占用和自动压缩标记。
+		// 第二行沿用 Pi 原生 Footer 排版，保留实际上下文占用与压缩状态标签
+		// （标签两形态一起交给段位压缩循环，窄屏自动退到紧凑形态）。
 		const contextUsage = this.getContextUsage();
 		const usageSegments = buildEditorUsageSegments(
 			this.getSessionStatus(),
@@ -119,7 +120,10 @@ export class ProjectStatusFooter implements Component {
 			contextUsage === undefined
 				? settings.footerUsage.filter((segment) => segment === "context")
 				: settings.footerUsage,
-			this.getAutoCompactionEnabled() ?? false,
+			{
+				text: this.getCompressionLabel(false),
+				compactText: this.getCompressionLabel(true),
+			},
 			true,
 		);
 		const nativeFooterSeparator = " ";

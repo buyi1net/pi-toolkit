@@ -4,18 +4,28 @@
 // 同输入同输出，结果可 JSON 序列化。调用方（工单 03 的调度器、配置向导的诊断行）
 // 只消费 CompressionStrategyResolution，不感知匹配细节。
 //
-// 选择顺序固定：显式 provider/model 规则 → 可选的 ACP 自动检测 → 默认策略。
+// 选择顺序固定（工单 05 起五级）：当前会话覆盖（非 follow-global）→ 显式 provider/model
+// 规则 → Codex 官方能力自动检测（可选）→ 可选的 ACP 自动检测 → 默认策略。
+// - 会话覆盖是用户在本会话里的就地选择，压过下面四条配置链；follow-global 表示没有
+//   覆盖，整条链照旧。覆盖出的结果标记 source=session-override，Codex 覆盖的参数按
+//   规格从全局默认与模型 API 形状推导（不带规则）；
 // - 显式规则按精度排序：provider+model+api+baseUrl > （provider+model+api 或
 //   provider+model+baseUrl，约束数同为 1 的并列）> provider+model；
 // - 同一最高精度多条命中且生效结果（mode/protocol/profile/onUnsupported）不一致时
 //   报告配置冲突并回退默认策略，不按数组顺序猜测；生效结果完全一致视为重复条目，
-//   任取一条；显式 native 规则同样阻止自动 ACP（有显式命中就不进自动检测）；
-// - ACP 自动检测只在无任何显式规则命中时参与：contextWindow ≤ 阈值进 acp，
-//   元数据缺失或无效时回默认策略不猜测；
-// - model.api 只用于可选约束与诊断，绝不单独造成 Codex 接管。
+//   任取一条；显式 native / acp 规则同样阻止自动检测（有显式命中就不进自动步骤）；
+// - Codex 自动检测只在无任何显式规则命中时参与：官方 OpenAI Responses / Codex
+//   OAuth 链路（codex/capability.ts 的 URL 口径）才接管，第三方中转与非官方路径
+//   一律不接管；本条路径只用模型目录里的地址（provider / auth 两级地址由菜单侧
+//   的完整探测消费，见 codex/capability.ts 的头部说明）；
+// - ACP 自动检测只在无任何显式规则命中且 Codex 未自动接管时参与：contextWindow ≤
+//   阈值进 acp，元数据缺失或无效时回默认策略不猜测；
+// - model.api 只用于可选约束与诊断，绝不单独造成 Codex 接管（自动接管要求 API 与
+//   官方地址两条同时成立）。
 
 import {
   DEFAULT_CODEX_PROTOCOL,
+  DEFAULT_SESSION_COMPRESSION_OVERRIDE,
   type CodexProtocol,
   type CodexUnsupportedPolicy,
   type CompressionMode,
@@ -23,10 +33,13 @@ import {
   type CompressionSettings,
   type ModelIdentity,
   type NativeTriggerPolicy,
+  type SessionCompressionOverride,
 } from "./api.ts";
+import { detectCodexCapability } from "./codex/capability.ts";
+import { deriveResponsesProfile } from "./codex/profiles.ts";
 
-/** 策略来源：显式规则命中 / ACP 自动检测 / 默认策略 */
-export type CompressionSource = "explicit" | "acp-auto" | "default";
+/** 策略来源：当前会话覆盖 / 显式规则命中 / Codex 官方能力自动检测 / ACP 自动检测 / 默认策略 */
+export type CompressionSource = "explicit" | "acp-auto" | "default" | "codex-auto" | "session-override";
 
 /**
  * 命中精度（规则携带的可选约束数）：
@@ -90,7 +103,7 @@ export interface MatchedRuleView {
 export interface CompressionStrategyResolution {
   /** 实际模式 */
   readonly mode: CompressionMode;
-  /** 来源：显式规则 / 自动 ACP / 默认策略 */
+  /** 来源：当前会话覆盖 / 显式规则 / Codex 自动检测 / 自动 ACP / 默认策略 */
   readonly source: CompressionSource;
   /** 命中规则（含下标、规范化身份与精度）；未命中时缺席 */
   readonly matchedRule?: MatchedRuleView;
@@ -279,14 +292,55 @@ function defaultResolution(
 }
 
 /**
- * 策略解析（工单 02 对外主出口，工单 03 调度器消费同一签名）：
- * 输入当前模型身份与已解析配置，输出唯一的压缩策略结果。纯函数。
+ * 会话覆盖解析（工单 05）：非 follow-global 时由它唯一决定结果，不再进配置链。
+ * Codex 覆盖不带规则：protocol 继承全局默认（Remote V2），profile 按模型 API 形状
+ * 推导（只有已知 Responses API 有推导），onUnsupported 默认 native。资格（含认证）
+ * 已在切换现场校验过（codex/capability.ts），纯解析器不重复判定，也不在此处拒选。
+ */
+function sessionOverrideResolution(
+  identity: NormalizedModelIdentity,
+  settings: CompressionSettings,
+  sessionOverride: SessionCompressionOverride,
+): CompressionStrategyResolution | undefined {
+  if (sessionOverride === "follow-global") return undefined;
+  const contextWindow =
+    identity.contextWindow === undefined ? {} : { contextWindow: identity.contextWindow };
+  if (sessionOverride === "codex") {
+    const profile = deriveResponsesProfile(identity.api);
+    return {
+      mode: "codex",
+      source: "session-override",
+      protocol: DEFAULT_CODEX_PROTOCOL,
+      ...(profile === undefined ? {} : { profile }),
+      onUnsupported: "native",
+      triggerPolicy: "auto",
+      ...contextWindow,
+      conflicts: [],
+    };
+  }
+  return {
+    mode: sessionOverride,
+    source: "session-override",
+    triggerPolicy: sessionOverride === "native" ? settings.nativeTrigger : "auto",
+    ...contextWindow,
+    conflicts: [],
+  };
+}
+
+/**
+ * 策略解析（工单 02 对外主出口，工单 03 调度器与工单 05 会话覆盖消费同一签名）：
+ * 输入当前模型身份、已解析配置与可选的当前会话覆盖，输出唯一的压缩策略结果。纯函数。
  */
 export function resolveCompressionStrategy(
   identity: ModelIdentity,
   settings: CompressionSettings,
+  sessionOverride: SessionCompressionOverride = DEFAULT_SESSION_COMPRESSION_OVERRIDE,
 ): CompressionStrategyResolution {
   const normalized = normalizeModelIdentity(identity);
+
+  // 0. 当前会话覆盖（工单 05）：用户显式选定的本会话模式，压过配置链与身份推断
+  const overridden = sessionOverrideResolution(normalized, settings, sessionOverride);
+  if (overridden !== undefined) return overridden;
 
   // 身份本身不可用（provider/model 空）：回默认策略并说明原因，不做任何猜测
   if (normalized.provider === "" || normalized.modelId === "") {
@@ -333,7 +387,30 @@ export function resolveCompressionStrategy(
     };
   }
 
-  // 2. ACP 自动检测：只在无任何显式规则命中时参与（含显式 native 规则的阻止）
+  // 2. Codex 官方能力自动检测（工单 02）：只在无任何显式规则命中时参与。
+  //    官方 openai-responses / openai-codex-responses 链路自动接管；第三方中转、
+  //    非官方 host 与路径变体一律不接管（判定口径见 codex/capability.ts）。
+  if (settings.codexAutoDetect) {
+    const capability = detectCodexCapability({
+      provider: normalized.provider,
+      api: normalized.api,
+      modelBaseUrl: normalized.baseUrl,
+    });
+    if (capability.capable) {
+      return {
+        mode: "codex",
+        source: "codex-auto",
+        protocol: DEFAULT_CODEX_PROTOCOL,
+        onUnsupported: "native",
+        triggerPolicy: "auto",
+        ...(normalized.contextWindow === undefined ? {} : { contextWindow: normalized.contextWindow }),
+        conflicts: [],
+      };
+    }
+  }
+
+  // 3. ACP 自动检测：只在无任何显式规则命中且 Codex 未自动接管时参与（含显式
+  //    native 规则的阻止）
   if (settings.acpAutoDetect) {
     if (normalized.contextWindow === undefined) {
       // 元数据缺失或无效：不猜测，回默认策略并说明原因
@@ -351,6 +428,6 @@ export function resolveCompressionStrategy(
     // 窗口高于阈值：正常走默认策略，不算回退
   }
 
-  // 3. 默认策略
+  // 4. 默认策略
   return defaultResolution(settings, normalized.contextWindow, undefined);
 }

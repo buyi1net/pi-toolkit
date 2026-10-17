@@ -1,5 +1,5 @@
 // 模块契约：每个源插件迁入 pi-toolkit 后实现为一个 ModuleDefinition。
-// 装配器只负责按 enabled 开关决定是否调用 register；模块自己决定注册哪些命令/工具/钩子。
+// 装配器按 enabled 开关决定是否调用 register；声明 alwaysAssemble: true 的模块是例外（关闭时同样装配）。
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SettingItem } from "@earendil-works/pi-tui";
@@ -154,9 +154,16 @@ export interface ModuleDefinition {
   readonly group: ModuleGroup;
   /** 配置 schema，必须包含 enabled 字段 */
   readonly configSchema: ModuleConfigSchema;
-  /** 仅在模块启用时调用 */
+  /**
+   * 常驻装配（工单 01）：声明为 true 的模块即使磁盘 `enabled` 为 false 也纳入装配并
+   * 执行 register，一级菜单照常渲染其 topLevel 入口——用户能从菜单里重新打开模块。
+   * 模块自己的运行行为必须按实时配置自行旁路（关闭时不产生默认不应有的副作用）。
+   */
+  readonly alwaysAssemble?: boolean;
+  /** 仅在模块启用时调用（alwaysAssemble 模块在关闭时同样调用，由模块自行旁路） */
   readonly register: (context: ModuleContext) => void;
-  /** 可选：schema 自动生成的行之外，本模块专属的菜单行；同样只在模块启用时渲染 */
+  /** 可选：schema 自动生成的行之外，本模块专属的菜单行；同样只在模块启用时渲染
+   *  （alwaysAssemble 模块关闭时也会装配，此时是否渲染由模块的 topLevel 钩子自己决定） */
   readonly menuItems?: (context: ModuleMenuContext) => readonly SettingItem[];
   /**
    * 共享二级页归属（工单 46）：同 pageId 的启用模块共用一个二级页，
@@ -186,6 +193,9 @@ export function assertModuleDefinition(definition: ModuleDefinition): void {
   }
   if (definition.pageId !== undefined && (typeof definition.pageId !== "string" || definition.pageId === "")) {
     throw new Error(`模块 ${definition.id} 的 pageId 必须是非空字符串`);
+  }
+  if (definition.alwaysAssemble !== undefined && typeof definition.alwaysAssemble !== "boolean") {
+    throw new Error(`模块 ${definition.id} 的 alwaysAssemble 必须是布尔值`);
   }
   const enabled = definition.configSchema[ENABLED_FIELD];
   if (!enabled || !isBooleanField(enabled)) {

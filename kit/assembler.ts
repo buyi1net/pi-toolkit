@@ -1,5 +1,7 @@
 // 装配器：把模块定义按配置落成实际注册。
-// 关键约束：enabled=false 的模块在这里被完全跳过，register 与 menuItems 都不会被触碰。
+// 关键约束：enabled=false 的模块在这里被完全跳过，register 与 menuItems 都不会被触碰；
+// 例外是声明 alwaysAssemble: true 的模块（工单 01）：关闭时同样装配并 register，
+// 好让用户仍能从一级菜单打开它的设置页把模块重新打开，运行期行为由模块自行旁路。
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ToolkitConfig } from "./config.ts";
@@ -120,7 +122,7 @@ export function assembleModules(options: AssembleOptions): AssemblyResult {
     seen.add(definition.id);
 
     const config = resolveModuleConfig(definition, options.config.modules[definition.id]);
-    if (!isModuleEnabled(config)) continue;
+    if (!isModuleEnabled(config) && definition.alwaysAssemble !== true) continue;
 
     try {
       definition.register(createModuleContext(definition, options));

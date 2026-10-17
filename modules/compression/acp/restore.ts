@@ -23,6 +23,7 @@ import type { CompressionState, CoreMessage } from "acp-kernel";
 import { parseBlockIdArg } from "acp-kernel";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { acpEntriesToCoreMessages } from "./projection.ts";
+import { isAcpToolUnavailableDetails } from "./tool-guard.ts";
 
 /** 自动解压输出的目录（与上游 billion-context-pi 同落点） */
 const AUTO_DIR = join(homedir() || tmpdir(), ".cache", "pi", "acp-decompress");
@@ -157,6 +158,9 @@ function blockIdArgOf(arguments_: unknown): string | null {
  * 扫描会话日志里成功的 decompress 调用（参数 blockId 与目标一致），其
  * toolResult 条目未被任何活动块覆盖时即“仍可见”。reload / resume / fork 后
  * 照样成立（日志是事实源）；结果被压缩回收后返回 null，允许重新插入。
+ * 工单 06：宿主 0.85.x 不读 AgentToolResult.isError，被拒的预注册工具调用会以
+ * 成功形态落进日志——那类条目带 details.toolUnavailable，不算「已恢复」
+ * （否则一次拒绝会让后续真解压永远被当成重复插入）。
  */
 export function acpFindVisibleInlineRestore(
   target: string,
@@ -168,7 +172,7 @@ export function acpFindVisibleInlineRestore(
   const okResults: { toolCallId: string; entryId: string }[] = [];
   for (const entry of entries) {
     if (entry.type !== "message") continue;
-    const message = (entry as { message?: { role?: string; toolName?: string; toolCallId?: string; isError?: boolean; content?: unknown } }).message;
+    const message = (entry as { message?: { role?: string; toolName?: string; toolCallId?: string; isError?: boolean; details?: unknown; content?: unknown } }).message;
     if (!message) continue;
     if (message.role === "assistant") {
       for (const call of toolCallsOf(message.content)) {
@@ -178,7 +182,12 @@ export function acpFindVisibleInlineRestore(
           callArgById.set(call.id, canonical);
         }
       }
-    } else if (message.role === "toolResult" && message.toolName === "decompress" && message.isError !== true) {
+    } else if (
+      message.role === "toolResult" &&
+      message.toolName === "decompress" &&
+      message.isError !== true &&
+      !isAcpToolUnavailableDetails(message.details)
+    ) {
       if (message.toolCallId && callArgById.get(message.toolCallId) === canonical) {
         okResults.push({ toolCallId: message.toolCallId, entryId: entry.id });
       }

@@ -21,6 +21,18 @@ const DEFAULT_GLYPHS = resolveGlyphs("unicode");
 
 export type SessionStatusSegmentId = "session" | "tokens" | "cache" | "cost";
 
+/**
+ * 压缩状态标签的两个形态（工单 04）：内容来自 `compression.status` 句柄，
+ * 完整形态用于宽屏，紧凑形态（`(N:A)` 等）由段位压缩循环在窄屏选用。
+ * disabled / unavailable 时两者都是空串，段位直接不占位。
+ */
+interface CompressionLabelText {
+	readonly text: string;
+	readonly compactText: string;
+}
+
+const NO_COMPRESSION_LABEL: CompressionLabelText = Object.freeze({ text: "", compactText: "" });
+
 /** 与 status 模块数据半同口径的防负数/NaN 取值（两行小函数，不额外进 shared/） */
 function safeAmount(value: number): number {
 	return Number.isFinite(value) && value > 0 ? value : 0;
@@ -59,7 +71,7 @@ export function buildEditorUsageSegments(
 	theme: Theme,
 	glyphs: IconGlyphs,
 	segments: readonly EditorUsageSegmentId[],
-	autoCompactionEnabled = false,
+	compressionLabel: CompressionLabelText = NO_COMPRESSION_LABEL,
 	nativeFooter = false,
 ): StatusSegment[] {
 	const inputTokens = safeAmount(snapshot.inputTokens);
@@ -102,7 +114,7 @@ export function buildEditorUsageSegments(
 	const contextValue = contextWindow
 		? `${formatContextUsageTokenCount(contextTokens)}/${formatContextTokenCount(contextWindow)}`
 		: `${formatContextUsageTokenCount(contextTokens)}/?`;
-	const contextText = `${nativeFooter ? "" : `${glyphs.context} `}${contextValue}${nativeFooter && autoCompactionEnabled ? " (auto)" : ""}`;
+	const contextText = `${nativeFooter ? "" : `${glyphs.context} `}${contextValue}`;
 	const stats = {
 		id: "tokens",
 		text: statsText,
@@ -133,13 +145,21 @@ export function buildEditorUsageSegments(
 	};
 	const compactionStatus: StatusSegment = {
 		id: "compactions",
-		text: nativeFooter
+		// 旧的 Auto / Off 词已由独立的压缩状态段（下面）取代：这里只剩下压缩次数
+		text: nativeFooter || snapshot.compactions <= 0
 			? ""
-			: theme.fg(
-				compactionStatusColor(snapshot.compactions),
-				`${glyphs.compaction} ${autoCompactionEnabled ? "Auto" : "Off"}${snapshot.compactions > 0 ? `（C${snapshot.compactions}）` : ""}`,
-			),
+			: theme.fg(compactionStatusColor(snapshot.compactions), `${glyphs.compaction} （C${snapshot.compactions}）`),
 		priority: 5,
+	};
+	// 压缩状态标签（工单 04）：内容来自 compression.status 句柄，替代旧的 `(auto)` 与
+	// `Auto / Off` 显示。required：再窄的终端也只退到紧凑单字符形态，不挤掉同样
+	// required 的上下文用量段。
+	const compressionStatus: StatusSegment = {
+		id: "compression",
+		text: compressionLabel.text,
+		compactText: compressionLabel.compactText,
+		priority: 7,
+		required: true,
 	};
 	const seen = new Set<string>();
 	return segments.flatMap((segment) => {
@@ -147,7 +167,7 @@ export function buildEditorUsageSegments(
 		if (!status.text || seen.has(status.id)) return [];
 		seen.add(status.id);
 		if (segment !== "context") return [status];
-		const extras: StatusSegment[] = [compactionStatus];
+		const extras: StatusSegment[] = [compressionStatus, compactionStatus];
 		const ordered = showConversationCounts
 			? [turnStatus, status, ...extras]
 			: [status, ...extras];

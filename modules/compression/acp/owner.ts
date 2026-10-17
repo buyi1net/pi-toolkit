@@ -15,6 +15,7 @@
 
 import type { ExtensionContext, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import type { Translator } from "../../../i18n/index.ts";
+import type { CompressionFallbackLedger } from "../fallback.ts";
 import { hasActiveCheckpointClaim, hasForeignCheckpointClaim, latestCheckpoint } from "../codex/checkpoint.ts";
 import type { CompactHandlerResult, CompactOwnerModule } from "../scheduler.ts";
 import { COMPRESSION_STATUS_KEY } from "../scheduler.ts";
@@ -22,8 +23,14 @@ import { readAcpSidecarBlockCount } from "./sidecar.ts";
 import { acpHostSupported, type AcpCompressionEngine } from "./engine.ts";
 
 export interface AcpOwnerDeps {
-  readonly engine: AcpCompressionEngine;
+  /**
+   * Lazy engine 代理（工单 01）：注册期不强制实例化引擎；只有真正需要 ACP 运行态时
+   * （压缩接管、状态探测）才解析。模块被关闭或配置已无 ACP 可能性时返回 undefined。
+   */
+  readonly engine: () => AcpCompressionEngine | undefined;
   readonly t: Translator;
+  /** 降级记账接缝（工单 06）：宿主缺投影接缝而回退 Pi 原生时记 fallbackFrom=acp */
+  readonly fallback?: CompressionFallbackLedger;
 }
 
 export interface AcpOwner {
@@ -34,7 +41,7 @@ export interface AcpOwner {
 }
 
 export function createAcpOwner(deps: AcpOwnerDeps): AcpOwner {
-  const { engine, t } = deps;
+  const { t } = deps;
   let notifiedKeys = new Set<string>();
 
   function notifyOnce(
@@ -53,6 +60,14 @@ export function createAcpOwner(deps: AcpOwnerDeps): AcpOwner {
     ctx: ExtensionContext,
   ): Promise<CompactHandlerResult> {
     const reason = t(`module.compression.reason.${event.reason}`);
+    const engine = deps.engine();
+    if (!engine) {
+      // 策略已解析到 ACP 却拿不到引擎（模块刚被关闭等边界）：保守取消，
+      // 不让 Pi 原生 summary 抹掉可能存在的私有状态（关闭态的完整保护矩阵
+      // 在 scheduler.ts 的 handleDisabledCompaction）
+      notifyOnce(ctx, `engine-missing|${event.reason}`, "error", t("module.compression.acp.toolUnavailable"));
+      return { cancel: true };
+    }
 
     // preflight：宿主接缝不具备。「无私态」的判定看已提交的压缩块（工单 12 修正）：
     // session_start 的 beginSession 会为全新会话建空的初始状态槽（0 块、零提交），
@@ -77,6 +92,9 @@ export function createAcpOwner(deps: AcpOwnerDeps): AcpOwner {
           t("module.compression.acp.hostUnsupported", { reason }),
         );
         if (ctx.hasUI) ctx.ui.setStatus(COMPRESSION_STATUS_KEY, undefined);
+        // 工单 06：本次确实回退到了 Pi 原生（没有 ACP 私态），记降级给状态栏：
+        // 策略说 acp、实际在跑 native，用户应该看得到这个差距
+        deps.fallback?.record({ from: "acp", reason: "host-unsupported" });
         return {};
       }
       // 有已提交私态但宿主接缝缺失：取消并保留原状态（不让 native 覆盖坐标）

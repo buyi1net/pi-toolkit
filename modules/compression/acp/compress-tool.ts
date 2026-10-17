@@ -9,7 +9,8 @@
 //   sidecar 原子落盘 → 面板文本（块跨度 + 摘要指纹 + 警告/错误）；
 // - 参数解析失败按异常抛出（Pi 标记 isError，会话日志里成为重建时跳过的
 //   失败调用）；内核校验失败（0 块）以面板文本返回，错误逐条列出；
-// - 会话未命中 ACP（模型不在 ACP 策略下）时返回引导文本，不执行任何压缩；
+// - 模块关闭或会话未命中 ACP（模型不在 ACP 策略下）时返回标准拒绝结果（isError +
+//   details.toolUnavailable，工单 01），不取用 Lazy engine 代理，也不执行任何压缩；
 // - prompt pack 工具面（上游 makeCompressTool + applyToolPromptOverrides 同款
 //   机制）：注册期按全局级 ACP 配置解析一次（Pi 宿主在注册时快照 description/
 //   promptSnippet/promptGuidelines，会话内不可变；无模型身份，取全局层），
@@ -35,6 +36,7 @@ import {
 } from "../api.ts";
 import { resolveAcpRuntimeConfig } from "./config.ts";
 import type { AcpCompressionEngine } from "./engine.ts";
+import { acpToolUnavailable } from "./tool-guard.ts";
 
 const RangeSpec = Type.Object({
   startId: Type.String({
@@ -136,12 +138,16 @@ export function acpCompressToolSurfaceFor(acp: AcpAdvancedSettings | undefined):
 }
 
 export interface AcpCompressToolDeps {
-  readonly engine: AcpCompressionEngine;
+  /** Lazy engine 代理（工单 01）：未启用或非 ACP 模式时不取用（不会创建引擎） */
+  readonly engine: () => AcpCompressionEngine | undefined;
   readonly t: Translator;
-  /** 当前会话是否命中 ACP 策略（mod.ts 每次调用时解析） */
+  /** 当前会话是否走 ACP（模块启用且模型命中 ACP 策略；mod.ts 每次调用时解析） */
   readonly isSessionActive: (ctx: ExtensionContext) => boolean;
   /** ACP 高级配置读取口（与引擎同源；注册期解析一次工具提示面，缺省 = full 现状） */
   readonly readAcpSettings?: () => AcpAdvancedSettings;
+  /** 降级清除接缝（工单 06 的第三路）：compress 真正建块并完成 sidecar 原子
+   *  落盘后幂等调用；未注入 = 没有降级状态可清 */
+  readonly clearFallback?: () => void;
 }
 
 /** 工具面覆写应用到定义（上游 surface.ts 的 applyToolPromptOverrides 同款；
@@ -163,7 +169,7 @@ function applySurface(
 }
 
 export function makeAcpCompressTool(deps: AcpCompressToolDeps): ToolDefinition<typeof CompressParams> {
-  const { engine, t } = deps;
+  const { t } = deps;
   const surface = acpCompressToolSurfaceFor(deps.readAcpSettings?.());
   return applySurface({
     name: "compress",
@@ -175,12 +181,9 @@ export function makeAcpCompressTool(deps: AcpCompressToolDeps): ToolDefinition<t
     promptGuidelines: [...BASE_GUIDELINES],
     parameters: CompressParams,
     async execute(toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
-      if (!deps.isSessionActive(ctx)) {
-        return {
-          details: undefined,
-          content: [{ type: "text", text: t("module.compression.acp.toolNotActive") }],
-        };
-      }
+      if (!deps.isSessionActive(ctx)) return acpToolUnavailable(t);
+      const engine = deps.engine();
+      if (!engine) return acpToolUnavailable(t);
       let text: string;
       try {
         const outcome = await engine.executeCompress(
@@ -193,6 +196,9 @@ export function makeAcpCompressTool(deps: AcpCompressToolDeps): ToolDefinition<t
           toolCallId,
         );
         text = outcome.text;
+        // 工单 06：ACP 压缩真正成功（建了块且 sidecar 落盘完成）才清降级；
+        // 没有建块（参数被内核拒掉的面板）不算成功，降级标记保持
+        if (outcome.persisted) deps.clearFallback?.();
       } catch (error) {
         // 参数/状态错误：抛出让 Pi 标记 isError（会话日志里的失败调用，
         // 重建流程会跳过它）

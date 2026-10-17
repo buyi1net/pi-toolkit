@@ -7,6 +7,7 @@ import { formatMessage } from "../../../i18n/index.ts";
 import type { MessageTables, MessageVars, ResolvedLanguage, Translator } from "../../../i18n/index.ts";
 import type {
   AcpCompressField,
+  AcpPreset,
   AcpPromptOverrideKey,
   AcpPromptPack,
   CodexProtocol,
@@ -21,18 +22,17 @@ import type {
 } from "../strategy.ts";
 
 const EN = {
-  "module.compression.label": "Context compression",
+  "module.compression.label": "Model compression",
   "module.compression.description":
-    "Own context compression policy for pi-toolkit: default mode, native trigger policy and Codex/ACP model rules",
+    "Own model compression policy for pi-toolkit: master switch, default mode, native trigger policy and Codex/ACP model rules",
   "module.compression.enabled.label": "Enable compression module",
   "module.compression.enabled.description":
-    "When off, the module registers nothing and sessions keep Pi-native compaction (reload to apply)",
+    "When off, the module bypasses scheduling, context projection and request rewriting: sessions without active Codex/ACP private state keep Pi-native compaction",
 
   "module.compression.defaultMode.label": "Default compression mode",
   "module.compression.defaultMode.description":
-    "Mode used when no explicit model rule matches: as the default, acp takes over every unmatched model (auto-detected small-window models included), while codex is guarded by the whitelist — without an explicit rule it behaves like native with a notice",
+    "Global fallback used when no explicit model rule matches: Pi native or ACP compression. Codex is never a global default — bring it in through Codex mode management (auto detection or the supported model list)",
   "module.compression.defaultMode.value.native": "Pi native",
-  "module.compression.defaultMode.value.codex": "Codex",
   "module.compression.defaultMode.value.acp": "ACP",
 
   "module.compression.nativeTrigger.label": "Native trigger policy",
@@ -144,10 +144,8 @@ const EN = {
     "ACP context projection failed ({error}); ACP state is kept and this request is sent unprojected — retry the request or check the diagnosis",
   "module.compression.acp.stateUnavailable":
     "ACP state could not be loaded for this session, so compress/decompress are unavailable (see the compression diagnosis)",
-  "module.compression.acp.toolNotActive":
-    "compress skipped: the current model is not under the ACP compression policy (no rule matched and auto detection is off)",
   "module.compression.codex.notWhitelisted":
-    "Current model resolved to codex mode without an explicit whitelist rule; codex compaction only applies to explicit provider/model rules, so this session keeps the existing policy (Pi native)",
+    "Current model resolved to codex mode without an explicit rule, official auto detection or a session override; codex compaction only applies to explicit provider/model rules, official OpenAI Responses / Codex OAuth links and the current session override, so this session keeps the existing policy (Pi native)",
   "module.compression.codex.resolve.noModel": "Codex compaction needs an active session model",
   "module.compression.codex.status.running": "Codex remote compaction ({protocol})…",
 
@@ -212,9 +210,7 @@ const EN = {
   // ── ACP 高级设置（工单 10）：入口行、设置页、字段与诊断 ──
   "module.compression.acpAdvanced.label": "ACP advanced settings",
   "module.compression.acpAdvanced.description":
-    "ACP compression parameters merged per field across global → provider → model, plus the auto-detection threshold",
-  "module.compression.acpAdvanced.value.defaults": "Defaults",
-  "module.compression.acpAdvanced.value.custom": "global {global} · {providers} provider(s)",
+    "ACP preset (recommended or custom), auto-detection switch and threshold, plus per-field overrides merged global → provider → model",
 
   "module.compression.acpSettings.title": "ACP advanced settings",
   "module.compression.acpSettings.hint": "Enter edit · Ctrl+D clear · Esc back",
@@ -325,21 +321,92 @@ const EN = {
   "module.compression.acp.foreignClaimUnparsed": "an unparseable source",
   "module.compression.acp.foreignExtensionClaim":
     "This session carries a checkpoint written by an external compression extension: under ACP its opaque history will not be replayed. Disable or migrate that extension first, or start a new session",
+
+  // ── 工单 01：模型压缩常驻壳与动态设置面板 ──
+  "module.compression.settings.description":
+    "Compression master switch, model rules and ACP options; off keeps Pi-native compaction",
+  "module.compression.settings.value.on": "On",
+  "module.compression.settings.value.off": "Off",
+  "module.compression.acp.toolUnavailable":
+    "ACP compression is currently disabled or this model is not routed to ACP mode.",
+  "module.compression.disabled.protected":
+    "Model compression is off, but this session still carries active private state ({states}): this {reason} compaction is cancelled and nothing is overwritten. Turn model compression back on, or start a new session",
+
+  // ── 工单 02：Codex 官方能力检测与管理向导 ──
+  "module.compression.source.codex-auto": "Codex auto detection",
+  "module.compression.codexManagement.label": "Codex mode management",
+  "module.compression.codexManagement.description":
+    "Official OpenAI Responses / Codex OAuth models are detected automatically; relays and custom models can be added from the authenticated model list",
+  "module.compression.codexManagement.value.autoOn": "{count} model(s) · auto detect on",
+  "module.compression.codexManagement.value.autoOff": "{count} model(s) · auto detect off",
+  "module.compression.codex.autoDetect.label": "Codex auto detection",
+  "module.compression.codex.autoDetect.description":
+    "When on, a model whose API and address match the official OpenAI Responses (api.openai.com/v1) or Codex OAuth (chatgpt.com/backend-api) link enters Codex automatically; relays, non-official hosts and path variants are never taken over",
+  "module.compression.codex.panel.title": "Codex mode management",
+  "module.compression.codex.panel.empty":
+    "No model added yet — official OpenAI / Codex models are covered by auto detection",
+  "module.compression.codex.add": "+ Add model",
+  "module.compression.codex.addTitle": "Add model: pick an authenticated model from the catalog",
+  "module.compression.codex.noAvailableModels":
+    "No authenticated model found: configure the provider credentials in Pi first (models.json or login), then open this page again",
+  "module.compression.codex.authUnavailable":
+    "Cannot read the credentials of {provider} ({detail}): the model was not added. Fix that provider's credentials and try again",
+  "module.compression.codex.capability.official-openai-responses": "official OpenAI Responses link",
+  "module.compression.codex.capability.official-codex-oauth": "official Codex OAuth link",
+  "module.compression.codex.capability.unsupported-api":
+    "the model API is not a Responses API: never auto-detected",
+  "module.compression.codex.capability.missing-base-url":
+    "no base URL declared: never auto-detected",
+  "module.compression.codex.capability.url-invalid":
+    "the base URL cannot be parsed: never auto-detected",
+  "module.compression.codex.capability.non-official-host":
+    "the host is not official (relay or third party): never auto-detected",
+  "module.compression.codex.capability.unexpected-path":
+    "the path is not the official one: never auto-detected",
+  "module.compression.codex.capability.auth-unavailable": "credentials unavailable",
+  // ── 工单 03：ACP 推荐预设与高级管理页 ──
+  "module.compression.acpPreset.label": "ACP preset",
+  "module.compression.acpPreset.description":
+    "Recommended applies the tuned ACP parameters out of the box; custom uses your own draft, and the advanced parameters only expand there",
+  "module.compression.acpPreset.value.recommended": "Recommended (ready to use)",
+  "module.compression.acpPreset.value.custom": "Custom advanced",
+  "module.compression.acpAdvanced.value.overview": "{preset} · auto detection {state}",
+
+  // ── 工单 05：当前会话压缩覆盖与五级优先级 ──
+  "module.compression.source.session-override": "current session override",
+  "module.compression.sessionOverride.label": "Current session mode",
+  "module.compression.sessionOverride.description":
+    "Changes the compression mode of this session only: it stays in memory and is never written to the global config, and it falls back to following the global policy at the next session boundary",
+  "module.compression.sessionOverride.value.follow-global": "Follow global",
+  "module.compression.sessionOverride.value.native": "Pi native (default)",
+  "module.compression.sessionOverride.value.acp": "ACP compression",
+  "module.compression.sessionOverride.value.codex": "Codex mode",
+  "module.compression.sessionOverride.codexUnavailable":
+    "This model has no Codex Responses capability ({reason}): the session mode stays {previous}",
+  "module.compression.sessionOverride.noModel":
+    "No model is bound to this session yet, so Codex capability cannot be checked: the session mode stays {previous}",
+
+  // ── 工单 06：跨模式保护与 fallback 清除总线 ──
+  "module.compression.codex.capabilityRecheck":
+    "Codex takeover recheck at runtime failed ({detail}): Codex is not taking over this compaction and Pi native compaction continues",
+
+  // ── 工单 07：旧配置平滑迁移 ──
+  "module.compression.config.legacyCodexDefaultMode":
+    "Compression config compatibility notice: {field} still holds the legacy value codex, which is no longer a global default mode; it is read as {fallback}. Add an explicit Codex rule for your GPT models under Codex mode management to keep Codex compression; confirming the global default mode once in settings clears this notice",
 } satisfies Record<string, string>;
 
 const ZH_CN: typeof EN = {
-  "module.compression.label": "上下文压缩",
+  "module.compression.label": "模型压缩",
   "module.compression.description":
-    "pi-toolkit 自己的上下文压缩策略：默认模式、native 触发策略与 Codex/ACP 模型规则",
-  "module.compression.enabled.label": "启用上下文压缩模块",
+    "pi-toolkit 自己的模型压缩策略：总开关、默认模式、native 触发策略与 Codex/ACP 模型规则",
+  "module.compression.enabled.label": "启用模型压缩模块",
   "module.compression.enabled.description":
-    "关闭后模块不注册任何内容，会话继续使用 Pi 原生压缩（重载 pi 后生效）",
+    "关闭后模块旁路压缩调度、context 投影与请求改写：没有活动 Codex/ACP 私态的会话继续使用 Pi 原生压缩",
 
   "module.compression.defaultMode.label": "默认压缩模式",
   "module.compression.defaultMode.description":
-    "未命中显式模型规则时使用的模式：acp 作为默认模式会接管全部未命中模型（含 200k 自动检测语义）；codex 作为默认模式受白名单防线约束，无显式规则时等价 native 仅提示",
+    "未命中显式模型规则时使用的全局兜底：系统默认（Pi 原生）或 ACP 压缩。Codex 不能设为全局默认，请在 Codex 模式管理里通过自动检测或受支持模型列表纳入",
   "module.compression.defaultMode.value.native": "Pi 原生",
-  "module.compression.defaultMode.value.codex": "Codex",
   "module.compression.defaultMode.value.acp": "ACP",
 
   "module.compression.nativeTrigger.label": "native 触发策略",
@@ -368,7 +435,7 @@ const ZH_CN: typeof EN = {
   "module.compression.rules.modeTitle": "选择 {rule} 的压缩模式",
   "module.compression.rules.protocolTitle": "选择 {rule} 的 Codex 协议",
   "module.compression.rules.modelTitle": "添加规则：从模型目录选择模型",
-  "module.compression.rules.profile.label": "Codex profile",
+  "module.compression.rules.profile.label": "Codex profile（协议形状）",
   "module.compression.rules.profile.unset": "未指定（按模型 API 推导）",
   "module.compression.rules.profile.codex-responses-v1": "codex-responses-v1（Codex Responses 字段形状）",
   "module.compression.rules.profile.openai-responses-v1": "openai-responses-v1（普通 OpenAI Responses 字段形状）",
@@ -450,10 +517,8 @@ const ZH_CN: typeof EN = {
     "ACP 上下文投影失败（{error}）：已保留 ACP 状态，本次请求按原样发送——可重试请求或查看诊断",
   "module.compression.acp.stateUnavailable":
     "compress/decompress 不可用：本会话的 ACP 状态装载失败（见压缩诊断）",
-  "module.compression.acp.toolNotActive":
-    "compress 已跳过：当前模型不在 ACP 压缩策略下（未命中规则且自动检测关闭）",
   "module.compression.codex.notWhitelisted":
-    "当前模型解析为 codex 模式但没有命中显式白名单规则：codex 压缩只对显式 provider/model 规则生效，本会话继续沿用既有策略（Pi 原生）",
+    "当前模型解析为 codex 模式，但既没有显式规则、也没命中官方自动检测、也不是当前会话覆盖：codex 压缩只对显式 provider/model 规则、官方 OpenAI Responses / Codex OAuth 链路与当前会话覆盖生效，本会话继续沿用既有策略（Pi 原生）",
   "module.compression.codex.resolve.noModel": "Codex 压缩需要会话中存在活动模型",
   "module.compression.codex.status.running": "Codex 远程压缩中（{protocol}）…",
 
@@ -518,9 +583,7 @@ const ZH_CN: typeof EN = {
   // ── ACP 高级设置（工单 10）：入口行、设置页、字段与诊断 ──
   "module.compression.acpAdvanced.label": "ACP 高级设置",
   "module.compression.acpAdvanced.description":
-    "按 global → provider → model 逐字段合并的 ACP 压缩参数，含自动分流阈值",
-  "module.compression.acpAdvanced.value.defaults": "默认参数",
-  "module.compression.acpAdvanced.value.custom": "全局 {global} 项 · {providers} 家供应商",
+    "ACP 预设（推荐默认 / 自定义进阶）、自动检测开关与分流阈值，以及按 global → provider → model 逐字段合并的覆盖参数",
 
   "module.compression.acpSettings.title": "ACP 高级设置",
   "module.compression.acpSettings.hint": "回车 编辑 · Ctrl+D 清除 · Esc 返回",
@@ -543,7 +606,7 @@ const ZH_CN: typeof EN = {
   "module.compression.acpSettings.field.nudgeGrowthTokens.label": "nudge 增长步长（tokens）",
   "module.compression.acpSettings.field.preserveRecentMessages.label": "近期消息保留（条）",
   "module.compression.acpSettings.field.protectedTools.label": "工具保护名单",
-  "module.compression.acpSettings.field.promptPack.label": "Prompt pack",
+  "module.compression.acpSettings.field.promptPack.label": "提示词包",
   "module.compression.acpSettings.field.prompts.label": "提示词覆写",
   "module.compression.acpSettings.field.reasoning.label": "Reasoning 处理",
   "module.compression.acpSettings.field.stripImages.label": "图片处理",
@@ -631,21 +694,84 @@ const ZH_CN: typeof EN = {
   "module.compression.acp.foreignClaimUnparsed": "不可解析的来源",
   "module.compression.acp.foreignExtensionClaim":
     "本会话携带外部压缩扩展写入的 checkpoint：ACP 模式下不回放其 opaque 历史；请先停用/迁移该外部扩展，或新建会话",
+
+  // ── 工单 01：模型压缩常驻壳与动态设置面板 ──
+  "module.compression.settings.description": "模型压缩总开关、模型规则与 ACP 选项；关闭时走 Pi 原生压缩",
+  "module.compression.settings.value.on": "开",
+  "module.compression.settings.value.off": "关",
+  "module.compression.acp.toolUnavailable": "ACP 压缩功能当前未启用或当前模型未路由至 ACP 模式。",
+  "module.compression.disabled.protected":
+    "模型压缩已关闭，但本会话仍保留活动的私有压缩状态（{states}）：本次压缩（{reason}）已取消，不会覆盖任何状态。请重新打开模型压缩，或新建会话",
+
+  // ── 工单 02：Codex 官方能力检测与管理向导 ──
+  "module.compression.source.codex-auto": "Codex 自动检测",
+  "module.compression.codexManagement.label": "Codex 模式管理",
+  "module.compression.codexManagement.description":
+    "官方 OpenAI Responses / Codex OAuth 模型自动纳入；中转站与自定义模型可从已认证的模型列表里添加",
+  "module.compression.codexManagement.value.autoOn": "{count} 个模型 · 自动检测 开",
+  "module.compression.codexManagement.value.autoOff": "{count} 个模型 · 自动检测 关",
+  "module.compression.codex.autoDetect.label": "Codex 自动检测",
+  "module.compression.codex.autoDetect.description":
+    "开启后，API 与地址同时命中官方 OpenAI Responses（api.openai.com/v1）或 Codex OAuth（chatgpt.com/backend-api）链路的模型自动进入 Codex；中转站、非官方 host 与路径变体一律不接管",
+  "module.compression.codex.panel.title": "Codex 模式管理",
+  "module.compression.codex.panel.empty": "尚未添加模型——官方 OpenAI / Codex 模型由自动检测覆盖",
+  "module.compression.codex.add": "+ 添加模型",
+  "module.compression.codex.addTitle": "添加模型：从已认证的模型目录里选择",
+  "module.compression.codex.noAvailableModels":
+    "没有找到已认证可用的模型：请先在 Pi 里配置该 provider 的凭据（models.json 或登录），再回到本页",
+  "module.compression.codex.authUnavailable":
+    "无法读取 {provider} 的认证信息（{detail}）：本次没有添加模型。请先修好该 provider 的凭据再重试",
+  "module.compression.codex.capability.official-openai-responses": "官方 OpenAI Responses 链路",
+  "module.compression.codex.capability.official-codex-oauth": "官方 Codex OAuth 链路",
+  "module.compression.codex.capability.unsupported-api": "模型 API 不是 Responses 协议：不会自动检测",
+  "module.compression.codex.capability.missing-base-url": "没有声明 baseUrl：不会自动检测",
+  "module.compression.codex.capability.url-invalid": "baseUrl 无法解析：不会自动检测",
+  "module.compression.codex.capability.non-official-host": "host 不是官方域名（中转或第三方）：不会自动检测",
+  "module.compression.codex.capability.unexpected-path": "路径不是官方路径：不会自动检测",
+  "module.compression.codex.capability.auth-unavailable": "认证信息不可用",
+  // ── 工单 03：ACP 推荐预设与高级管理页 ──
+  "module.compression.acpPreset.label": "ACP 预设",
+  "module.compression.acpPreset.description":
+    "推荐默认直接使用调优好的 ACP 参数；自定义进阶使用自己的草稿，高级调参项只在该档展开",
+  "module.compression.acpPreset.value.recommended": "推荐默认（开箱即用）",
+  "module.compression.acpPreset.value.custom": "自定义进阶",
+  "module.compression.acpAdvanced.value.overview": "{preset} · 自动检测 {state}",
+
+  // ── 工单 05：当前会话压缩覆盖与五级优先级 ──
+  "module.compression.source.session-override": "当前会话覆盖",
+  "module.compression.sessionOverride.label": "当前会话压缩模式",
+  "module.compression.sessionOverride.description":
+    "只改变当前会话的压缩模式：仅保存在内存里，不写入全局配置；下一个会话边界自动回到跟随全局",
+  "module.compression.sessionOverride.value.follow-global": "跟随全局",
+  "module.compression.sessionOverride.value.native": "系统默认 (Pi 原生)",
+  "module.compression.sessionOverride.value.acp": "ACP 压缩",
+  "module.compression.sessionOverride.value.codex": "Codex 模式",
+  "module.compression.sessionOverride.codexUnavailable":
+    "当前模型不具备 Codex Responses 资格（{reason}）：会话模式保持 {previous}",
+  "module.compression.sessionOverride.noModel":
+    "当前会话还没有绑定模型，无法校验 Codex 资格：会话模式保持 {previous}",
+
+  // ── 工单 06：跨模式保护与 fallback 清除总线 ──
+  "module.compression.codex.capabilityRecheck":
+    "Codex 接管资格的运行期复核未通过（{detail}）：本次不接管 Codex，继续用 Pi 原生压缩",
+
+  // ── 工单 07：旧配置平滑迁移 ──
+  "module.compression.config.legacyCodexDefaultMode":
+    "压缩配置兼容提示：{field} 仍是旧值 codex，它已不再是全局默认模式，本次按 {fallback} 读取。要继续使用 Codex 压缩，请在「Codex 模式管理」里为对应的 GPT 模型添加显式规则；在设置页确认一次「全局默认模式」后这条提示不再出现",
 };
 
 const ZH_TW: typeof EN = {
-  "module.compression.label": "上下文壓縮",
+  "module.compression.label": "模型壓縮",
   "module.compression.description":
-    "pi-toolkit 自己的上下文壓縮策略：預設模式、native 觸發策略與 Codex/ACP 模型規則",
-  "module.compression.enabled.label": "啟用上下文壓縮模組",
+    "pi-toolkit 自己的模型壓縮策略：總開關、預設模式、native 觸發策略與 Codex/ACP 模型規則",
+  "module.compression.enabled.label": "啟用模型壓縮模組",
   "module.compression.enabled.description":
-    "關閉後模組不註冊任何內容，會話繼續使用 Pi 原生壓縮（重新載入 pi 後生效）",
+    "關閉後模組旁路壓縮排程、context 投影與請求改寫：沒有活動 Codex/ACP 私態的會話繼續使用 Pi 原生壓縮",
 
   "module.compression.defaultMode.label": "預設壓縮模式",
   "module.compression.defaultMode.description":
-    "未命中明確模型規則時使用的模式：acp 作為預設模式會接管全部未命中模型（含 200k 自動偵測語意）；codex 作為預設模式受白名單防線約束，無明確規則時等價 native 僅提示",
+    "未命中明確模型規則時使用的全域兜底：系統預設（Pi 原生）或 ACP 壓縮。Codex 不能設為全域預設，請在 Codex 模式管理裡透過自動偵測或受支援模型清單納入",
   "module.compression.defaultMode.value.native": "Pi 原生",
-  "module.compression.defaultMode.value.codex": "Codex",
   "module.compression.defaultMode.value.acp": "ACP",
 
   "module.compression.nativeTrigger.label": "native 觸發策略",
@@ -674,7 +800,7 @@ const ZH_TW: typeof EN = {
   "module.compression.rules.modeTitle": "選擇 {rule} 的壓縮模式",
   "module.compression.rules.protocolTitle": "選擇 {rule} 的 Codex 協定",
   "module.compression.rules.modelTitle": "新增規則：從模型目錄選擇模型",
-  "module.compression.rules.profile.label": "Codex profile",
+  "module.compression.rules.profile.label": "Codex profile（協定形狀）",
   "module.compression.rules.profile.unset": "未指定（按模型 API 推導）",
   "module.compression.rules.profile.codex-responses-v1": "codex-responses-v1（Codex Responses 欄位形狀）",
   "module.compression.rules.profile.openai-responses-v1": "openai-responses-v1（普通 OpenAI Responses 欄位形狀）",
@@ -756,10 +882,8 @@ const ZH_TW: typeof EN = {
     "ACP 上下文投影失敗（{error}）：已保留 ACP 狀態，本次請求按原樣傳送——可重試請求或查看診斷",
   "module.compression.acp.stateUnavailable":
     "compress/decompress 不可用：本會話的 ACP 狀態裝載失敗（見壓縮診斷）",
-  "module.compression.acp.toolNotActive":
-    "compress 已跳過：目前模型不在 ACP 壓縮策略下（未命中規則且自動檢測關閉）",
   "module.compression.codex.notWhitelisted":
-    "目前模型解析為 codex 模式但沒有命中明確白名單規則：codex 壓縮只對明確 provider/model 規則生效，本會話繼續沿用既有策略（Pi 原生）",
+    "目前模型解析為 codex 模式，但既沒有明確規則、也沒命中官方自動檢測、也不是目前會話覆蓋：codex 壓縮只對明確 provider/model 規則、官方 OpenAI Responses / Codex OAuth 鏈路與目前會話覆蓋生效，本會話繼續沿用既有策略（Pi 原生）",
   "module.compression.codex.resolve.noModel": "Codex 壓縮需要會話中存在活動模型",
   "module.compression.codex.status.running": "Codex 遠端壓縮中（{protocol}）…",
 
@@ -824,9 +948,7 @@ const ZH_TW: typeof EN = {
   // ── ACP 高級設定（工單 10）：入口行、設定頁、欄位與診斷 ──
   "module.compression.acpAdvanced.label": "ACP 進階設定",
   "module.compression.acpAdvanced.description":
-    "按 global → provider → model 逐欄位合併的 ACP 壓縮參數，含自動分流閾值",
-  "module.compression.acpAdvanced.value.defaults": "預設參數",
-  "module.compression.acpAdvanced.value.custom": "全域 {global} 項 · {providers} 家供應商",
+    "ACP 預設（推薦預設 / 自訂進階）、自動偵測開關與分流閾值，以及按 global → provider → model 逐欄位合併的覆寫參數",
 
   "module.compression.acpSettings.title": "ACP 進階設定",
   "module.compression.acpSettings.hint": "Enter 編輯 · Ctrl+D 清除 · Esc 返回",
@@ -849,7 +971,7 @@ const ZH_TW: typeof EN = {
   "module.compression.acpSettings.field.nudgeGrowthTokens.label": "nudge 增長步長（tokens）",
   "module.compression.acpSettings.field.preserveRecentMessages.label": "近期訊息保留（條）",
   "module.compression.acpSettings.field.protectedTools.label": "工具保護名單",
-  "module.compression.acpSettings.field.promptPack.label": "Prompt pack",
+  "module.compression.acpSettings.field.promptPack.label": "提示詞包",
   "module.compression.acpSettings.field.prompts.label": "提示詞覆寫",
   "module.compression.acpSettings.field.reasoning.label": "Reasoning 處理",
   "module.compression.acpSettings.field.stripImages.label": "圖片處理",
@@ -937,6 +1059,70 @@ const ZH_TW: typeof EN = {
   "module.compression.acp.foreignClaimUnparsed": "無法解析的來源",
   "module.compression.acp.foreignExtensionClaim":
     "本會話攜帶外部壓縮擴充寫入的 checkpoint：ACP 模式下不回放其 opaque 歷史；請先停用/遷移該外部擴充，或新建會話",
+
+  // ── 工單 01：模型壓縮常駐殼與動態設定面板 ──
+  "module.compression.settings.description": "模型壓縮總開關、模型規則與 ACP 選項；關閉時走 Pi 原生壓縮",
+  "module.compression.settings.value.on": "開",
+  "module.compression.settings.value.off": "關",
+  "module.compression.acp.toolUnavailable": "ACP 壓縮功能目前未啟用或目前模型未路由至 ACP 模式。",
+  "module.compression.disabled.protected":
+    "模型壓縮已關閉，但本會話仍保留活動的私有壓縮狀態（{states}）：本次壓縮（{reason}）已取消，不會覆寫任何狀態。請重新啟用模型壓縮，或新建會話",
+
+  // ── 工單 02：Codex 官方能力檢測與管理引導 ──
+  "module.compression.source.codex-auto": "Codex 自動檢測",
+  "module.compression.codexManagement.label": "Codex 模式管理",
+  "module.compression.codexManagement.description":
+    "官方 OpenAI Responses / Codex OAuth 模型自動納入；中轉站與自訂模型可從已認證的模型清單加入",
+  "module.compression.codexManagement.value.autoOn": "{count} 個模型 · 自動檢測 開",
+  "module.compression.codexManagement.value.autoOff": "{count} 個模型 · 自動檢測 關",
+  "module.compression.codex.autoDetect.label": "Codex 自動檢測",
+  "module.compression.codex.autoDetect.description":
+    "開啟後，API 與地址同時命中官方 OpenAI Responses（api.openai.com/v1）或 Codex OAuth（chatgpt.com/backend-api）鏈路的模型自動進入 Codex；中轉站、非官方 host 與路徑變體一律不接管",
+  "module.compression.codex.panel.title": "Codex 模式管理",
+  "module.compression.codex.panel.empty": "尚未加入模型——官方 OpenAI / Codex 模型由自動檢測覆蓋",
+  "module.compression.codex.add": "+ 加入模型",
+  "module.compression.codex.addTitle": "加入模型：從已認證的模型目錄裡選擇",
+  "module.compression.codex.noAvailableModels":
+    "沒有找到已認證可用的模型：請先在 Pi 裡設定該 provider 的憑據（models.json 或登入），再回到本頁",
+  "module.compression.codex.authUnavailable":
+    "無法讀取 {provider} 的認證資訊（{detail}）：本次沒有加入模型。請先修好該 provider 的憑據再重試",
+  "module.compression.codex.capability.official-openai-responses": "官方 OpenAI Responses 鏈路",
+  "module.compression.codex.capability.official-codex-oauth": "官方 Codex OAuth 鏈路",
+  "module.compression.codex.capability.unsupported-api": "模型 API 不是 Responses 協議：不會自動檢測",
+  "module.compression.codex.capability.missing-base-url": "沒有宣告 baseUrl：不會自動檢測",
+  "module.compression.codex.capability.url-invalid": "baseUrl 無法解析：不會自動檢測",
+  "module.compression.codex.capability.non-official-host": "host 不是官方網域（中轉或第三方）：不會自動檢測",
+  "module.compression.codex.capability.unexpected-path": "路徑不是官方路徑：不會自動檢測",
+  "module.compression.codex.capability.auth-unavailable": "認證資訊不可用",
+  // ── 工單 03：ACP 推薦預設與進階管理頁 ──
+  "module.compression.acpPreset.label": "ACP 預設",
+  "module.compression.acpPreset.description":
+    "推薦預設直接使用調校好的 ACP 參數；自訂進階使用自己的草稿，進階調參項只在該檔展開",
+  "module.compression.acpPreset.value.recommended": "推薦預設（開箱即用）",
+  "module.compression.acpPreset.value.custom": "自訂進階",
+  "module.compression.acpAdvanced.value.overview": "{preset} · 自動偵測 {state}",
+
+  // ── 工单 05：当前会话压缩覆盖与五级优先级 ──
+  "module.compression.source.session-override": "當前會話覆蓋",
+  "module.compression.sessionOverride.label": "當前會話壓縮模式",
+  "module.compression.sessionOverride.description":
+    "只改變當前會話的壓縮模式：僅保存在記憶體裡，不寫入全域設定；下一個會話邊界自動回到跟隨全域",
+  "module.compression.sessionOverride.value.follow-global": "跟隨全域",
+  "module.compression.sessionOverride.value.native": "系統預設 (Pi 原生)",
+  "module.compression.sessionOverride.value.acp": "ACP 壓縮",
+  "module.compression.sessionOverride.value.codex": "Codex 模式",
+  "module.compression.sessionOverride.codexUnavailable":
+    "當前模型不具備 Codex Responses 資格（{reason}）：會話模式保持 {previous}",
+  "module.compression.sessionOverride.noModel":
+    "當前會話還沒有綁定模型，無法校驗 Codex 資格：會話模式保持 {previous}",
+
+  // ── 工单 06：跨模式保护与 fallback 清除总线 ──
+  "module.compression.codex.capabilityRecheck":
+    "Codex 接管資格的運行期複核未通過（{detail}）：本次不接管 Codex，繼續用 Pi 原生壓縮",
+
+  // ── 工单 07：旧配置平滑迁移 ──
+  "module.compression.config.legacyCodexDefaultMode":
+    "壓縮設定相容提示：{field} 仍是舊值 codex，它已不再是全域預設模式，本次按 {fallback} 讀取。要繼續使用 Codex 壓縮，請在「Codex 模式管理」裡為對應的 GPT 模型新增顯式規則；在設定頁確認一次「全域預設模式」後這條提示不再出現",
 };
 
 /** 本键表：全部模块键表在 modules/index.ts 聚合登记 */
@@ -964,6 +1150,7 @@ const PROBLEM_KEYS: Record<CompressionConfigProblem["kind"], CompressionMessageK
   badCount: "module.compression.config.badCount",
   badPositiveInt: "module.compression.config.badPositiveInt",
   badArray: "module.compression.config.badArray",
+  legacyCodexDefaultMode: "module.compression.config.legacyCodexDefaultMode",
 };
 
 /** 配置问题 → 三语文案（模块解析器只产出结构化问题，翻译在这里做） */
@@ -977,6 +1164,8 @@ export function formatCompressionProblem(problem: CompressionConfigProblem, t: T
   if (problem.kind === "badBoolean" || problem.kind === "badNumber") {
     vars.fallback = String(problem.fallback);
   }
+  // 工单 07 的迁移提示要把「现在按什么读」写进文案（旧值不是错误，而是被迁移过的事实）
+  if (problem.kind === "legacyCodexDefaultMode") vars.fallback = problem.fallback;
   return t(PROBLEM_KEYS[problem.kind], vars);
 }
 
@@ -1023,6 +1212,16 @@ export function codexProtocolLabel(protocol: CodexProtocol | undefined, t: Trans
 /** ACP 覆盖字段显示名（编辑器行标签） */
 export function acpFieldLabel(field: AcpCompressField, t: Translator): string {
   return t(`module.compression.acpSettings.field.${field}.label`);
+}
+
+/** ACP 预设显示名（工单 03；菜单值位与选择器共用） */
+export function acpPresetLabel(preset: AcpPreset, t: Translator): string {
+  return t(`module.compression.acpPreset.value.${preset}`);
+}
+
+/** 布尔开关显示名（工单 03 的自动检测行 / 入口值位）：开 / 关 */
+export function acpToggleLabel(value: boolean, t: Translator): string {
+  return t(value ? "module.compression.acpSettings.on" : "module.compression.acpSettings.off");
 }
 
 /** prompt pack 显示名 */

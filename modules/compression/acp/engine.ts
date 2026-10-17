@@ -19,7 +19,8 @@
 // - 保护策略（工单 09）：内核 Config 的保护字段经 AcpProtectionPolicy 注入
 //   （模块内默认值，工单 10 的配置级联接缝）；
 // - sidecar 生命周期：beginSession 读盘（缺失/损坏/与日志不一致走会话日志
-//   重建，见 ensureSessionState），endSession 释放运行态；
+//   重建，见 ensureSessionState），endSession 先把内存槽原子落盘再释放运行态
+//   （工单 06：会话结束时的状态不靠「每次变更都写过盘」的巧合，任何模式下都落盘）；
 // - 失败语义：投影或落盘失败进 error 诊断，绝不静默回退 Pi 原生压缩（压缩
 //   坐标系唯一性归 owner/scheduler 层保证）。
 //
@@ -83,7 +84,8 @@ import {
   acpWriteRestoreFile,
 } from "./restore.ts";
 import { acpFormatSearchResults, acpRunSearch } from "./search.ts";
-import { AcpSidecarStore } from "./sidecar.ts";
+import { AcpSidecarStore, acpSidecarExists } from "./sidecar.ts";
+import { isAcpToolUnavailableDetails } from "./tool-guard.ts";
 
 
 /** 引擎向外发诊断的通道（mod.ts 注入：带事件现场的 ctx，直接 ui.notify + 按键去重） */
@@ -99,6 +101,8 @@ interface AcpSessionSlot {
   state?: CompressionState;
   failure?: { kind: "newer-schema" | "rebuild-failed"; detail?: string };
   nudgeTurnKey?: string;
+  /** 最近一次成功落盘的状态签名（工单 06 会话末补写用）：与当前状态相同即磁盘已是最新 */
+  persistedSignature?: string;
 }
 
 /** 压缩工具参数（模型侧形状；工具 schema 在 compress-tool.ts） */
@@ -113,6 +117,9 @@ export interface AcpCompressOutcome {
   readonly text: string;
   readonly blocksCreated: number;
   readonly tokensCompressed: number;
+  /** 是否真的建了块并完成 sidecar 原子落盘（工单 06 的成功接缝：只有它为 true
+   *  才算一次「ACP 压缩真正成功」，工具据它清除降级标记） */
+  readonly persisted: boolean;
 }
 
 /** decompress 工具参数（模型侧形状；工具 schema 在 decompress-tool.ts） */
@@ -192,15 +199,23 @@ export function acpHostSupported(ctx: ExtensionContext): boolean {
   return typeof source.buildContextEntries === "function";
 }
 
-/** 会话日志里是否留有成功的 compress 调用（sidecar 重建的前置判断） */
+/**
+ * 会话日志里是否留有成功的 compress 调用（sidecar 重建的前置判断）。
+ * 工单 06：宿主 0.85.x 不读 AgentToolResult.isError，被拒的预注册工具调用会以
+ * 成功的工具结果落进日志；那类条目带的 details.toolUnavailable 才是拒绝标记，
+ * 不能当成压缩历史。
+ */
 export function acpHasCompressHistory(entries: readonly SessionEntry[]): boolean {
   for (const entry of entries) {
     if (entry.type !== "message") continue;
-    const message = (entry as { message?: { role?: string; toolName?: string; isError?: boolean } }).message;
+    const message = (entry as {
+      message?: { role?: string; toolName?: string; isError?: boolean; details?: unknown };
+    }).message;
     if (
       message?.role === "toolResult" &&
       message.toolName === "compress" &&
-      message.isError !== true
+      message.isError !== true &&
+      !isAcpToolUnavailableDetails(message.details)
     ) {
       return true;
     }
@@ -259,6 +274,11 @@ function formatPercent(ratio: number): string {
   return `${Number((ratio * 100).toPrecision(6))}%`;
 }
 
+/** 状态内容签名（工单 06 的「磁盘是否已是最新」判定）：与落盘载荷同源，块内容变化即变 */
+function stateSignature(state: CompressionState): string {
+  return JSON.stringify(state);
+}
+
 /** 会话消息的粗略 token 估计（与内核同源的 CJK 感知计数器） */
 function estimateTokensOf(messages: readonly CoreMessage[]): number {
   let total = 0;
@@ -292,8 +312,8 @@ export interface AcpEngineOptions {
 export interface AcpCompressionEngine {
   /** 会话开始：绑定/加载 sidecar（缺失或损坏时按会话日志重建，见实现） */
   beginSession(ctx: ExtensionContext): Promise<void>;
-  /** 会话结束：释放运行态（磁盘 sidecar 保留） */
-  endSession(ctx: ExtensionContext): void;
+  /** 会话结束：先把内存态原子落盘，再释放运行态（磁盘 sidecar 保留） */
+  endSession(ctx: ExtensionContext): Promise<void>;
   /** context 事件：ACP 拥有当前会话时生成请求视图；否则原样放行 */
   handleContext(event: ContextEvent, ctx: ExtensionContext, active: boolean): Promise<{ messages: AgentMessage[] } | undefined>;
   /** compress 工具执行：范围+摘要 → 压缩块 + 引用登记 + sidecar 落盘 */
@@ -386,6 +406,8 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
           );
         }
         slot.state = loaded.state;
+        // 从盘装载的状态与磁盘一致：会话末不必再写一遍（也不会盖掉后续的损坏现场）
+        slot.persistedSignature = stateSignature(loaded.state);
         return slot;
       }
       // 分支状态校验未过：sidecar 的块不属于这份日志（拷贝/回退），重建
@@ -428,6 +450,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
           slot.state = rebuilt.state;
           try {
             await store.save(rebuilt.state, sessionFile, sessionId, acpConfigFingerprint(runtimeFor(ctx)));
+            slot.persistedSignature = stateSignature(rebuilt.state);
           } catch (error) {
             diagnostics(
               "sidecar-rebuild-save-failed",
@@ -473,10 +496,13 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
     return slot;
   }
 
-  async function persistState(state: CompressionState, ctx: ExtensionContext): Promise<void> {
+  async function persistState(state: CompressionState, ctx: ExtensionContext): Promise<boolean> {
     const { sessionId, sessionFile } = sessionRefOf(ctx);
     try {
       await store.save(state, sessionFile, sessionId, acpConfigFingerprint(runtimeFor(ctx)));
+      const slot = slots.get(keyOf(ctx));
+      if (slot) slot.persistedSignature = stateSignature(state);
+      return true;
     } catch (error) {
       // commit 阶段失败：报告持久化错误；不回滚内存状态（下一次请求继续用，
       // sidecar 落盘失败会在下一次保存重试），也绝不再启动另一种压缩
@@ -486,6 +512,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
         t("module.compression.acp.saveFailed", { error: describeError(error) }),
         ctx,
       );
+      return false;
     }
   }
 
@@ -629,9 +656,10 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
         state: turn.state,
         config,
       });
+      let persisted = false;
       if (applied.result.blocksCreated > 0) {
         slot.state = applied.state;
-        await persistState(applied.state, ctx);
+        persisted = await persistState(applied.state, ctx);
       }
       const changed = applied.state.blocks.filter((b) => beforeRunIds.get(b.blockId) !== b.runId);
       const text = formatCompressPanel(applied.result, changed, applied.state);
@@ -639,6 +667,8 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
         text,
         blocksCreated: applied.result.blocksCreated,
         tokensCompressed: applied.result.tokensCompressed,
+        // 工单 06：只有「建了块 + sidecar 原子落盘完成」才算 ACP 压缩真正成功
+        persisted,
       };
     } finally {
       release();
@@ -875,11 +905,27 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
         release();
       }
     },
-    endSession(ctx: ExtensionContext): void {
+    async endSession(ctx: ExtensionContext): Promise<void> {
       const { sessionId, sessionFile } = sessionRefOf(ctx);
       const key = keyOf(ctx);
-      slots.delete(key);
-      store.release(sessionFile, sessionId);
+      const slot = slots.get(key);
+      const state = slot?.state;
+      try {
+        // 工单 06：会话结束把「内存里有、磁盘上没有」的私态补写回来，再释放运行态；
+        // 与当前处在哪种模式无关（中途关闭模块、切到 codex、覆盖切走都一样）。
+        // 三种情形不写：没有状态（加载失败：不去覆盖那份不可解释的文件）、
+        // 没有块（从未真正压缩，不凭空造一个空 sidecar）、
+        // 磁盘上已经是最新（重复写同样内容会把一次 sidecar 损坏的现场覆盖掉，
+        // 而那份现场正是日志重建路径要用的入口）。
+        if (state && slot && state.blocks.length > 0) {
+          const onDisk =
+            slot.persistedSignature === stateSignature(state) && (await acpSidecarExists(sessionFile));
+          if (!onDisk) await persistState(state, ctx);
+        }
+      } finally {
+        slots.delete(key);
+        store.release(sessionFile, sessionId);
+      }
     },
     handleContext,
     executeCompress,

@@ -16,6 +16,9 @@
 // - promptPack                 → 解析选择并携带（full=内核默认；lean 的工具描述与
 //   compress 提示节应用归工单 09/11 的工具/系统提示层，本接缝只负责选定）
 // - reasoning / stripImages*   → 原样携带（宿主侧投影/发送期策略，09/11 消费）
+// - 预设（工单 03）           → recommended 时上述 8 个字段在级联的 global 层被
+//   ACP_RECOMMENDED_CONFIG 覆盖（promptPack / prompts 保持用户配置，provider /
+//   model 级显式覆盖仍更深、优先于推荐值）
 //
 // 升档校验（emergency ≥ max）违反时两项都回退内核默认（0.75 / 0.95），问题以
 // AcpEscalationIssue 携带，由引擎诊断呈现（解析层不做静态检查，避免被更深层
@@ -29,6 +32,7 @@ import {
   type Prompts,
 } from "acp-kernel";
 import {
+  ACP_RECOMMENDED_CONFIG,
   EMPTY_ACP_ADVANCED_SETTINGS,
   type AcpAdvancedSettings,
   type AcpCompressOverrides,
@@ -111,6 +115,22 @@ function dropThresholds(merged: AcpCompressOverrides): AcpCompressOverrides {
 }
 
 /**
+ * 预设作用层（工单 03）：recommended 时推荐常量覆盖级联的 global 层。
+ *
+ * 取舍（锁定口径，测试覆盖）：
+ * - 只覆盖 ACP_RECOMMENDED_CONFIG 里的 8 个压缩参数；promptPack / prompts
+ *   不在推荐范围内，继续读用户全局草稿；
+ * - provider / model 级显式覆盖仍然更深，照旧优先于 preset 的 global 层——
+ *   用户为某家供应商/某个模型写下的参数不会被推荐值悄悄盖掉；
+ * - custom（或手工构造且未带 preset 的层）直接使用草稿，不作任何替换。
+ */
+function presetGlobalLayer(acp: AcpAdvancedSettings): AcpCompressOverrides {
+  const global = acp.global ?? {};
+  if (acp.preset !== "recommended") return global;
+  return { ...global, ...ACP_RECOMMENDED_CONFIG };
+}
+
+/**
  * 解析 ACP 运行时输入（对外主出口）：
  * 1. 按 provider/modelId 做三级级联逐字段合并（mergeAcpCompressOverrides）；
  * 2. 升档校验失败时把两个阈值都回退内核默认（其余字段不受影响）；
@@ -121,8 +141,9 @@ export function resolveAcpRuntimeConfig(
   acp: AcpAdvancedSettings,
   protection?: AcpProtectionPolicy,
 ): AcpResolvedRuntime {
+  const settings = acp ?? EMPTY_ACP_ADVANCED_SETTINGS;
   const merged = mergeAcpCompressOverrides(
-    acp ?? EMPTY_ACP_ADVANCED_SETTINGS,
+    { ...settings, global: presetGlobalLayer(settings) },
     identity.provider,
     identity.modelId,
   );

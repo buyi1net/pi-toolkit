@@ -1,10 +1,12 @@
-// ACP 高级设置编辑器（工单 10）：`modules.compression.acp` 的结构化编辑页。
+// ACP 管理页与高级编辑器（工单 10 的字段编辑 + 工单 03 的预设与管理页收编）：
+// `modules.compression.acp` 的结构化编辑页。
 //
 // 先例：modules/compression/rules-editor.ts 的自绘面板（数值/自由文本不属于
 // schema 控件，复杂对象走模块自己的编辑页——规格「菜单 schema 只放开关和有限
 // 枚举」）。页面结构（高级项按分组进二级页）：
-// - AcpSettingsPanel（根页）：自动分流阈值（数值编辑器）+ 全局压缩参数入口 +
-//   供应商与模型覆盖入口（选择器 → 供应商级页 → 模型级页）；
+// - AcpSettingsPanel（根页，工单 03 起是 ACP 管理页）：预设切换（推荐默认 /
+//   自定义进阶）+ ACP 自动检测开关与自动分流阈值；全局压缩参数与供应商/模型
+//   覆盖属于高级调参项，只在自定义进阶下展开；
 // - 层级页（global / provider / model 共用 AcpListPanel）：阈值 / 步长 / 近期
 //   保留走数值编辑器，prompt pack 走有限枚举选择器，工具保护 / 提示词覆写 /
 //   reasoning / 图片处理各进分组子页；provider 层多一行「模型覆盖」入口；
@@ -34,12 +36,15 @@ import { ChoicePicker } from "../../kit/menu/panels.ts";
 import type { MenuTheme } from "../../kit/menu/theme.ts";
 import type { ModuleConfigRecord } from "../../kit/module.ts";
 import {
+  ACP_PRESETS,
   ACP_PROMPT_OVERRIDE_KEYS,
   ACP_PROMPT_PACKS,
+  type AcpPreset,
 } from "./api.ts";
 import {
   acpAutoDetectThresholdPatch,
   acpOverrideFieldPatch,
+  acpPresetPatch,
   countAcpOverrideFields,
   formatAcpPercentFileValue,
   parseAcpCountUserInput,
@@ -54,9 +59,11 @@ import {
   acpFieldLabel,
   acpImagesValue,
   acpPercentValue,
+  acpPresetLabel,
   acpPromptPackLabel,
   acpPromptsValue,
   acpReasoningValue,
+  acpToggleLabel,
   acpToolsValue,
 } from "./messages/index.ts";
 import { discoverCompressionCandidates, type CompressionMenuRegistry } from "./rules-editor.ts";
@@ -449,15 +456,12 @@ export function acpModelCandidates(
   return [...models].sort((left, right) => left.localeCompare(right));
 }
 
-/** 根页入口行的值位（菜单行复用）：全默认 vs 全局 N 项 · M 家供应商 */
-export function acpAdvancedRowValue(section: Record<string, unknown>, t: Translator): string {
+/** 根页入口行的值位（菜单行复用；工单 03）：预设档位 · 自动检测状态 */
+export function acpManagementRowValue(section: Record<string, unknown>, t: Translator): string {
   const { settings } = readCompressionSettings(section);
-  const globalCount = countAcpOverrideFields(settings.acp.global);
-  const providerCount = Object.keys(settings.acp.providers).length;
-  if (globalCount === 0 && providerCount === 0) return t("module.compression.acpAdvanced.value.defaults");
-  return t("module.compression.acpAdvanced.value.custom", {
-    global: String(globalCount),
-    providers: String(providerCount),
+  return t("module.compression.acpAdvanced.value.overview", {
+    preset: acpPresetLabel(settings.acpPreset, t),
+    state: acpToggleLabel(settings.acpAutoDetect, t),
   });
 }
 
@@ -851,19 +855,67 @@ function modelsRow(
 }
 
 // ─────────────────────────────────────────────────────────────
-// 根页：ACP 高级设置（菜单入口的子页）
+// 根页：ACP 管理页（设置页入口的子页）
 // ─────────────────────────────────────────────────────────────
 
-/** 根页行 id（测试断言用） */
+/** 根页行 id（测试断言用）：预设 / 自动检测 / 阈值 / 全局参数 / 供应商覆盖 */
 export const ACP_SETTINGS_ROW_IDS = {
+  preset: "compression.acpPreset",
+  autoDetect: "compression.acpAutoDetect",
   threshold: "compression.acpAdvanced.threshold",
   global: "compression.acpAdvanced.global",
   providers: "compression.acpAdvanced.providers",
 } as const;
 
 /**
- * ACP 高级设置根页：自动分流阈值（数值编辑器）+ 全局压缩参数入口 +
- * 供应商与模型覆盖入口。Esc 回执菜单（值位文案 = acpAdvancedRowValue）。
+ * 预设行（工单 03）：推荐默认（开箱即用） / 自定义进阶。切到自定义时由
+ * acpPresetPatch 决定是否把推荐值填成草稿（草稿已有覆盖则原样保留）。
+ */
+function presetRow(api: AcpPanelApi): AcpRowHandle {
+  const label = api.t("module.compression.acpPreset.label");
+  const read = () => readCompressionSettings(api.getSection()).settings.acpPreset;
+  return {
+    id: ACP_SETTINGS_ROW_IDS.preset,
+    label,
+    value: () => acpPresetLabel(read(), api.t),
+    activate: () =>
+      openChoice(
+        api,
+        label,
+        ACP_PRESETS.map((preset) => ({ value: preset, label: acpPresetLabel(preset, api.t) })),
+        (value) => acpPresetPatch(value as AcpPreset, readAcpOverridesAt(api.getSection(), {})),
+      ),
+  };
+}
+
+/**
+ * 自动检测开关行（工单 03）：属于触发路由层，既不被预设覆盖，也不归属高级调参页，
+ * 两档预设下都保持可见可改。
+ */
+function autoDetectRow(api: AcpPanelApi): AcpRowHandle {
+  const label = api.t("module.compression.acpAutoDetect.label");
+  const read = () => readCompressionSettings(api.getSection()).settings.acpAutoDetect;
+  return {
+    id: ACP_SETTINGS_ROW_IDS.autoDetect,
+    label,
+    value: () => acpToggleLabel(read(), api.t),
+    activate: () =>
+      openChoice(
+        api,
+        label,
+        [
+          { value: "on", label: acpToggleLabel(true, api.t) },
+          { value: "off", label: acpToggleLabel(false, api.t) },
+        ],
+        (value) => ({ acpAutoDetect: value === "on" }),
+      ),
+  };
+}
+
+/**
+ * ACP 管理页根行（工单 03）：预设档位 + 自动检测开关 + 自动分流阈值始终可见；
+ * 全局参数与供应商覆盖是高级调参项，只在自定义进阶下展开。
+ * Esc 回执菜单（值位文案 = acpManagementRowValue）。
  */
 export class AcpSettingsPanel extends AcpListPanel {
   constructor(options: AcpSettingsPanelOptions) {
@@ -871,7 +923,7 @@ export class AcpSettingsPanel extends AcpListPanel {
       titleKey: "module.compression.acpSettings.title",
       hintKey: "module.compression.acpSettings.hint",
       rows: (api) => buildRootRows(options, api),
-      onEscape: (api) => options.onDone(acpAdvancedRowValue(api.getSection(), api.t)),
+      onEscape: (api) => options.onDone(acpManagementRowValue(api.getSection(), api.t)),
     });
   }
 }
@@ -935,5 +987,11 @@ function buildRootRows(options: AcpSettingsPanelOptions, api: AcpPanelApi): AcpR
       api.requestRender();
     },
   };
-  return [thresholdRow, globalRow, providersRow];
+  const rows: AcpRowHandle[] = [presetRow(api), autoDetectRow(api), thresholdRow];
+  // 高级调参项只在自定义进阶下展开（推荐默认下那 8 个压缩参数由推荐常量接管，
+  // 切换档位后行集即时重建）
+  if (readCompressionSettings(api.getSection()).settings.acpPreset === "custom") {
+    rows.push(globalRow, providersRow);
+  }
+  return rows;
 }

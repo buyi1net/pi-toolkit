@@ -203,6 +203,21 @@ export class AcpSidecarStore {
 }
 
 /**
+ * sidecar 文件是否存在（工单 06 会话末补写判定）：无会话文件（内存会话）视为不存在。
+ * 只看存在性，不读内容——内容是否最新由上层的状态签名判定。
+ */
+export async function acpSidecarExists(sessionFile: string | undefined): Promise<boolean> {
+  const file = acpSidecarPathFor(sessionFile);
+  if (!file) return false;
+  try {
+    await fs.access(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 只读探测 sidecar 的压缩块数（工单 11 跨模式切换保护用）：文件缺失、损坏、
  * 版本不可解释或无会话文件时返回 undefined（不构成「活动私有状态」——损坏的
  * sidecar 由 ACP 自己的重建/失败路径处理，不阻断其它模式的压缩决策）。

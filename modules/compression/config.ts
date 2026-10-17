@@ -14,8 +14,11 @@
 import type { ModuleConfigRecord, ModuleConfigValue } from "../../kit/module.ts";
 import {
   ACP_COMPRESS_FIELDS,
+  ACP_PRESETS,
+  ACP_PRESET_VERSION,
   ACP_PROMPT_OVERRIDE_KEYS,
   ACP_PROMPT_PACKS,
+  ACP_RECOMMENDED_CONFIG,
   CODEX_PROTOCOLS,
   CODEX_UNSUPPORTED_POLICIES,
   COMPRESSION_MODES,
@@ -23,12 +26,14 @@ import {
   DEFAULT_ACP_AUTO_DETECT_ENABLED,
   DEFAULT_ACP_CONTEXT_WINDOW_THRESHOLD,
   DEFAULT_CODEX_PROTOCOL,
+  DEFAULT_COMPRESSION_MODES,
   DEFAULT_COMPRESSION_SETTINGS,
   EMPTY_ACP_ADVANCED_SETTINGS,
   NATIVE_TRIGGER_POLICIES,
   type AcpAdvancedSettings,
   type AcpCompressField,
   type AcpCompressOverrides,
+  type AcpPreset,
   type AcpPromptOverrideKey,
   type AcpPromptPack,
   type AcpProviderOverrides,
@@ -36,6 +41,7 @@ import {
   type CompressionMode,
   type CompressionModelRule,
   type CompressionSettings,
+  type DefaultCompressionMode,
   type NativeTriggerPolicy,
 } from "./api.ts";
 
@@ -707,14 +713,111 @@ export function acpAutoDetectThresholdPatch(value: number): ModuleConfigRecord {
   return { acpAutoDetectThreshold: value };
 }
 
+// ─────────────────────────────────────────────────────────────
+// 工单 03：ACP 推荐预设（acpPreset / acpPresetVersion）
+//
+// 语义（规格「ACP 预设」）：
+// - recommended：运行时那 8 个压缩参数强制取 ACP_RECOMMENDED_CONFIG（落点在
+//   acp/config.ts 的级联）；promptPack / prompts 不在推荐范围内，保持用户配置；
+// - custom：使用用户草稿（acp.global），草稿为空时保持内核默认；
+// - recommended → custom：草稿完全为空时把推荐值填成草稿落盘；
+// - custom → recommended：草稿原样保留在磁盘，但不参与当前运行时生效；
+// - acpPresetVersion 是草稿播种时的推荐版本指纹：只落盘记录，不参与运行时判定
+//   （recommended 始终按本构建常量解释）；版本变化绝不覆写已有草稿（草稿是
+//   用户自己调过的值）。
+// provider / model 级显式覆盖仍按既有三级级联优先于 preset 的 global 层（见
+// acp/config.ts 的 presetGlobalLayer）。
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * 读 acpPreset（独立解析函数，追加导出）：缺省 recommended；非法值逐项报告并回退。
+ * 该字段是顶层字段，写错只回退它自己，不触发整节回退（与 schemaVersion 闸不同）。
+ */
+export function parseAcpPreset(
+  section: Record<string, unknown>,
+  problems: CompressionConfigProblem[],
+): AcpPreset {
+  return readEnumField<AcpPreset>("acpPreset", ACP_PRESETS, section, problems);
+}
+
+/**
+ * 读 acpPresetVersion（独立解析函数，追加导出）：缺省当前推荐版本；非正整数报告
+ * 并回退当前版本。高于当前版本不报错也不回退——旧构建仍可解释这份配置，
+ * 推荐值按本构建的常量解释，草稿不被覆写（向前兼容）。
+ */
+export function parseAcpPresetVersion(
+  section: Record<string, unknown>,
+  problems: CompressionConfigProblem[],
+): number {
+  return readPositiveIntField("acpPresetVersion", section, problems);
+}
+
+/** 推荐配置的磁盘草稿形状（percent 写百分串，与编辑器的落盘格式一致；数组/子对象复制一份，不与冻结常量共享引用） */
+function recommendedDraftRecord(): ModuleConfigRecord {
+  const recommended = ACP_RECOMMENDED_CONFIG;
+  return {
+    maxContextLimit: formatAcpPercentFileValue(recommended.maxContextLimit),
+    emergencyThresholdPercent: formatAcpPercentFileValue(recommended.emergencyThresholdPercent),
+    nudgeGrowthTokens: recommended.nudgeGrowthTokens,
+    preserveRecentMessages: recommended.preserveRecentMessages,
+    protectedTools: [...recommended.protectedTools],
+    reasoning: { ...recommended.reasoning },
+    stripImages: recommended.stripImages,
+    stripImagesKeepRecent: recommended.stripImagesKeepRecent,
+  };
+}
+
+/**
+ * 预设切换的写盘补丁：两档都带上 acpPreset 与当前推荐指纹。
+ * recommended → custom 且草稿完全为空时，把推荐配置填成草稿（草稿已有任何覆盖则
+ * 原样保留，切回去再切回来不会丢用户调过的值）。
+ */
+export function acpPresetPatch(target: AcpPreset, draft: AcpCompressOverrides): ModuleConfigRecord {
+  const stamp: ModuleConfigRecord = { acpPreset: target, acpPresetVersion: ACP_PRESET_VERSION };
+  if (target === "recommended") return stamp;
+  if (countAcpOverrideFields(draft) > 0) return stamp;
+  return { ...stamp, acp: recommendedDraftRecord() };
+}
+
+// ── 工单 07：旧配置平滑迁移 ──
+
+/**
+ * 全局默认压缩模式的两值枚举读取（工单 05 收窄 + 工单 07 迁移提示）。
+ * `defaultMode: "codex"` 在上一版里是合法取值，现在只能经模型规则或当前会话覆盖进入；
+ * 遇到旧值时映射为 native 并报**专属迁移问题**（不是普通非法枚举）：用户需要知道
+ * 策略被改了、以及怎么把 Codex 找回来（为 GPT 模型加显式规则）。
+ */
+export function readDefaultCompressionMode(
+  section: Record<string, unknown>,
+  problems: CompressionConfigProblem[],
+): DefaultCompressionMode {
+  if (section.defaultMode === "codex") {
+    problems.push({
+      kind: "legacyCodexDefaultMode",
+      field: "modules.compression.defaultMode",
+      value: "codex",
+      fallback: "native",
+    });
+    return "native";
+  }
+  return readEnumField<DefaultCompressionMode>(
+    "defaultMode",
+    DEFAULT_COMPRESSION_MODES,
+    section,
+    problems,
+  );
+}
+
 /**
  * 把 `modules.compression` 节规范化成 CompressionSettings。
  *
  * 版本闸在前：schemaVersion 缺省按当前版本解释；不是正整数、或高于当前支持的版本时，
  * 整节视为无法安全解释，报告问题并全量回退默认（用户写入的规则不会被半解释）。
  * 版本可解释时逐字段校验：defaultMode / nativeTrigger / acpAutoDetect /
- * acpAutoDetectThreshold 非法各自报告并回退默认，modelRules 逐条校验剔除坏条目，
- * acp 高级配置逐字段校验（非法字段剔除，不阻断模型规则），
+ * codexAutoDetect / acpAutoDetectThreshold / acpPreset / acpPresetVersion 非法各自
+ * 报告并回退默认（旧版合法的 `defaultMode: "codex"` 走专属迁移提示，见
+ * readDefaultCompressionMode），modelRules 逐条校验剔除坏条目，acp 高级配置逐字段校验（非法字段
+ * 剔除，不阻断模型规则），
  * 单个字段写错不拖垮其余字段。
  */
 export function readCompressionSettings(
@@ -757,12 +860,7 @@ export function readCompressionSettings(
     }
   }
 
-  const defaultMode = readEnumField<CompressionMode>(
-    "defaultMode",
-    COMPRESSION_MODES,
-    section,
-    problems,
-  );
+  const defaultMode = readDefaultCompressionMode(section, problems);
   const nativeTrigger = readEnumField<NativeTriggerPolicy>(
     "nativeTrigger",
     NATIVE_TRIGGER_POLICIES,
@@ -770,9 +868,13 @@ export function readCompressionSettings(
     problems,
   );
   const acpAutoDetect = readBooleanField("acpAutoDetect", section, problems);
+  const codexAutoDetect = readBooleanField("codexAutoDetect", section, problems);
   const acpAutoDetectThreshold = readPositiveIntField("acpAutoDetectThreshold", section, problems);
+  const acpPreset = parseAcpPreset(section, problems);
+  const acpPresetVersion = parseAcpPresetVersion(section, problems);
   const modelRules = parseModelRules(section.modelRules, problems);
-  const acp = parseAcpAdvanced(section.acp, problems);
+  // 预设随解析结果带入运行时段（acp/config.ts 把推荐值作用在级联的 global 层）
+  const acp: AcpAdvancedSettings = { ...parseAcpAdvanced(section.acp, problems), preset: acpPreset };
 
   return {
     settings: {
@@ -780,8 +882,11 @@ export function readCompressionSettings(
       defaultMode,
       nativeTrigger,
       acpAutoDetect,
+      codexAutoDetect,
       acpAutoDetectThreshold,
       modelRules,
+      acpPreset,
+      acpPresetVersion,
       acp,
     },
     problems,

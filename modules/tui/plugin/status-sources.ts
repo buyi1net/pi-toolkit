@@ -16,7 +16,7 @@ import type { IconGlyphs } from "../renderer/icons.ts";
 // 工单 11：各分组的数据来自 status.* / providers.usage 句柄（类型从模块 api 面取），
 // 段位设置改为每帧读取（配置改动后下一次重绘即生效）。
 
-/** 会话源：本轮计时器与会话遥测（token/cache、上下文用量、自动压缩）。 */
+/** 会话源：本轮计时器与会话遥测（token/cache、上下文用量、压缩状态标签）。 */
 export interface SessionStatusSource {
 	getTimer?: () => TurnTimerSnapshot | undefined;
 	getSessionStatus?: () => SessionStatusSnapshot | undefined;
@@ -24,7 +24,9 @@ export interface SessionStatusSource {
 	getSessionId?: () => string | null;
 	getContextUsage?: () => ContextUsage | undefined;
 	getContextWindow?: () => number | undefined;
-	getAutoCompactionEnabled?: () => boolean | undefined;
+	/** 压缩状态标签（compression.status 句柄）：false = 完整形态，true = 极窄终端紧凑形态；
+	 *  句柄未装配或 disabled / unavailable 时返回空串（不显示压缩标签） */
+	getCompressionLabel?: (compact: boolean) => string;
 }
 
 /** 供应商源：用量快照查询；刷新请求由装配层接给控制器，不进视图。 */

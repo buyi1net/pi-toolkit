@@ -6,9 +6,10 @@
 // （MIT，来源登记见 ../UPSTREAM.md）。提取与适配：
 // - 上游的「路由判定 + 远程请求 + checkpoint 构造 + 回放」主干保留；路由
 //   判定不再看 model.api / enabled 开关（上游 resolveCompactionRoute），而是
-//   由策略解析的 provider/model 白名单先行筛选（本 owner 只处理
-//   mode=codex 且 source=explicit 的解析结果）——同 provider 的
-//   openai-responses 标记不构成接管资格；
+//   由策略解析的 provider/model 白名单先行筛选（本 owner 只处理 mode=codex 且
+//   source 为 explicit / codex-auto / session-override 的解析结果——session-override
+//   是用户在会话里就地选定的 Codex，已过资格校验）——同 provider 的
+//   openai-responses 标记不构成接管资格（工单 02：自动检测只看官方地址口径）；
 // - 上游的 OAuth 拒绝路由暂停（rejection-state）、checkpoint recovery
 //   （checkpoint-recovery 的 provider.stream 摘要恢复）、context-management
 //   的 continuation 编排归工单 05/06/07；本工单的失败回退按规格保守处理：
@@ -33,8 +34,9 @@ import type {
 import { buildSessionContext, convertToLlm } from "@earendil-works/pi-coding-agent";
 import type { Translator } from "../../../i18n/index.ts";
 import type { ModuleConfigRecord } from "../../../kit/module.ts";
-import type { CodexProtocol, CodexUnsupportedPolicy } from "../api.ts";
+import type { CodexProtocol, CodexUnsupportedPolicy, SessionCompressionOverride } from "../api.ts";
 import { readCompressionSettings } from "../config.ts";
+import type { CompressionFallbackLedger } from "../fallback.ts";
 import { codexProtocolLabel } from "../messages/index.ts";
 import { modelIdentityFromModel } from "../rules-editor.ts";
 import type { CompactHandlerResult, CompactOwnerModule } from "../scheduler.ts";
@@ -72,6 +74,7 @@ import {
 } from "./checkpoint.ts";
 import { keptMessagesAfterCompaction, projectSessionCheckpointContext } from "./checkpoint-projection.ts";
 import { CodexOAuthRejectionError, CodexRoutePausedError } from "./compaction-failure.ts";
+import { readModelCodexCapability } from "./capability.ts";
 import { preflightCodexCompaction, resolveExpectedProfile, type CodexPreflightReason } from "./preflight.ts";
 import { hasCheckpointMarker, rewriteCheckpointMarker } from "./protocol.ts";
 
@@ -117,6 +120,11 @@ export interface CodexOwnerModule extends CompactOwnerModule {
 export interface CodexOwnerOptions {
   readonly t: Translator;
   readonly getConfig: () => ModuleConfigRecord;
+  /** 当前会话覆盖读口（工单 05；未注入 = 永不覆盖，完全按配置解析） */
+  readonly readSessionOverride?: () => SessionCompressionOverride | undefined;
+  /** 降级记账接缝（工单 06）：运行期复核不通过时记 fallbackFrom=codex，
+   *  finalize 成功时幂等清除；未注入 = 不记账（独立装载 / 测试不需要状态栏） */
+  readonly fallback?: CompressionFallbackLedger;
   /** 协议适配器表（工单 05/06/07 接入；本构建为空 = 协议不可用，preflight 拦截） */
   readonly protocolAdapters: CodexProtocolAdapterMap;
   /** 工具目录接缝（压缩请求的 tools 视图；测试与独立装载可缺席） */
@@ -133,6 +141,17 @@ export interface CodexOwnerOptions {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Codex owner 认可的解析来源（工单 02 的白名单判定）：显式规则命中、官方 OpenAI
+ * Responses / Codex OAuth 链路的自动检测，或用户在会话里就地选定的 Codex 覆盖
+ * （工单 05：已过资格校验，是显式选择，不是默认策略）。默认策略与 ACP 自动检测都
+ * 不算白名单（默认策略选 codex 时按未白名单处理，只提示不改写）。投影接缝与压缩
+ * 事件共用这一处判定，避免两条路径对同一会话给出不同结论。
+ */
+function codexOwnedSource(source: CompressionStrategyResolution["source"]): boolean {
+  return source === "explicit" || source === "codex-auto" || source === "session-override";
 }
 
 /** 工单 05/06/07 适配器消费的远程请求超时/重试默认值（上游 settings 同款基线） */
@@ -169,8 +188,12 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
   ): { model: NonNullable<ExtensionContext["model"]>; resolution: CompressionStrategyResolution } | undefined {
     if (!ctx.model) return undefined;
     const { settings } = readCompressionSettings(options.getConfig());
-    const resolution = resolveCompressionStrategy(modelIdentityFromModel(ctx.model), settings);
-    if (resolution.mode !== "codex" || resolution.source !== "explicit") return undefined;
+    const resolution = resolveCompressionStrategy(
+      modelIdentityFromModel(ctx.model),
+      settings,
+      options.readSessionOverride?.(),
+    );
+    if (resolution.mode !== "codex" || !codexOwnedSource(resolution.source)) return undefined;
     return { model: ctx.model, resolution };
   }
 
@@ -272,11 +295,42 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
         policy,
       );
     }
-    // 白名单防线：codex 只对显式规则命中生效（默认策略/自动检测不算白名单）
-    if (resolution.source !== "explicit") {
+    // 白名单防线：codex 只对显式规则命中、官方能力自动检测或当前会话覆盖生效
+    // （默认策略不算白名单）
+    if (!codexOwnedSource(resolution.source)) {
       notifyNotWhitelistedOnce(ctx);
       record("resolve", "fell-back-native", "not-whitelisted");
       return {};
+    }
+
+    // ── preflight（工单 06 挂账一）：codex-auto 与会话覆盖的接管资格运行期复核。
+    // 策略层（strategy.ts）是纯函数，只看得到模型目录里的 baseUrl；「模型声明官方
+    // 地址、auth 实际指向中转」只有在这里用真实 getApiKeyAndHeaders 才看得出来。
+    // 显式规则不参与复核：那正是用户为自建 / 中转端点主动开的口子。
+    // 复核不通过就不接管：真的交回 Pi 原生时才记降级（来源 + 机读原因）；取消并
+    // 保留私态的分支（已有 checkpoint / 严格报错）原生根本没跑，不能标 [fallback]。
+    if (resolution.source === "codex-auto" || resolution.source === "session-override") {
+      const capability = await readModelCodexCapability(ctx.modelRegistry, {
+        ...model,
+        api: model.api ?? "",
+        baseUrl: model.baseUrl ?? "",
+      });
+      if (!capability.capable) {
+        const result = failBeforeCommit(
+          ctx,
+          "preflight",
+          capability.reason,
+          t("module.compression.codex.capabilityRecheck", {
+            detail: t(`module.compression.codex.capability.${capability.reason}`),
+          }),
+          claim,
+          policy,
+        );
+        if (result.cancel !== true) {
+          options.fallback?.record({ from: "codex", reason: capability.reason });
+        }
+        return result;
+      }
     }
 
     // ── preflight：确定性能力判断（不发请求）
@@ -481,7 +535,9 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
       // ── event result：把 compaction 交给调度器 → Pi（details 随 entry 原子落盘；
       // 该阶段的失败模式由调度器的异常兜底覆盖——owner 抛错时空结果交回 Pi 并进诊断）。
       // ── finalize：成功路径无通知（状态行在 finally 清除），诊断记录最终态。
+      // 工单 06：Codex 压缩真正成功即清降级（幂等；无降级记录时不递增 revision）
       record("finalize", "succeeded", details.checkpointId);
+      options.fallback?.clear();
       return { compaction };
     } catch (error) {
       if (protocol === "context-management" && (event.signal.aborted || (error instanceof DOMException && error.name === "AbortError"))) {

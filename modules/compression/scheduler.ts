@@ -11,6 +11,9 @@
 //   reason 全部空结果交回 Pi；manual 触发策略下 manual 交回 Pi、threshold 与
 //   overflow 返回取消（取消后不写入任何 summary，诊断告知需手动 /compact 或新建
 //   会话，不是故障）；
+// - 模块关闭（enabled=false，工单 01）：调度整体旁路——无私态的会话放行 Pi
+//   原生压缩；探测到活动私态时只取消本次压缩并警告（工单 06 把两条探测的
+//   措辞与去重收口在本文件）；
 // - codex / acp owner（工单 04/08）注入后接管对应模式；
 // - 跨模式切换保护（工单 11）：native 放行前检查分支上的 Codex checkpoint 声明
 //   与 ACP sidecar 活动状态（探测口注入，磁盘兜底），发现外来私有状态时取消本次
@@ -32,8 +35,8 @@ import type {
   SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
 import type { Translator } from "../../i18n/index.ts";
-import type { ModuleConfigRecord } from "../../kit/module.ts";
-import type { CompressionMode, NativeTriggerPolicy } from "./api.ts";
+import { ENABLED_FIELD, type ModuleConfigRecord } from "../../kit/module.ts";
+import type { CompressionMode, NativeTriggerPolicy, SessionCompressionOverride } from "./api.ts";
 import { readCompressionSettings } from "./config.ts";
 import {
   foreignCheckpointIdentity,
@@ -163,6 +166,8 @@ export interface CompressionSchedulerOptions {
   readonly t: Translator;
   /** 读本模块配置节（mod.ts 注入 context.getConfig；每次压缩准备开始时重读） */
   readonly getConfig: () => ModuleConfigRecord;
+  /** 当前会话覆盖读口（工单 05；未注入 = 永不覆盖，完全按配置解析） */
+  readonly readSessionOverride?: () => SessionCompressionOverride | undefined;
   /** 工单 04/08 注入的 codex / acp owner（native 内建，注入会被忽略） */
   readonly owners?: readonly CompactOwnerModule[];
   /** ACP 私有状态探测（工单 11 跨模式切换保护）：返回本会话当前活动的 ACP
@@ -216,7 +221,16 @@ export function createCompressionScheduler(
   function resolveCurrent(ctx: ExtensionContext): CompressionStrategyResolution | undefined {
     if (!ctx.model) return undefined;
     const { settings } = readCompressionSettings(options.getConfig());
-    return resolveCompressionStrategy(modelIdentityFromModel(ctx.model), settings);
+    return resolveCompressionStrategy(
+      modelIdentityFromModel(ctx.model),
+      settings,
+      options.readSessionOverride?.(),
+    );
+  }
+
+  /** 模块总开关（实时读配置：设置页可在会话中途打开/关闭） */
+  function compressionEnabled(): boolean {
+    return options.getConfig()[ENABLED_FIELD] !== false;
   }
 
   /** 策略变化诊断（工单 11：模型切换/配置变更在事件边界被重新解析）：新旧任一
@@ -362,14 +376,57 @@ export function createCompressionScheduler(
     ]);
   }
 
+  /**
+   * 关闭态的压缩事件处置接缝（工单 01）：模块关闭后压缩调度整体旁路——没有活动
+   * 私态（Codex checkpoint / ACP sidecar / 外部扩展声明）的会话直接放行 Pi 原生
+   * 压缩；探测到活动私态时只做最小安全动作：取消本次压缩并给警告，不写任何
+   * summary 或 checkpoint，私态原样保留。
+   *
+   * 工单 06：去重按「原因 + 私态清单」的签名做——同一私态反复越阈只提示一次，
+   * 私态种类或触发原因变了再提示；不再每次进来就把去重指纹清空。措辞区分两类：
+   * Codex checkpoint（lifecycle.state.codexClaim）与 ACP sidecar 已提交块数
+   * （lifecycle.state.acpSidecar）都直接名列在 {states} 里。
+   */
+  async function handleDisabledCompaction(
+    ctx: ExtensionContext,
+    event: SessionBeforeCompactEvent,
+  ): Promise<CompactHandlerResult> {
+    setStatus(ctx, undefined);
+    const report = await privateStateReport(ctx, event);
+    if (report.labels.length === 0) {
+      // 无私态：Pi 原生压缩照常（不取消、不提供 compaction）
+      return {};
+    }
+    const signature = `disabled|${event.reason}|${report.labels.join("|")}`;
+    if (signature !== notifiedSignature) {
+      notifiedSignature = signature;
+      notify(
+        ctx,
+        t("module.compression.disabled.protected", {
+          reason: t(`module.compression.reason.${event.reason}`),
+          states: report.labels.join("、"),
+        }),
+        "warning",
+      );
+    }
+    setStatus(ctx, t("module.compression.lifecycle.protectedStatus"));
+    return { cancel: true };
+  }
+
   async function handleBeforeCompact(
     event: SessionBeforeCompactEvent,
     ctx: ExtensionContext,
   ): Promise<CompactHandlerResult | undefined> {
     try {
+      // 关闭态旁路（工单 01）：模块关闭时不再按策略调度，交回 Pi 原生压缩
+      if (!compressionEnabled()) return await handleDisabledCompaction(ctx, event);
       const { settings } = readCompressionSettings(options.getConfig());
       const resolution = ctx.model
-        ? resolveCompressionStrategy(modelIdentityFromModel(ctx.model), settings)
+        ? resolveCompressionStrategy(
+            modelIdentityFromModel(ctx.model),
+            settings,
+            options.readSessionOverride?.(),
+          )
         : undefined;
       const decision = decideCompactHandling(resolution, event.reason, owners);
       // 生命周期边界（工单 11）：本次事件的重新解析结果与会话内上一次不同
@@ -469,6 +526,9 @@ export function createCompressionScheduler(
     beginSession(ctx: ExtensionContext): void {
       notifiedSignature = undefined;
       setStatus(ctx, undefined);
+      lastResolution = undefined;
+      // 关闭态：不做策略解析诊断（模块已整体旁路，由设置页展示开关状态）
+      if (!compressionEnabled()) return;
       // 生命周期边界的重新解析诊断（工单 11）：resume / fork / 宿主重载都以
       // session_start 到达——用当前模型实时解析一次策略， noteworthy 的解析
       // 给一行 info（默认 native 会话保持安静）；后续事件的解析变化另行提示。

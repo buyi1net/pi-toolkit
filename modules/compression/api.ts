@@ -5,6 +5,8 @@
 // 工单 02 起策略解析（strategy.ts）与规则编辑器（rules-editor.ts）就位；
 // session_before_compact 等压缩事件接管仍归后续工单。
 
+import type { CompressionSource } from "./strategy.ts";
+
 /** 模块 id：同时是配置节名（modules.compression）与菜单项 id 前缀 */
 export const COMPRESSION_MODULE_ID = "compression";
 
@@ -57,6 +59,24 @@ export type CodexRuleProfile = (typeof CODEX_RULE_PROFILES)[number];
  */
 export const DEFAULT_ACP_AUTO_DETECT_ENABLED = false;
 export const DEFAULT_ACP_CONTEXT_WINDOW_THRESHOLD = 200000;
+
+/**
+ * ACP 预设（工单 03）：推荐默认（开箱即用） / 自定义进阶（使用磁盘草稿）。
+ * 词汇表必须在本文件的 DEFAULT_COMPRESSION_SETTINGS 之前求值（TDZ），
+ * 所以放在这里；推荐配置常量仍在文件末尾的工单 03 区块。
+ */
+export const ACP_PRESETS = ["recommended", "custom"] as const;
+export type AcpPreset = (typeof ACP_PRESETS)[number];
+
+/** 预设缺省口径（规格「ACP 预设」）：新用户直接拿到调优好的推荐参数 */
+export const DEFAULT_ACP_PRESET: AcpPreset = "recommended";
+
+/**
+ * 推荐配置指纹（`modules.compression.acpPresetVersion`）：切档时记录当时的
+ * 推荐配置版本。指纹只落盘记录，不参与运行时判定——recommended 始终按本构建的
+ * 推荐常量解释；草稿永不因指纹变化被覆写（规格「存储与草稿机制」）。
+ */
+export const ACP_PRESET_VERSION = 1;
 
 // ─────────────────────────────────────────────────────────────
 // ACP 高级配置（工单 10）：global → provider → model 逐字段合并的 compress 覆盖
@@ -139,9 +159,19 @@ export interface AcpProviderOverrides extends AcpCompressOverrides {
 export interface AcpAdvancedSettings {
   readonly global: AcpCompressOverrides;
   readonly providers: Readonly<Record<string, AcpProviderOverrides>>;
+  /**
+   * 生效预设（工单 03）：解析时由顶层 `modules.compression.acpPreset` 注入，
+   * 运行时接缝（acp/config.ts）据此把推荐值作用到级联的 global 层。
+   * 缺省（手工构造的层，如既有测试夹具）= 按 custom 草稿解释。
+   */
+  readonly preset?: AcpPreset;
 }
 
-/** 空的 ACP 高级配置（未配置节/未注入读取口时的等价默认） */
+/**
+ * 空的 ACP 覆盖（未配置节/手工构造的层）：不带 preset，运行时按 custom（草稿）
+ * 解释。产品缺省档位是 recommended，由 DEFAULT_COMPRESSION_SETTINGS.acp 与
+ * 读取侧（config.ts 的 readCompressionSettings）注入。
+ */
 export const EMPTY_ACP_ADVANCED_SETTINGS: AcpAdvancedSettings = { global: {}, providers: {} };
 
 /**
@@ -195,22 +225,42 @@ export interface CompressionSettings {
   readonly nativeTrigger: NativeTriggerPolicy;
   /** ACP 自动检测开关（规格场景 10 的关闭选项） */
   readonly acpAutoDetect: boolean;
+  /** Codex 自动检测开关（工单 02：官方 OpenAI Responses / Codex OAuth 模型零配置纳入） */
+  readonly codexAutoDetect: boolean;
   /** ACP 自动检测的 contextWindow 阈值（tokens，含） */
   readonly acpAutoDetectThreshold: number;
   /** 已校验的模型规则（非法条目在解析时逐项报告并剔除） */
   readonly modelRules: readonly CompressionModelRule[];
+  /** ACP 预设（工单 03）：recommended 强制使用推荐常量，custom 使用 acp.global 草稿 */
+  readonly acpPreset: AcpPreset;
+  /** 推荐配置指纹（工单 03）：落盘时记录的推荐配置版本；与当前版本不同只重新解释推荐值，不覆盖草稿 */
+  readonly acpPresetVersion: number;
   /** ACP 高级配置（工单 10）：`modules.compression.acp` 的解析结果；字段非法逐项报告并回退（剔除该字段），不阻断其它字段与模型规则 */
   readonly acp: AcpAdvancedSettings;
 }
+
+// ─────────────────────────────────────────────────────────────
+// 工单 02：Codex 官方能力自动检测
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Codex 自动检测默认开启（规格场景 8：官方 OpenAI 模型零配置纳入）。
+ * 只有能力探测器判定为官方链路（api.openai.com/v1 或 chatgpt.com/backend-api）
+ * 的模型才会被自动接管，因此默认开启不会误伤中转站与第三方域名。
+ */
+export const DEFAULT_CODEX_AUTO_DETECT_ENABLED = true;
 
 export const DEFAULT_COMPRESSION_SETTINGS: CompressionSettings = {
   schemaVersion: COMPRESSION_SCHEMA_VERSION,
   defaultMode: "native",
   nativeTrigger: "manual",
   acpAutoDetect: DEFAULT_ACP_AUTO_DETECT_ENABLED,
+  codexAutoDetect: DEFAULT_CODEX_AUTO_DETECT_ENABLED,
   acpAutoDetectThreshold: DEFAULT_ACP_CONTEXT_WINDOW_THRESHOLD,
   modelRules: [],
-  acp: EMPTY_ACP_ADVANCED_SETTINGS,
+  acpPreset: DEFAULT_ACP_PRESET,
+  acpPresetVersion: ACP_PRESET_VERSION,
+  acp: { ...EMPTY_ACP_ADVANCED_SETTINGS, preset: DEFAULT_ACP_PRESET },
 };
 
 /**
@@ -247,4 +297,110 @@ export type CompressionConfigProblem =
   | { readonly kind: "badPercent"; readonly field: string; readonly value: string }
   | { readonly kind: "badCount"; readonly field: string; readonly value: string }
   | { readonly kind: "badPositiveInt"; readonly field: string; readonly value: string }
-  | { readonly kind: "badArray"; readonly field: string; readonly value: string };
+  | { readonly kind: "badArray"; readonly field: string; readonly value: string }
+  // ── 工单 07：旧配置平滑迁移提示（不是普通非法值：旧版本里它合法） ──
+  | {
+      readonly kind: "legacyCodexDefaultMode";
+      readonly field: string;
+      readonly value: string;
+      readonly fallback: "native";
+    };
+
+// ─────────────────────────────────────────────────────────────
+// 工单 03：ACP 推荐配置常量（acpPreset 词汇表见上方自动检测默认值之后）
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * 运行时深冻结：对象、子对象与数组全部不可变，任何运行期改写直接抛错
+ * （严格模式下赋值/增删都会抛 TypeError），共享常量不会被调用方就地改脏。
+ * `Object.isFrozen` 守卫避免已冻结的子对象被重复递归。
+ */
+function deepFreeze<T>(value: T): Readonly<T> {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+  }
+  return value as Readonly<T>;
+}
+
+/**
+ * ACP 推荐配置（规格「ACP 推荐配置常量与深冻结保障」）：recommended 预设下运行时
+ * 生效的 8 个压缩参数。`promptPack` / `prompts` 不在推荐范围内，继续读用户配置
+ * （acp/config.ts 的作用层只覆盖这里的字段）。
+ * 不做 `Readonly<AcpCompressOverrides>` 宽化声明：保留字面量类型，写侧
+ * （config.ts 的草稿播种）才能确定 8 个字段必然存在，无需空分支。
+ */
+export const ACP_RECOMMENDED_CONFIG = deepFreeze({
+  maxContextLimit: 0.75,
+  emergencyThresholdPercent: 0.9,
+  nudgeGrowthTokens: 2000,
+  preserveRecentMessages: 5,
+  protectedTools: ["bash", "edit", "write"],
+  reasoning: { drop: true, threshold: 3000 },
+  stripImages: true,
+  stripImagesKeepRecent: 1,
+} as const);
+
+// TUI 状态段（工单 04）：`compression.status` 只读句柄与状态快照
+// ─────────────────────────────────────────────────────────────
+
+/** 压缩状态服务句柄名（规格「TUI 状态栏跨模块协同」）：tui 只从这里取状态段 */
+export const COMPRESSION_STATUS_SERVICE_NAME = "compression.status";
+
+/**
+ * 压缩状态四态（规格原文）：active = 按策略生效；fallback = 降级后仍在工作；
+ * unavailable = 没有可解析的会话模型；disabled = 模块总开关关闭。
+ */
+export type CompressionStatus = "active" | "fallback" | "unavailable" | "disabled";
+
+/**
+ * 压缩状态快照（规格固定字段；只读、可序列化）。
+ * `fallbackFrom` / `fallbackReason` 由工单 06 的降级记账写入（本工单只预留并渲染）；
+ * `revision` 在内容变化时递增（工单 18 的句柄惯例），供 tui 心跳判断是否补帧。
+ */
+export interface CompressionStatusSnapshot {
+  readonly status: CompressionStatus;
+  readonly effectiveMode: "native" | "acp" | "codex" | "none";
+  /** 降级来源模式（status=fallback 时携带） */
+  readonly fallbackFrom?: "codex" | "acp";
+  /** 降级原因（机读键；标签只按 fallbackFrom 是否存在决定是否标降级） */
+  readonly fallbackReason?: string;
+  /** 触发策略（native 模式有意义；codex/acp 恒为 auto） */
+  readonly triggerPolicy?: "auto" | "manual";
+  /** 策略来源：当前会话覆盖 / 显式规则 / Codex 自动检测 / ACP 自动检测 / 默认策略 */
+  readonly source?: CompressionSource;
+  readonly revision: number;
+}
+
+/** `compression.status` 只读句柄：tui 读标签与快照，不反向依赖压缩模块实现 */
+export interface CompressionStatusService {
+  readonly id: "compression";
+  /** 当前状态快照（派生结果；内容变化时才递增 revision） */
+  snapshot(): CompressionStatusSnapshot;
+  /** 状态标签；disabled / unavailable 返回空串。compact = 极窄终端的单字符形态 */
+  label(compact?: boolean): string;
+  /** 降级清除总线（工单 06 三路成功接缝统一调用）：幂等，非降级态不递增 revision */
+  clearFallback(): void;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 工单 05：当前会话压缩覆盖与全局默认两值枚举
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * 全局默认压缩模式（规格「配置模型与平滑迁移」）：只保留两个真正通用的兜底模式，
+ * Codex 是专有模式，只能经模型规则或当前会话覆盖进入，不再作为全局默认。
+ * 模型规则的 mode 仍是三值 COMPRESSION_MODES（规则本来就是按模型给的专有配置）。
+ */
+export const DEFAULT_COMPRESSION_MODES = ["native", "acp"] as const;
+export type DefaultCompressionMode = (typeof DEFAULT_COMPRESSION_MODES)[number];
+
+/**
+ * 当前会话压缩覆盖（规格「会话级覆盖（Session Override）契约」）：follow-global =
+ * 没有覆盖；其余三值与压缩模式同名，选中即压过配置里的一切推断。
+ */
+export const SESSION_COMPRESSION_OVERRIDES = ["follow-global", "native", "acp", "codex"] as const;
+export type SessionCompressionOverride = (typeof SESSION_COMPRESSION_OVERRIDES)[number];
+
+/** 会话覆盖缺省值（没有覆盖，按配置解析）；会话边界与宿主重置都回到它 */
+export const DEFAULT_SESSION_COMPRESSION_OVERRIDE: SessionCompressionOverride = "follow-global";

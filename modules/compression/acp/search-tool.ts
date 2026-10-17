@@ -4,7 +4,7 @@
 // 执行链在引擎（engine.executeSearch → acp/search.ts）：块摘要 + 被覆盖原始
 // 消息建索引 → 内核 searchBlocks 排序 → 格式化（命中带 ref / 归属块 / 块
 // 跨度 / decompress 指令）；空结果返回可理解反馈（搜索范围 + 下一步建议）。
-// 会话未命中 ACP 时返回引导文本。
+// 会话未命中 ACP（或模块已关闭）时返回标准拒绝结果（工单 01），不取用引擎。
 
 import type {
   AgentToolResult,
@@ -14,6 +14,7 @@ import type {
 import { Type } from "typebox";
 import type { Translator } from "../../../i18n/index.ts";
 import type { AcpCompressionEngine } from "./engine.ts";
+import { acpToolUnavailable } from "./tool-guard.ts";
 
 const SearchParams = Type.Object({
   query: Type.String({
@@ -23,14 +24,15 @@ const SearchParams = Type.Object({
 });
 
 export interface AcpSearchToolDeps {
-  readonly engine: AcpCompressionEngine;
+  /** Lazy engine 代理（工单 01）：未启用或非 ACP 模式时不取用（不会创建引擎） */
+  readonly engine: () => AcpCompressionEngine | undefined;
   readonly t: Translator;
-  /** 当前会话是否命中 ACP 策略（mod.ts 每次调用时解析） */
+  /** 当前会话是否走 ACP（模块启用且模型命中 ACP 策略；mod.ts 每次调用时解析） */
   readonly isSessionActive: (ctx: ExtensionContext) => boolean;
 }
 
 export function makeAcpSearchTool(deps: AcpSearchToolDeps): ToolDefinition<typeof SearchParams> {
-  const { engine, t } = deps;
+  const { t } = deps;
   return {
     name: "search_context",
     label: "Search Context",
@@ -44,12 +46,9 @@ export function makeAcpSearchTool(deps: AcpSearchToolDeps): ToolDefinition<typeo
     ],
     parameters: SearchParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
-      if (!deps.isSessionActive(ctx)) {
-        return {
-          details: undefined,
-          content: [{ type: "text", text: t("module.compression.acp.toolNotActive") }],
-        };
-      }
+      if (!deps.isSessionActive(ctx)) return acpToolUnavailable(t);
+      const engine = deps.engine();
+      if (!engine) return acpToolUnavailable(t);
       const outcome = await engine.executeSearch(
         {
           query: params.query,

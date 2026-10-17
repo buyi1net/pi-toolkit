@@ -42,6 +42,10 @@ import type { Translator } from "../../../i18n/index.ts";
 import type { ServiceRegistry } from "../../../kit/services.ts";
 import { PROVIDERS_USAGE_SERVICE_NAME, type ProvidersUsageService } from "../../providers/api.ts";
 import {
+	COMPRESSION_STATUS_SERVICE_NAME,
+	type CompressionStatusService,
+} from "../../compression/api.ts";
+import {
 	STATUS_COMPACTION_SERVICE_NAME,
 	STATUS_SESSION_SERVICE_NAME,
 	STATUS_TELEMETRY_SERVICE_NAME,
@@ -73,7 +77,7 @@ export interface PiTuiPluginDependencies {
 	env?: Readonly<Record<string, string | undefined>>;
 	loadConfig?: () => LoadedPiTuiConfig;
 	transitionGate?: TerminalTransitionGate | null;
-	/** 服务注册表：providers.usage 与 status.* 句柄从这里取；未传时对应区域不显示 */
+	/** 服务注册表：providers.usage、compression.status 与 status.* 句柄从这里取；未传时对应区域不显示 */
 	services?: ServiceRegistry;
 	/** 通知文案用的译者；缺省时不发本地化通知 */
 	t?: Translator;
@@ -125,6 +129,8 @@ export function registerPiTuiLifecycle(
 	let statusCompaction: StatusCompactionService | undefined;
 	/** 供应商运行态句柄（providers 模块注册；未装配时为 undefined） */
 	let providerUsage: ProvidersUsageService | undefined;
+	/** 压缩状态句柄（compression 模块注册；未装配时为 undefined） */
+	let compressionStatus: CompressionStatusService | undefined;
 	let cleanupSpinner: (() => void) | undefined;
 	let installedTui: TUI | undefined;
 	// 启动守卫：首次消费只触发一次 providers 模块的周期刷新。
@@ -179,15 +185,17 @@ export function registerPiTuiLifecycle(
 	let transitionRevealTimer: ReturnType<typeof setTimeout> | undefined;
 	// Footer 首帧回报：模块级，供揭示门槛读取（installUi 闭包外）。
 	const layoutState = { footerHeight: 0 };
-	// 统一重绘节奏（工单 18）：一秒一拍检查五条快照的变更序号，有变化才重绘（闸门保护在
+	// 统一重绘节奏（工单 18）：一秒一拍检查六条快照的变更序号，有变化才重绘（闸门保护在
 	// requestStatusRender 里）。计时 working、git 轮询与设置文件变化都由此上屏；
-	// 宿主事件驱动的即时重绘照旧保留。
+	// 宿主事件驱动的即时重绘照旧保留。工单 04：压缩状态快照也在受管源里——配置事务
+	// 落盘后内存副本已刷新，心跳读到新 revision 就补一帧。
 	const repaintRhythm = new RepaintRhythm({
 		sources: [
 			{ id: STATUS_WORKSPACE_SERVICE_NAME, read: () => statusWorkspace?.snapshot() },
 			{ id: STATUS_SESSION_SERVICE_NAME, read: () => statusSession?.snapshot() },
 			{ id: STATUS_TIMER_SERVICE_NAME, read: () => statusTimer?.snapshot() },
 			{ id: STATUS_COMPACTION_SERVICE_NAME, read: () => statusCompaction?.snapshot() },
+			{ id: COMPRESSION_STATUS_SERVICE_NAME, read: () => compressionStatus?.snapshot() },
 			{ id: PROVIDERS_USAGE_SERVICE_NAME, read: () => providerUsage?.snapshot() },
 		],
 		requestRender: requestStatusRender,
@@ -246,6 +254,7 @@ export function registerPiTuiLifecycle(
 		statusTimer = undefined;
 		statusTelemetry = undefined;
 		statusCompaction = undefined;
+		compressionStatus = undefined;
 		cleanupFooter = undefined;
 		cleanupHeader = undefined;
 		cleanupEditor = undefined;
@@ -283,11 +292,13 @@ export function registerPiTuiLifecycle(
 		const timer = dependencies.services?.get<StatusTimerService>(STATUS_TIMER_SERVICE_NAME);
 		const telemetry = dependencies.services?.get<StatusTelemetryService>(STATUS_TELEMETRY_SERVICE_NAME);
 		const compaction = dependencies.services?.get<StatusCompactionService>(STATUS_COMPACTION_SERVICE_NAME);
+		const compression = dependencies.services?.get<CompressionStatusService>(COMPRESSION_STATUS_SERVICE_NAME);
 		statusWorkspace = workspace;
 		statusSession = session;
 		statusTimer = timer;
 		statusTelemetry = telemetry;
 		statusCompaction = compaction;
+		compressionStatus = compression;
 		providerUsage = usage;
 		let activeTui: TUI | undefined;
 		let preClearState: TuiMainScreenRenderState | undefined;
@@ -304,7 +315,7 @@ export function registerPiTuiLifecycle(
 			getSessionId: () => ctx.sessionManager.getSessionId(),
 			getContextUsage: () => ctx.getContextUsage(),
 			getContextWindow: () => ctx.model?.contextWindow,
-			getAutoCompactionEnabled: () => compaction?.snapshot()?.enabled,
+			getCompressionLabel: (compact: boolean) => compression?.label(compact) ?? "",
 		};
 		const projectSource: ProjectEnvironmentSource = {
 			getProjectStatus: workspace ? () => workspace.snapshot() : undefined,
@@ -466,6 +477,7 @@ export function registerPiTuiLifecycle(
 	const uninstallUi = (): void => {
 		if (
 			!active && !providerUsage && !statusWorkspace && !statusSession && !statusTimer && !statusTelemetry && !statusCompaction &&
+			!compressionStatus &&
 			!cleanupEditor && !cleanupFooter && !cleanupHeader && !cleanupSpinner
 		) return;
 		active = false;
@@ -482,6 +494,7 @@ export function registerPiTuiLifecycle(
 		statusTimer = undefined;
 		statusTelemetry = undefined;
 		statusCompaction = undefined;
+		compressionStatus = undefined;
 		cleanupFooter = undefined;
 		cleanupHeader = undefined;
 		cleanupEditor = undefined;
