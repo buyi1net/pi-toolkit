@@ -50,7 +50,7 @@ function formatEstimatedCost(costUsd: number): string {
 function buildTurnTelemetrySegments(telemetry: TurnTelemetrySnapshot): StatusSegment[] {
 	const speed = telemetry.tokensPerSecond === null
 		? "TPS:—"
-		: `TPS:${formatTokensPerSecond(telemetry.tokensPerSecond)}tok/s`;
+		: `TPS:${formatTokensPerSecond(telemetry.tokensPerSecond)} tok/s`;
 	return [
 		{
 			id: "total",
