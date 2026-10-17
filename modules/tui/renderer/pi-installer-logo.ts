@@ -3,7 +3,7 @@
  *
  * 坐标、方块落位顺序、闪烁阶段和时序均对应 pi.dev/install.sh 中的
  * pi_logo_animation；这里只把安装器的 8×9 方格裁剪为横幅使用的 6×4 小尺寸，
- * 每个网格单元按一个终端字符渲染，整体宽度不超过 Pi 原生启动 Logo。
+ * 每个方格仍保持安装器原始的两个终端字符宽度。
  * 来源：https://pi.dev/install.sh
  */
 
@@ -184,7 +184,7 @@ function frameWidth(frame: PiInstallerLogoFrame): number {
 			}
 		}
 	}
-	return maxCell;
+	return maxCell * 2;
 }
 
 export const PI_INSTALLER_LOGO_ANIMATION = animationFrames;

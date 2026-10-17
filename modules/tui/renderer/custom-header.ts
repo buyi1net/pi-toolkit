@@ -75,8 +75,8 @@ function renderLogoFrame(frame: PiInstallerLogoFrame, theme: Theme): string[] {
 			const color = LOGO_THEME_COLORS[cell];
 			if (color !== runColor && run) flush();
 			runColor = color;
-			// 与 Pi 原生启动 Logo 一样，每个网格单元占一个终端字符。
-			run += cell === "panel" ? " " : "█";
+			// 对应官方安装器的 panel_cell="  " 与各色 cell="██"。
+			run += cell === "panel" ? "  " : "██";
 		}
 		flush();
 		return line.trimEnd();
@@ -132,7 +132,7 @@ export function renderCustomHeader(
 		return compact.map((line) => `${" ".repeat(paddingX)}${line}`);
 	}
 
-	const logo = renderLogoFrame(logoFrame, theme);
+	const logo = renderLogoFrame(logoFrame, theme).map((line) => theme.bold(line));
 	const logoWidth = PI_INSTALLER_LOGO_WIDTH;
 	const title = `${theme.bold(theme.fg("border", "Pi"))}${theme.fg("dim", ` v${snapshot.version}`)}`;
 	const modelName = formatHeaderModel(snapshot.model);
