@@ -7,7 +7,7 @@
 // - strategy.ts：策略解析器（纯函数：会话覆盖 → 显式规则 → Codex 自动检测 → ACP 自动检测 → 默认策略）；
 // - rules-editor.ts：模型规则编辑器（从模型目录选完整身份，kit 事务落盘）；
 // - acp-editor.ts：ACP 高级设置编辑页（阈值/枚举/分组子页，kit 事务落盘）；
-// - codex-settings-panel.ts：Codex 模式管理页（工单 02：自动检测开关 + 受支持模型 + 添加模型）；
+// - codex-settings-panel.ts：Codex 模式管理页（官方订阅分组 + 手动添加分组 + 添加模型）；
 // - settings-panel.ts：二级设置页（工单 01：总开关 + 动态重建行集；工单 05：当前
 //   会话覆盖与全局默认两值枚举；一级菜单只保留一行入口）；
 // - session-override.ts：当前会话覆盖的内存单例（工单 05：不写盘，会话边界复位）；
@@ -37,7 +37,7 @@ import {
   COMPRESSION_MODULE_ID,
   DEFAULT_ACP_AUTO_DETECT_ENABLED,
 } from "./api.ts";
-import { CODEX_AUTO_DETECT_FIELD } from "./codex-settings-panel.ts";
+
 import { buildCompressionTopItems } from "./menu.ts";
 import { registerCompression } from "./mod.ts";
 import { COMPRESSION_NATIVE_TRIGGER_FIELD } from "./settings-panel.ts";
@@ -54,7 +54,6 @@ export {
   COMPRESSION_SCHEMA_VERSION,
   DEFAULT_ACP_AUTO_DETECT_ENABLED,
   DEFAULT_ACP_CONTEXT_WINDOW_THRESHOLD,
-  DEFAULT_CODEX_AUTO_DETECT_ENABLED,
   DEFAULT_CODEX_PROTOCOL,
   EMPTY_ACP_ADVANCED_SETTINGS,
   NATIVE_TRIGGER_POLICIES,
@@ -233,15 +232,19 @@ export {
 } from "./codex/capability.ts";
 export {
   ROW_CODEX_ADD,
-  ROW_CODEX_AUTO_DETECT,
   ROW_CODEX_EMPTY,
   ROW_CODEX_MANAGEMENT,
+  ROW_CODEX_OFFICIAL_HEADER,
+  ROW_CODEX_MANUAL_HEADER,
+  codexOfficialRowId,
   CodexManagementPanel,
-  CODEX_AUTO_DETECT_FIELD,
   buildCodexManagementRow,
   buildCodexManagementRows,
   codexRuleFromCandidate,
+  codexRuleRowId,
   codexRules,
+  codexManagementValue,
+  officialCodexModels,
   type CodexManagementPanelOptions,
   type CodexManagementRowsOptions,
 } from "./codex-settings-panel.ts";
@@ -293,8 +296,8 @@ const COMPRESSION_CONFIG_SCHEMA: ModuleConfigSchema = {
     labelKey: "module.compression.acpAutoDetect.label",
     descriptionKey: "module.compression.acpAutoDetect.description",
   },
-  // 工单 02：Codex 自动检测开关（字段定义与 Codex 模式管理页共用一份）
-  codexAutoDetect: CODEX_AUTO_DETECT_FIELD,
+  // 工单 02 起 Codex 自动检测不再有独立开关：官方链路模型在模块启用时自动接管，
+  // 中转站与自定义模型走显式规则（Codex 模式管理页添加）。
 };
 
 export const compressionModule: ModuleDefinition = {

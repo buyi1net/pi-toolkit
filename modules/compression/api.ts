@@ -225,8 +225,6 @@ export interface CompressionSettings {
   readonly nativeTrigger: NativeTriggerPolicy;
   /** ACP 自动检测开关（规格场景 10 的关闭选项） */
   readonly acpAutoDetect: boolean;
-  /** Codex 自动检测开关（工单 02：官方 OpenAI Responses / Codex OAuth 模型零配置纳入） */
-  readonly codexAutoDetect: boolean;
   /** ACP 自动检测的 contextWindow 阈值（tokens，含） */
   readonly acpAutoDetectThreshold: number;
   /** 已校验的模型规则（非法条目在解析时逐项报告并剔除） */
@@ -239,23 +237,11 @@ export interface CompressionSettings {
   readonly acp: AcpAdvancedSettings;
 }
 
-// ─────────────────────────────────────────────────────────────
-// 工单 02：Codex 官方能力自动检测
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Codex 自动检测默认开启（规格场景 8：官方 OpenAI 模型零配置纳入）。
- * 只有能力探测器判定为官方链路（api.openai.com/v1 或 chatgpt.com/backend-api）
- * 的模型才会被自动接管，因此默认开启不会误伤中转站与第三方域名。
- */
-export const DEFAULT_CODEX_AUTO_DETECT_ENABLED = true;
-
 export const DEFAULT_COMPRESSION_SETTINGS: CompressionSettings = {
   schemaVersion: COMPRESSION_SCHEMA_VERSION,
   defaultMode: "native",
   nativeTrigger: "manual",
   acpAutoDetect: DEFAULT_ACP_AUTO_DETECT_ENABLED,
-  codexAutoDetect: DEFAULT_CODEX_AUTO_DETECT_ENABLED,
   acpAutoDetectThreshold: DEFAULT_ACP_CONTEXT_WINDOW_THRESHOLD,
   modelRules: [],
   acpPreset: DEFAULT_ACP_PRESET,

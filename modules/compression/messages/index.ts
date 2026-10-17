@@ -31,7 +31,7 @@ const EN = {
 
   "module.compression.defaultMode.label": "Default compression mode",
   "module.compression.defaultMode.description":
-    "Global fallback used when no explicit model rule matches: Pi native or ACP compression. Codex is never a global default — bring it in through Codex mode management (auto detection or the supported model list)",
+    "Global fallback used when no explicit model rule matches: Pi native or ACP compression. Codex is never a global default — official models enter Codex automatically; relays and custom models can be added in Codex mode",
   "module.compression.defaultMode.value.native": "Pi native",
   "module.compression.defaultMode.value.acp": "ACP",
 
@@ -334,17 +334,13 @@ const EN = {
 
   // ── 工单 02：Codex 官方能力检测与管理向导 ──
   "module.compression.source.codex-auto": "Codex auto detection",
-  "module.compression.codexManagement.label": "Codex mode management",
-  "module.compression.codexManagement.description":
-    "Official OpenAI Responses / Codex OAuth models are detected automatically; relays and custom models can be added from the authenticated model list",
-  "module.compression.codexManagement.value.autoOn": "{count} model(s) · auto detect on",
-  "module.compression.codexManagement.value.autoOff": "{count} model(s) · auto detect off",
-  "module.compression.codex.autoDetect.label": "Codex auto detection",
-  "module.compression.codex.autoDetect.description":
-    "When on, a model whose API and address match the official OpenAI Responses (api.openai.com/v1) or Codex OAuth (chatgpt.com/backend-api) link enters Codex automatically; relays, non-official hosts and path variants are never taken over",
-  "module.compression.codex.panel.title": "Codex mode management",
+  "module.compression.codexManagement.label": "Codex mode",
+  "module.compression.codexManagement.value.count": "{official} official · {manual} manual",
+  "module.compression.codex.panel.title": "Codex mode",
   "module.compression.codex.panel.empty":
-    "No model added yet — official OpenAI / Codex models are covered by auto detection",
+    "No models yet — official OpenAI / Codex models are covered automatically; add relays and custom models manually",
+  "module.compression.codex.officialHeader": "Official subscription",
+  "module.compression.codex.manualHeader": "Manual additions",
   "module.compression.codex.add": "+ Add model",
   "module.compression.codex.addTitle": "Add model: pick an authenticated model from the catalog",
   "module.compression.codex.noAvailableModels":
@@ -392,7 +388,7 @@ const EN = {
 
   // ── 工单 07：旧配置平滑迁移 ──
   "module.compression.config.legacyCodexDefaultMode":
-    "Compression config compatibility notice: {field} still holds the legacy value codex, which is no longer a global default mode; it is read as {fallback}. Add an explicit Codex rule for your GPT models under Codex mode management to keep Codex compression; confirming the global default mode once in settings clears this notice",
+    "Compression config compatibility notice: {field} still holds the legacy value codex, which is no longer a global default mode; it is read as {fallback}. Add an explicit Codex rule for your GPT models in Codex mode to keep Codex compression; confirming the global default mode once in settings clears this notice",
 } satisfies Record<string, string>;
 
 const ZH_CN: typeof EN = {
@@ -405,7 +401,7 @@ const ZH_CN: typeof EN = {
 
   "module.compression.defaultMode.label": "默认压缩模式",
   "module.compression.defaultMode.description":
-    "未命中显式模型规则时使用的全局兜底：系统默认（Pi 原生）或 ACP 压缩。Codex 不能设为全局默认，请在 Codex 模式管理里通过自动检测或受支持模型列表纳入",
+    "未命中显式模型规则时使用的全局兜底：系统默认（Pi 原生）或 ACP 压缩。Codex 不能设为全局默认，官方模型自动进入 Codex，中转站与自定义模型可在「Codex 模式」里添加",
   "module.compression.defaultMode.value.native": "Pi 原生",
   "module.compression.defaultMode.value.acp": "ACP",
 
@@ -705,16 +701,12 @@ const ZH_CN: typeof EN = {
 
   // ── 工单 02：Codex 官方能力检测与管理向导 ──
   "module.compression.source.codex-auto": "Codex 自动检测",
-  "module.compression.codexManagement.label": "Codex 模式管理",
-  "module.compression.codexManagement.description":
-    "官方 OpenAI Responses / Codex OAuth 模型自动纳入；中转站与自定义模型可从已认证的模型列表里添加",
-  "module.compression.codexManagement.value.autoOn": "{count} 个模型 · 自动检测 开",
-  "module.compression.codexManagement.value.autoOff": "{count} 个模型 · 自动检测 关",
-  "module.compression.codex.autoDetect.label": "Codex 自动检测",
-  "module.compression.codex.autoDetect.description":
-    "开启后，API 与地址同时命中官方 OpenAI Responses（api.openai.com/v1）或 Codex OAuth（chatgpt.com/backend-api）链路的模型自动进入 Codex；中转站、非官方 host 与路径变体一律不接管",
-  "module.compression.codex.panel.title": "Codex 模式管理",
-  "module.compression.codex.panel.empty": "尚未添加模型——官方 OpenAI / Codex 模型由自动检测覆盖",
+  "module.compression.codexManagement.label": "Codex 模式",
+  "module.compression.codexManagement.value.count": "官方 {official} · 手动 {manual}",
+  "module.compression.codex.panel.title": "Codex 模式",
+  "module.compression.codex.panel.empty": "尚未添加模型——官方订阅模型自动纳入，中转站与自定义模型可手动添加",
+  "module.compression.codex.officialHeader": "官方订阅",
+  "module.compression.codex.manualHeader": "手动添加",
   "module.compression.codex.add": "+ 添加模型",
   "module.compression.codex.addTitle": "添加模型：从已认证的模型目录里选择",
   "module.compression.codex.noAvailableModels":
@@ -757,7 +749,7 @@ const ZH_CN: typeof EN = {
 
   // ── 工单 07：旧配置平滑迁移 ──
   "module.compression.config.legacyCodexDefaultMode":
-    "压缩配置兼容提示：{field} 仍是旧值 codex，它已不再是全局默认模式，本次按 {fallback} 读取。要继续使用 Codex 压缩，请在「Codex 模式管理」里为对应的 GPT 模型添加显式规则；在设置页确认一次「全局默认模式」后这条提示不再出现",
+    "压缩配置兼容提示：{field} 仍是旧值 codex，它已不再是全局默认模式，本次按 {fallback} 读取。要继续使用 Codex 压缩，请在「Codex 模式」里为对应的 GPT 模型添加显式规则；在设置页确认一次「全局默认模式」后这条提示不再出现",
 };
 
 const ZH_TW: typeof EN = {
@@ -770,7 +762,7 @@ const ZH_TW: typeof EN = {
 
   "module.compression.defaultMode.label": "預設壓縮模式",
   "module.compression.defaultMode.description":
-    "未命中明確模型規則時使用的全域兜底：系統預設（Pi 原生）或 ACP 壓縮。Codex 不能設為全域預設，請在 Codex 模式管理裡透過自動偵測或受支援模型清單納入",
+    "未命中明確模型規則時使用的全域兜底：系統預設（Pi 原生）或 ACP 壓縮。Codex 不能設為全域預設，官方模型自動進入 Codex，中轉站與自訂模型可在「Codex 模式」裡加入",
   "module.compression.defaultMode.value.native": "Pi 原生",
   "module.compression.defaultMode.value.acp": "ACP",
 
@@ -1070,16 +1062,12 @@ const ZH_TW: typeof EN = {
 
   // ── 工單 02：Codex 官方能力檢測與管理引導 ──
   "module.compression.source.codex-auto": "Codex 自動檢測",
-  "module.compression.codexManagement.label": "Codex 模式管理",
-  "module.compression.codexManagement.description":
-    "官方 OpenAI Responses / Codex OAuth 模型自動納入；中轉站與自訂模型可從已認證的模型清單加入",
-  "module.compression.codexManagement.value.autoOn": "{count} 個模型 · 自動檢測 開",
-  "module.compression.codexManagement.value.autoOff": "{count} 個模型 · 自動檢測 關",
-  "module.compression.codex.autoDetect.label": "Codex 自動檢測",
-  "module.compression.codex.autoDetect.description":
-    "開啟後，API 與地址同時命中官方 OpenAI Responses（api.openai.com/v1）或 Codex OAuth（chatgpt.com/backend-api）鏈路的模型自動進入 Codex；中轉站、非官方 host 與路徑變體一律不接管",
-  "module.compression.codex.panel.title": "Codex 模式管理",
-  "module.compression.codex.panel.empty": "尚未加入模型——官方 OpenAI / Codex 模型由自動檢測覆蓋",
+  "module.compression.codexManagement.label": "Codex 模式",
+  "module.compression.codexManagement.value.count": "官方 {official} · 手動 {manual}",
+  "module.compression.codex.panel.title": "Codex 模式",
+  "module.compression.codex.panel.empty": "尚未加入模型——官方訂閱模型自動納入，中轉站與自訂模型可手動加入",
+  "module.compression.codex.officialHeader": "官方訂閱",
+  "module.compression.codex.manualHeader": "手動加入",
   "module.compression.codex.add": "+ 加入模型",
   "module.compression.codex.addTitle": "加入模型：從已認證的模型目錄裡選擇",
   "module.compression.codex.noAvailableModels":
@@ -1122,7 +1110,7 @@ const ZH_TW: typeof EN = {
 
   // ── 工单 07：旧配置平滑迁移 ──
   "module.compression.config.legacyCodexDefaultMode":
-    "壓縮設定相容提示：{field} 仍是舊值 codex，它已不再是全域預設模式，本次按 {fallback} 讀取。要繼續使用 Codex 壓縮，請在「Codex 模式管理」裡為對應的 GPT 模型新增顯式規則；在設定頁確認一次「全域預設模式」後這條提示不再出現",
+    "壓縮設定相容提示：{field} 仍是舊值 codex，它已不再是全域預設模式，本次按 {fallback} 讀取。要繼續使用 Codex 壓縮，請在「Codex 模式」裡為對應的 GPT 模型新增顯式規則；在設定頁確認一次「全域預設模式」後這條提示不再出現",
 };
 
 /** 本键表：全部模块键表在 modules/index.ts 聚合登记 */

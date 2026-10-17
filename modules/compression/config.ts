@@ -814,7 +814,7 @@ export function readDefaultCompressionMode(
  * 版本闸在前：schemaVersion 缺省按当前版本解释；不是正整数、或高于当前支持的版本时，
  * 整节视为无法安全解释，报告问题并全量回退默认（用户写入的规则不会被半解释）。
  * 版本可解释时逐字段校验：defaultMode / nativeTrigger / acpAutoDetect /
- * codexAutoDetect / acpAutoDetectThreshold / acpPreset / acpPresetVersion 非法各自
+ * acpAutoDetectThreshold / acpPreset / acpPresetVersion 非法各自
  * 报告并回退默认（旧版合法的 `defaultMode: "codex"` 走专属迁移提示，见
  * readDefaultCompressionMode），modelRules 逐条校验剔除坏条目，acp 高级配置逐字段校验（非法字段
  * 剔除，不阻断模型规则），
@@ -868,7 +868,6 @@ export function readCompressionSettings(
     problems,
   );
   const acpAutoDetect = readBooleanField("acpAutoDetect", section, problems);
-  const codexAutoDetect = readBooleanField("codexAutoDetect", section, problems);
   const acpAutoDetectThreshold = readPositiveIntField("acpAutoDetectThreshold", section, problems);
   const acpPreset = parseAcpPreset(section, problems);
   const acpPresetVersion = parseAcpPresetVersion(section, problems);
@@ -882,7 +881,6 @@ export function readCompressionSettings(
       defaultMode,
       nativeTrigger,
       acpAutoDetect,
-      codexAutoDetect,
       acpAutoDetectThreshold,
       modelRules,
       acpPreset,

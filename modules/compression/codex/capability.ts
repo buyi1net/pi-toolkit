@@ -21,7 +21,7 @@
 // - 策略解析（strategy.ts 的 codex-auto 判定）是纯函数，只能拿到模型目录地址，
 //   所以那条路径实际只用 model.baseUrl（生产环境里 provider 级 baseUrl 已被 pi
 //   写进每个 model.baseUrl）；
-// - 菜单侧（管理页的候选文案与添加前校验）补上 provider 配置地址与 auth 返回的
+// - 菜单侧（Codex 模式页的官方订阅列表与添加前校验）补上 provider 配置地址与 auth 返回的
 //   baseUrl，是完整的三级口径。
 // 两条路径共用同一个判定函数，官方 / 非官方的口径不会分叉。
 

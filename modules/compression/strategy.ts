@@ -5,7 +5,7 @@
 // 只消费 CompressionStrategyResolution，不感知匹配细节。
 //
 // 选择顺序固定（工单 05 起五级）：当前会话覆盖（非 follow-global）→ 显式 provider/model
-// 规则 → Codex 官方能力自动检测（可选）→ 可选的 ACP 自动检测 → 默认策略。
+// 规则 → Codex 官方能力自动检测 → 可选的 ACP 自动检测 → 默认策略。
 // - 会话覆盖是用户在本会话里的就地选择，压过下面四条配置链；follow-global 表示没有
 //   覆盖，整条链照旧。覆盖出的结果标记 source=session-override，Codex 覆盖的参数按
 //   规格从全局默认与模型 API 形状推导（不带规则）；
@@ -387,10 +387,11 @@ export function resolveCompressionStrategy(
     };
   }
 
-  // 2. Codex 官方能力自动检测（工单 02）：只在无任何显式规则命中时参与。
-  //    官方 openai-responses / openai-codex-responses 链路自动接管；第三方中转、
-  //    非官方 host 与路径变体一律不接管（判定口径见 codex/capability.ts）。
-  if (settings.codexAutoDetect) {
+  // 2. Codex 官方能力自动检测（工单 02，菜单重构后去开关）：模块启用即生效，只在
+  //    无任何显式规则命中时参与。官方 openai-responses / openai-codex-responses 链路
+  //    自动接管；第三方中转、非官方 host 与路径变体一律不接管（判定口径见
+  //    codex/capability.ts）。
+  {
     const capability = detectCodexCapability({
       provider: normalized.provider,
       api: normalized.api,

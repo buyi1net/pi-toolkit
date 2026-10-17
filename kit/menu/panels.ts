@@ -80,7 +80,7 @@ export interface ChoicePickerOptions {
 export class ChoicePicker extends Container {
   private list: SelectList;
   private readonly searchInput: Input | undefined;
-  private readonly allItems: SelectItem[];
+  private allItems: SelectItem[];
   private readonly theme: MenuTheme;
   private readonly onPick: (item: SelectItem) => void;
   private readonly onCancelPick: () => void;
@@ -147,5 +147,18 @@ export class ChoicePicker extends Container {
     const list = this.buildList(filtered);
     this.children[this.listChildIndex] = list;
     this.list = list;
+  }
+
+  /**
+   * 移除一个已选选项并重建过滤结果（保留当前搜索词）：用于「添加成功后从列表去掉
+   * 已选项但选择器不关闭」的场景。搜索框的值不变，过滤结果随之更新。
+   * 移除不存在的 value 无副作用（过滤结果不变）。
+   */
+  removeOption(value: string): void {
+    const remaining = this.allItems.filter((item) => item.value !== value);
+    if (remaining.length === this.allItems.length) return;
+    this.allItems = remaining;
+    const query = this.searchInput ? this.searchInput.getValue() : "";
+    this.applyFilter(query);
   }
 }
