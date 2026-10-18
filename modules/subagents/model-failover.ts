@@ -21,6 +21,7 @@
 
 import { baseModelRef, type ModelErrorObservationKind } from "./model-health.ts";
 import type { ModelCandidateRejection } from "./model-selector.ts";
+import type { LoadoutRoutingSnapshot, RoutingFallbackReason } from "./routing-snapshot.ts";
 import type { RouteException, RouteExceptionKind } from "./route-error.ts";
 import type { ModelTier } from "./routing.ts";
 
@@ -72,8 +73,8 @@ export interface ModelRoutingDetails {
   readonly attempts: readonly ModelFailoverAttempt[];
   /** 首次计划阶段被跳过的候选及原因（选择期降级，如额度不足）。 */
   readonly selectionSkips: readonly ModelCandidateRejection[];
-  /** 池未配置或状态/额度全阻断时继承父会话的原因。 */
-  readonly fallbackReason?: "pool-unconfigured" | "pool-status-unavailable";
+  /** 池未配置或状态/额度全阻断时继承父会话的原因（与快照同词汇表）。 */
+  readonly fallbackReason?: RoutingFallbackReason;
 }
 
 /** 截断错误文本，降级链只留可读摘要。 */
@@ -89,7 +90,7 @@ export function buildModelRouting(input: {
   actual: string | null;
   attempts: readonly ModelFailoverAttempt[];
   selectionSkips: readonly ModelCandidateRejection[];
-  fallbackReason?: "pool-unconfigured" | "pool-status-unavailable";
+  fallbackReason?: RoutingFallbackReason;
 }): ModelRoutingDetails {
   const preferred = input.pool[0] ?? input.actual ?? "";
   const actual = input.actual ?? preferred;
@@ -101,7 +102,12 @@ export function buildModelRouting(input: {
       .join("; ");
     reason = `${chain} — switched to ${actual}`;
   } else if (input.fallbackReason) {
-    reason = `tier pool ${input.fallbackReason}; inherited parent session model ${actual}`;
+    // 继承：reason 只描述池侧事实（「继承父会话」措辞由 describeModelRouting
+    // 拼，工单 07）；全池阻断时附逐候选原因。
+    const blocked = input.selectionSkips.length > 0
+      ? ` — all candidates blocked: ${input.selectionSkips.map((skip) => `${skip.model}: ${skip.reason}`).join("; ")}`
+      : "";
+    reason = `tier pool ${input.fallbackReason}${blocked}`;
   } else {
     const preferredSkips = input.selectionSkips.filter(
       (skip) => baseModelRef(skip.model) === baseModelRef(preferred),
@@ -126,14 +132,48 @@ export function buildModelRouting(input: {
 
 /**
  * 降级说明文案（附在工具结果正文末尾，规格 §6：不能让用户误以为调用了
- * 首选模型）；未降级返回 null（不附加噪音）。
+ * 首选模型）；未降级返回 null（不附加噪音）。工单 07 起继承父会话也是
+ * 正文必须说明的路由事件（preferred/actual 同为父模型、downgraded=false），
+ * 不再只塞在低层 details。
  */
 export function describeModelRouting(routing: ModelRoutingDetails): string | null {
+  if (routing.fallbackReason && routing.reason) {
+    const inheritance = `inherited parent session model ${routing.actual}`;
+    const head = routing.downgraded
+      ? `preferred ${routing.preferred}, actual ${routing.actual} — ${inheritance}`
+      : inheritance;
+    return `[model routing] tier "${routing.tier}": ${head} (${routing.reason})`;
+  }
   if (!routing.downgraded || !routing.reason) return null;
   return (
     `[model routing] tier "${routing.tier}": preferred ${routing.preferred}, ` +
     `actual ${routing.actual} — downgraded (${routing.reason})`
   );
+}
+
+/**
+ * 由工单 06 的 loadout 路由快照组装结果路由记录（工单 07：同步等待、演示
+ * pane、迟到回注三条结果路径统一从这里读路由口径，不再各自从计划对象
+ * 拼）。快照给底子（池/首选/选择期跳过/继承原因）；运行期 failover 尝试
+ * 链与换候选后的实际模型由调用层叠加。非 tier 路径（快照缺 tier）返回
+ * null，不带路由记录。
+ */
+export function buildModelRoutingFromSnapshot(
+  snapshot: LoadoutRoutingSnapshot | null | undefined,
+  runtime: { actualModel?: string | null; attempts?: readonly ModelFailoverAttempt[] } = {},
+): ModelRoutingDetails | null {
+  if (!snapshot || snapshot.tier == null) return null;
+  const actual = runtime.actualModel ?? snapshot.model ?? snapshot.preferred ?? "";
+  return buildModelRouting({
+    tier: snapshot.tier,
+    // 池缺席（档位未配置）时以实际模型兜底：preferred 落到父模型、
+    // downgraded=false，可见性交给 fallbackReason 分支。
+    pool: snapshot.pool?.length ? snapshot.pool : [actual],
+    actual,
+    attempts: runtime.attempts ?? [],
+    selectionSkips: snapshot.skipped,
+    ...(snapshot.fallbackReason ? { fallbackReason: snapshot.fallbackReason } : {}),
+  });
 }
 
 /** 重试判定结果：是否切换 + 不切换的结构化原因（诊断用）。 */

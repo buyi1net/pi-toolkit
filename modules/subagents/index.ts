@@ -17,10 +17,15 @@
 //   - 服务句柄 `subagents.running`：供其它模块查询子代理运行状态
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { getToolkitConfigPath } from "../../kit/config.ts";
 import { type ModuleContext, type ModuleDefinition } from "../../kit/module.ts";
 import { USAGE_RECORDER_SERVICE_NAME, type UsageRecorderService } from "../usage/api.ts";
-import { loadEffectiveTierConfig, MODEL_TIERS, SUBAGENTS_MODULE_ID, type ModelTier } from "./config.ts";
+import {
+  loadEffectiveTierConfig,
+  MODEL_TIERS,
+  subagentsSectionPath,
+  SUBAGENTS_MODULE_ID,
+  type ModelTier,
+} from "./config.ts";
 import {
   createModelErrorJournal,
   createProvidersHealthGateway,
@@ -36,6 +41,12 @@ import type { RuntimeRecord } from "./registry.ts";
 
 export { SUBAGENTS_MODULE_ID } from "./config.ts";
 export type { ModelHealthMap, ModelRuntimeStatus } from "./model-health.ts";
+// 工单 08：usage 模块的统计事件/记录从路由快照读模型来源与继承原因，
+// 词汇表在 routing-snapshot.ts 单一维护，这里只做再导出。
+export type {
+  RoutingInheritanceCause,
+  RoutingModelOrigin,
+} from "./routing-snapshot.ts";
 
 /** 服务句柄名（注册表要求全小写） */
 export const SUBAGENTS_SERVICE_NAME = "subagents.running";
@@ -84,10 +95,12 @@ function registerSubagents(context: ModuleContext): void {
   // 宿主注入：本节点就是 pi-toolkit.json 的 `modules.subagents` 节。
   // getConfig() 返回状态中枢解析后的本模块配置（schema 默认值 + 磁盘取值），
   // 非 schema 键原样透传，因此 models / status 直接可用；写盘由菜单保存的配置写入事务重载。
+  // source 统一走 subagentsSectionPath（工单 05）：编辑器用它判定哪几档生效值
+  // 来自本节，两侧必须是同一拼法。
   subagentsExtension(context.pi, {
     registerCommand: false,
     readHostSection: (): SubagentsHostSection => ({
-      source: `${getToolkitConfigPath(getAgentDir())} (modules.${SUBAGENTS_MODULE_ID})`,
+      source: subagentsSectionPath(),
       section: context.getConfig(),
     }),
     modelHealth,
@@ -115,7 +128,7 @@ function registerSubagents(context: ModuleContext): void {
       if (loaded.error || !loaded.config) return [];
       const config = loaded.config;
       return MODEL_TIERS.flatMap((tier: ModelTier) => {
-        const models = config.models[tier];
+        const models = config.tiers[tier].pool;
         return models && models.length > 0 ? [{ tier, models: poolBaseRefs(models) }] : [];
       });
     },

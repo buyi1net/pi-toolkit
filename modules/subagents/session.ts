@@ -16,7 +16,8 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { debugLog } from "./diagnostics.ts";
-import { modelOwnThinkingSuffix, type ModelTier } from "./routing.ts";
+import { type ModelTier } from "./routing.ts";
+import { resolveAppliedThinking, type LoadoutRoutingSnapshot } from "./routing-snapshot.ts";
 
 export interface SessionEntry {
   type: string;
@@ -119,6 +120,19 @@ export interface SubagentLoadout {
    * 重放，不影响已在 thinkingOverride/thinking 里确定的更高优先级。
    */
   tierThinking?: string | null;
+  /**
+   * fallback 继承的父会话思考等级（工单 06）：池未配置/全池状态阻断时按
+   * 计划写入（ADR 0006 决策 7：继承路径把父会话等级作为显式参数传给子
+   * 进程），位于覆盖链最顶层。resume 与拼 argv 按同一链重放；旧快照缺省
+   * 为 null，行为不变。
+   */
+  parentThinking?: string | null;
+  /**
+   * 本次 spawn 的路由快照（工单 06）：候选池、首选、实际选中、跳过候选
+   * 及原因、继承原因、生效层来源、生效思考等级及其来源。resume/recover
+   * 重建运行态与所有展示面的唯一数据源；旧快照缺省为 null 按现状降级。
+   */
+  routing?: LoadoutRoutingSnapshot | null;
   /** How the identity text was applied: append/replace, or null. */
   systemPromptMode: "append" | "replace" | null;
   /** The system-prompt/identity text, only when it lived in the system prompt. */
@@ -152,13 +166,12 @@ export function loadoutSidecarPath(sessionFile: string): string {
 
 /**
  * loadout 实际生效的思考等级（工单 27）：与 applySandboxToParts 拼 argv
- * 的覆盖链同一口径——显式 thinkingOverride > 代理 frontmatter thinking >
- * 档位默认 tierThinking > 模型自带 ":level" 后缀；全部缺席为 null。
+ * 的覆盖链同一口径（工单 06 起含 parentThinking 顶层，实现收在
+ * routing-snapshot.ts 的 resolveAppliedThinking，三处不漂移）。
  * 状态行展示与运行态登记共用本函数，不各自另算一套。
  */
 export function appliedLoadoutThinking(loadout: SubagentLoadout): string | null {
-  const requested = loadout.thinkingOverride ?? loadout.thinking ?? loadout.tierThinking ?? null;
-  return requested ?? modelOwnThinkingSuffix(loadout.model);
+  return resolveAppliedThinking(loadout).level;
 }
 
 /** Persist a subagent's resolved sandbox loadout beside its session file. */
@@ -251,6 +264,9 @@ const LOADOUT_SECURITY_FIELDS = [
   "thinking",
   "thinkingOverride",
   "tierThinking",
+  // 工单 06：parentThinking 是覆盖链顶层、直接决定子进程 --model 参数的
+  // 生效思考等级，锚定副本与 sidecar 的漂移必须可检测。
+  "parentThinking",
   "systemPromptMode",
   "identity",
   "spawnable",

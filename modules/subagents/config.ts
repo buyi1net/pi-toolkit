@@ -1,20 +1,22 @@
 // 子代理模块的配置落点：pi-toolkit.json 的 `modules.subagents` 节。
 //
 // 归一裁决（工单 04）：tier 模型路由（`models.fast` / `models.balanced` /
-// `models.deep` 的有序候选池，工单 21）与状态显示开关（`status.enabled`）的
+// `models.flagship` 的有序候选池，工单 21）与状态显示开关（`status.enabled`）的
 // 菜单读写都落这一节；
 // 原 pi-subagents 包内 config.json 的 status.enabled 只作兜底默认。
 //
-// tier 解析保留覆盖优先级链，共六级（外部显式配置优先，包内文件兜底）：
-//   1. env PI_SUBAGENTS_CONFIG
+// tier 解析保留六级覆盖链（外部显式配置优先，包内文件兜底），工单 00 起为
+// 逐档合并而非首个文件终局（每一档的候选池与思考等级各自独立取最高优先
+// 级的合法声明层，非法声明记入问题清单后落低层）：
+//   1. env PI_SUBAGENTS_CONFIG（硬错误 + 整份锁定，不与低层合并）
 //   2. 项目 <cwd>/.pi/agent/pi-subagents.json
 //   3. 全局 <agentDir>/pi-subagents.json
 //   4. pi-toolkit.json 的 modules.subagents 节（本文件负责读写；声明了
-//      models 或 thinking 任一对象时参与，工单 23 起 thinking 同层生效）
+//      models 或 thinking 任一键即参与，非法取值落低层并入问题清单）
 //   5. 模块目录 config.json
 //   6. 模块目录 config.json.example
-// 第 4 级只在真的声明了 models/thinking 对象时参与（否则让链继续落到包内
-// 兜底）；候选链的拼接在 routing.ts，本文件只负责本节的读写与校验。
+// 候选链的逐档拼接在 routing.ts，本文件只负责本节的读写与校验；菜单读
+// 生效值也经 loadEffectiveTierConfig 走同一读口。
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { getToolkitConfigPath } from "../../kit/config.ts";
@@ -22,11 +24,13 @@ import type { ModuleConfigRecord } from "../../kit/module.ts";
 import {
   MODEL_TIERS,
   THINKING_LEVELS,
+  effectiveTierMapping,
   normalizeTier,
   parseTierConfig,
   parseTierConfigLenient,
   resolveTierForParams,
   loadTierRouteConfig,
+  type EffectiveTierRouteConfig,
   type ModelTier,
   type ThinkingLevel,
   type TierConfigLoadResult,
@@ -36,8 +40,8 @@ import { getAgentConfigDir, resolveHostTierSources } from "./mod.ts";
 /** 模块 id：同时是配置节名与菜单项 id 前缀 */
 export const SUBAGENTS_MODULE_ID = "subagents";
 
-export { MODEL_TIERS, THINKING_LEVELS, normalizeTier };
-export type { ModelTier, ThinkingLevel, TierConfigLoadResult };
+export { MODEL_TIERS, THINKING_LEVELS, effectiveTierMapping, normalizeTier };
+export type { EffectiveTierRouteConfig, ModelTier, ThinkingLevel, TierConfigLoadResult };
 
 export type TierMapping = Partial<Record<ModelTier, string[]>>;
 
@@ -52,6 +56,12 @@ export interface SubagentsSectionView {
   /** `status.enabled`；未声明时为 undefined（落回包内 config.json 的兜底默认） */
   readonly statusEnabled: boolean | undefined;
   readonly problems: readonly string[];
+  /**
+   * 本节 models/thinking 树的逐档问题（工单 05）：候选池编辑器的锁定条
+   * 件——混合合法/非法档时编辑器整体锁进错误态，不出现「部分正常」的
+   * 可编辑假象（problems 还包含 status 的问题，不能直接当锁定条件用）。
+   */
+  readonly tierProblems: readonly string[];
 }
 
 const SECTION_LABEL = `modules.${SUBAGENTS_MODULE_ID}`;
@@ -66,12 +76,11 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * spawn 路径（loadEffectiveTierConfig）仍从严，不静默降级。
  */
 export function readSubagentsSection(section: Record<string, unknown>): SubagentsSectionView {
-  const problems: string[] = [];
-
   const lenient = parseTierConfigLenient(section, SECTION_LABEL);
   const tier: TierMapping = { ...lenient.models };
   const tierThinking: TierThinkingMapping = { ...lenient.thinking };
-  problems.push(...lenient.problems);
+  const tierProblems: readonly string[] = [...lenient.problems];
+  const problems: string[] = [...tierProblems];
 
   let statusEnabled: boolean | undefined;
   const status = section.status;
@@ -84,7 +93,7 @@ export function readSubagentsSection(section: Record<string, unknown>): Subagent
     }
   }
 
-  return { tier, tierThinking, statusEnabled, problems };
+  return { tier, tierThinking, statusEnabled, problems, tierProblems };
 }
 
 /**
@@ -95,8 +104,8 @@ export function subagentsSectionPath(agentDir?: string): string {
 }
 
 /**
- * 按 spawn 时的同一规则解析生效的 tier 配置（含第 4 级本节点注入），
- * 供菜单展示与缺映射报错使用。
+ * 按 spawn 时的同一规则解析逐档合并后的生效 tier 配置（含第 4 级本节点
+ * 注入），供菜单展示与缺映射报错使用——与 spawn 共用工单 00 的单一读口。
  */
 export function loadEffectiveTierConfig(options?: {
   readonly cwd?: string;
@@ -157,4 +166,24 @@ export function tierPoolPatch(
 /** 写盘补丁语义（工单 19）：状态显示开关 */
 export function statusEnabledPatch(enabled: boolean): ModuleConfigRecord {
   return { status: { enabled } };
+}
+
+/**
+ * 写盘补丁语义（工单 05 显式接管）：把一档当前生效的候选池连同生效思考
+ * 等级写进本节，让本节成为该档的声明层。thinking 传 undefined 表示任何
+ * 层都没声明过该档思考等级（不写 thinking 键）；传 null 写显式清除墓碑；
+ * 传具体等级原样写入。写前按 spawn 时的同一严格规则校验，非法取值直接
+ * 抛出（不产生写盘）。
+ */
+export function tierTakeoverPatch(
+  tier: ModelTier,
+  pool: readonly string[],
+  thinking: ThinkingLevel | null | undefined,
+  source: string,
+): ModuleConfigRecord {
+  assertModelPool(tier, pool, source);
+  if (thinking === undefined) return { models: { [tier]: [...pool] } };
+  const checked = parseTierConfig({ thinking: { [tier]: thinking } }, source);
+  if ("error" in checked) throw new Error(checked.error);
+  return { models: { [tier]: [...pool] }, thinking: { [tier]: thinking } };
 }

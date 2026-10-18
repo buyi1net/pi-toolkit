@@ -25,6 +25,14 @@ import {
 import { normalizeSubagentName as normalizeName } from "./names.ts";
 import { peekExitSidecar } from "./surface.ts";
 import { modelOwnThinkingSuffix } from "./routing.ts";
+import {
+  inheritanceBadgeText,
+  routingInheritanceCause,
+  routingModelOrigin,
+  type LoadoutRoutingSnapshot,
+  type RoutingInheritanceCause,
+  type RoutingModelOrigin,
+} from "./routing-snapshot.ts";
 import type { RuntimeRecord, RuntimeRegistry } from "./registry.ts";
 import type { RunningSubagent, SubagentWaitMode, SubagentWaitRelease } from "./types.ts";
 
@@ -52,6 +60,10 @@ export interface SubagentInspection {
   model: string | null;
   thinking: string | null;
   tier: string | null;
+  /** 模型来源（工单 08：统一读路由快照；快照缺席为 null，维持现状）。 */
+  modelSource: RoutingModelOrigin | null;
+  /** fallback 继承原因细分；非继承与旧快照为 null。 */
+  inheritanceCause: RoutingInheritanceCause | null;
   source: SubagentInspectionSource;
   lifecycle: SubagentInspectionLifecycle;
   /** activity sidecar 中的原始阶段;没有快照时为 null。 */
@@ -133,6 +145,8 @@ interface InspectRecord {
   cohortId?: string;
   agent?: string;
   model?: string | null;
+  /** 运行态路由快照（工单 06 随 RunningSubagent 登记；工单 08 起检查视图优先读它）。 */
+  modelRouting?: LoadoutRoutingSnapshot | null;
   surface: string;
   startTime: number;
   sessionFile: string;
@@ -451,7 +465,12 @@ function buildInspection(
     memberRound,
     stdinLost,
   });
-  const model = loadout?.model ?? record.model ?? null;
+  // 工单 08：model/tier/thinking 与来源统一读路由快照（live 记录带
+  // modelRouting；旧 loadout / 旧记录无快照时退回零散字段，行为不变）。
+  // 快照在场时以它的值为准（包括合法的 null），不拿旧字段凑。
+  const routing = loadout?.routing ?? record.modelRouting ?? null;
+  const origin = routingModelOrigin(routing);
+  const model = routing ? routing.model : loadout?.model ?? record.model ?? null;
   const cohortId = record.cohortId ?? loadout?.cohortId ?? null;
 
   return {
@@ -461,8 +480,10 @@ function buildInspection(
     agent: loadout?.agent ?? record.agent ?? null,
     task: truncate(record.task, MAX_TASK_LENGTH) || null,
     model,
-    thinking: resolveThinking(loadout, model),
-    tier: loadout?.tier ?? null,
+    thinking: routing ? routing.effectiveThinking : resolveThinking(loadout, model),
+    tier: routing ? routing.tier : loadout?.tier ?? null,
+    modelSource: origin,
+    inheritanceCause: routingInheritanceCause(routing),
     source,
     lifecycle,
     phase: statusPhase,
@@ -657,12 +678,15 @@ function formatInspection(view: SubagentInspection): string {
   const controls = `steer=${view.canSteer ? "yes" : "no"} resume=${view.canResume ? "yes" : "no"}`;
   const model = view.model ? ` model=${view.model}` : "";
   const thinking = view.thinking ? ` thinking=${view.thinking}` : "";
+  const inherited = view.modelSource === "parent"
+    ? inheritanceBadgeText(view.inheritanceCause)
+    : "";
   const cohort = view.cohortId ? ` cohort=${view.cohortId}` : "";
   const task = view.task ? `\n  task: ${view.task}` : "";
   const question = view.waitingQuestion ? `\n  question: ${view.waitingQuestion}` : "";
   return (
     `• ${view.name} [${view.lifecycle}]${status}${phase} elapsed=${Math.floor((view.elapsedMs ?? 0) / 1000)}s ` +
-    `${process} last=${formatAge(view.lastActivityAgeMs)} ${activity}${wait}${children}${timeout} ${controls}${model}${thinking}${cohort}` +
+    `${process} last=${formatAge(view.lastActivityAgeMs)} ${activity}${wait}${children}${timeout} ${controls}${model}${thinking}${inherited}${cohort}` +
     task + question
   );
 }
@@ -675,7 +699,8 @@ export function registerSubagentInspectTool(pi: ExtensionAPI, deps: SubagentInsp
       "Take a fresh, read-only status snapshot of subagents managed by this pi-subagents extension. " +
       "With no name, inspect all currently running/recovering subagents; with name, inspect that session even if it has finished. " +
       "The snapshot includes lifecycle, activity phase/event, last activity age, waiting reason or question, process/PID or pane liveness, " +
-      "model/thinking, optional cohortId, child count, timeout state, and steer/resume availability. " +
+      "model/thinking with the routing-snapshot model source (fallback runs are labeled as inheriting the parent session with the reason), " +
+      "optional cohortId, child count, timeout state, and steer/resume availability. " +
       "This is an on-demand observation, not a polling loop; do not call it repeatedly just to wait.",
     promptSnippet:
       "Inspect the current subagent status once: lifecycle, phase, last activity, waiting reason, process/PID, children, timeout, and controls.",

@@ -24,14 +24,25 @@ export const PROVIDERS_POOL_USAGE_SERVICE_NAME = "providers.pool-usage";
 /**
  * 单个候选的供应商查询原始状态（工单 25）。providers 域只回报观测事实，
  * 编排判定（可用/额度不足/…）由消费方（subagents/model-health.ts）推导。
+ * 每条状态带观测建立时间（工单 01）：ready 取快照自带的 fetchedAt，其余
+ * 状态记录落表时刻——消费方据此在 read 侧检查条目新鲜度，超龄按未知处理。
  */
 export type PoolUsageState =
 	| { kind: "ready"; snapshot: UsageSnapshot }
-	| { kind: "unsupported" }
-	| { kind: "no-credential" }
-	| { kind: "failed" }
-	| { kind: "pending" }
-	| { kind: "unresolved" };
+	| { kind: "unsupported"; fetchedAt: number }
+	| { kind: "no-credential"; fetchedAt: number }
+	| { kind: "failed"; fetchedAt: number }
+	| { kind: "pending"; fetchedAt: number }
+	| { kind: "unresolved"; fetchedAt: number };
+
+/**
+ * 条目观测建立时间（epoch 毫秒）：ready 取快照自带 fetchedAt，其余取状态
+ * 落表时刻（api 面纯函数，工单 01）。无状态时（防御：异常构造）返回 NaN，
+ * 消费方按「无时间 = 未知」处理。
+ */
+export function poolUsageObservedAt(state: PoolUsageState): number {
+	return state.kind === "ready" ? state.snapshot.fetchedAt : (state as { fetchedAt?: number }).fetchedAt ?? Number.NaN;
+}
 
 /** 候选池单条观测结果 */
 export interface PoolUsageEntry {
@@ -100,3 +111,11 @@ export function resolveProviderRefreshMs(section: Record<string, unknown>): numb
 		? value
 		: DEFAULT_PROVIDER_REFRESH_MS;
 }
+
+/**
+ * 读取侧过期界限（工单 01）：健康快照消费方（subagents/model-health.ts 的
+ * read 路径）按条目观测时间检查——超过该年龄的条目降级为 unknown，不再当
+ * 额度不足/下线硬阻断。取默认刷新间隔（60s）：与快照缓存默认保鲜期同一
+ * 量级，超龄的「最近已知」不再可信为阻断依据，恢复以异步后台刷新为准。
+ */
+export const POOL_USAGE_READ_STALE_MS = DEFAULT_PROVIDER_REFRESH_MS;

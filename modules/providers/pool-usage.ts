@@ -113,7 +113,11 @@ export class PoolUsageTracker {
 		this.now = options.now ?? Date.now;
 	}
 
-	/** 读取候选池最近已知状态（同步、无网络）；从未查询过的候选不在返回值里。 */
+	/**
+	 * 读取候选池最近已知状态（同步、无网络）；从未查询过的候选不在返回值里。
+	 * 每条状态带观测建立时间（工单 01）；新鲜度判定属编排语义，由消费方
+	 * （subagents/model-health.ts 的 read 路径）按 TTL 降级，本方法不推断。
+	 */
 	snapshot(pool: readonly string[]): PoolUsageEntry[] {
 		const out: PoolUsageEntry[] = [];
 		for (const ref of new Set(pool)) {
@@ -136,7 +140,8 @@ export class PoolUsageTracker {
 			[...new Set(pool)].map(async (ref) => {
 				const model = findPoolModel(ref, ctx);
 				if (!model) {
-					this.setEntry(generation, ref, { kind: "unresolved" });
+					// 观测建立时间随状态落表（工单 01）：消费方在 read 侧检查新鲜度。
+					this.setEntry(generation, ref, { kind: "unresolved", fetchedAt: this.now() });
 					return;
 				}
 				await this.refreshRef(generation, ctx, ref, model);
@@ -166,7 +171,7 @@ export class PoolUsageTracker {
 			access = null;
 		}
 		if (!access) {
-			this.setEntry(generation, ref, { kind: "no-credential" });
+			this.setEntry(generation, ref, { kind: "no-credential", fetchedAt: this.now() });
 			return;
 		}
 		const key = providerAccessKey(access);
@@ -174,7 +179,7 @@ export class PoolUsageTracker {
 		const retryAt = this.retryAfter.get(key);
 		if (retryAt !== undefined && retryAt > now) {
 			// 退避中：保留既有状态；从未有过结果的候选标 pending（状态未知）
-			if (!this.entries.has(ref)) this.setEntry(generation, ref, { kind: "pending" });
+			if (!this.entries.has(ref)) this.setEntry(generation, ref, { kind: "pending", fetchedAt: now });
 			return;
 		}
 		const cached = this.cache.read(key);
@@ -218,7 +223,7 @@ export class PoolUsageTracker {
 		}
 		if (result.status === "unsupported") {
 			if (alive) this.retryAfter.set(key, now + this.retryMs);
-			return { kind: "unsupported" };
+			return { kind: "unsupported", fetchedAt: now };
 		}
 		// failed：近期（keepLastGood 内）缓存仍如实沿用（快照自带 fetchedAt，
 		// 消费方看得见数据年龄），否则如实回报失败——绝不伪造成额度不足。
@@ -228,7 +233,7 @@ export class PoolUsageTracker {
 			return { kind: "ready", snapshot: cached };
 		}
 		if (alive) this.retryAfter.set(key, now + this.retryMs);
-		return { kind: "failed" };
+		return { kind: "failed", fetchedAt: now };
 	}
 
 	private setEntry(generation: number, ref: string, state: PoolUsageState): void {

@@ -14,6 +14,7 @@ import {
   USAGE_SNAPSHOT_SERVICE_NAME,
   type UsageBreakdown,
   type UsageModelView,
+  type UsageRecord,
   type UsageSnapshotService,
   type UsageSnapshotView,
 } from "./api.ts";
@@ -35,6 +36,15 @@ const OUTCOME_KEYS: Readonly<Record<string, UsageMessageKey>> = {
   completed: "module.usage.panel.outcome.completed",
   failed: "module.usage.panel.outcome.failed",
   cancelled: "module.usage.panel.outcome.cancelled",
+};
+
+/** 继承原因细分 → 面板文案键（工单 08；词汇表见 subagents 路由快照模块）。 */
+const INHERITANCE_CAUSE_KEYS: Readonly<Record<string, UsageMessageKey>> = {
+  "pool-unconfigured": "module.usage.panel.routing.cause.pool-unconfigured",
+  "hard-blocked": "module.usage.panel.routing.cause.hard-blocked",
+  "persistently-unstable": "module.usage.panel.routing.cause.persistently-unstable",
+  "mixed-blocks": "module.usage.panel.routing.cause.mixed-blocks",
+  unclassified: "module.usage.panel.routing.cause.unclassified",
 };
 
 /** Token 数量的紧凑显示：1234 → "1.2k" */
@@ -88,7 +98,24 @@ function outcomeLabel(outcome: string, t: Translator): string {
   return key ? t(key) : outcome;
 }
 
-function routingLabel(downgraded: boolean | null, t: Translator): string {
+/**
+ * 路由标签（工单 08）：继承运行显示「继承父会话 + 原因」；按池运行按
+ * 降级口径显示首选/降级；显式声明模型如实标注；旧记录（缺来源字段）
+ * 维持工单 28 的降级口径（未知不伪装）。
+ */
+function routingLabel(
+  record: Pick<UsageRecord, "downgraded" | "modelSource" | "inheritanceCause">,
+  t: Translator,
+): string {
+  if (record.modelSource === "parent") {
+    const causeKey = record.inheritanceCause != null
+      ? INHERITANCE_CAUSE_KEYS[record.inheritanceCause]
+      : undefined;
+    const cause = causeKey ? t(causeKey) : t("module.usage.panel.routing.cause.unclassified");
+    return t("module.usage.panel.routing.inherited", { reason: cause });
+  }
+  if (record.modelSource === "declared") return t("module.usage.panel.routing.declared");
+  const downgraded = record.downgraded;
   if (downgraded === true) return t("module.usage.panel.routing.downgraded");
   if (downgraded === false) return t("module.usage.panel.routing.preferred");
   return t("module.usage.panel.unknown");
@@ -161,7 +188,7 @@ export function buildUsagePanelReport(view: UsageSnapshotView, t: Translator): s
           model: record.model ?? t("module.usage.panel.unknown"),
           thinking: record.thinking ?? "—",
           outcome: outcomeLabel(record.outcome, t),
-          routing: routingLabel(record.downgraded, t),
+          routing: routingLabel(record, t),
         })}`,
       );
     }

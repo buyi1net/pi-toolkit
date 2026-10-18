@@ -118,6 +118,23 @@ export function resolveModelThinkingSupport(
   return model ? supportedThinkingLevels(model) : null;
 }
 
+/**
+ * 按引用核验模型是否具备全部要求的能力，返回缺失清单（工单 02）：目录里
+ * 查得到该模型而它缺少某能力标签时返回非空清单；空数组 = 查得到且全部
+ * 满足。查不到/裸 id 跨供应商歧义返回 null（无法核验），调用方跳过校验
+ * 而不是虚构支持性——与 resolveModelThinkingSupport 同一条诚实边界，
+ * 供启动链对显式 model / 档案 model 做与思考等级同一位置的最终核验。
+ */
+export function modelMissingCapabilities(
+  modelRef: string,
+  required: readonly ModelCapability[],
+  catalog: ModelCatalog,
+): readonly ModelCapability[] | null {
+  const entry = findCatalogModel(modelRef, catalog);
+  if (!entry) return null;
+  return required.filter((capability) => !entryHasCapability(entry, capability));
+}
+
 /** 单个候选被过滤掉的原因（结构化诊断信息的最小单位）。 */
 export interface ModelCandidateRejection {
   /** 被过滤的候选引用（含 ":level" 后缀，原样）。 */
@@ -127,6 +144,17 @@ export interface ModelCandidateRejection {
   /** 人可读原因（错误文案直接拼这段）。 */
   readonly reason: string;
 }
+
+/**
+ * 运行状态硬阻断类跳过原因的固定前缀（工单 08）：reason 文案里 verdict
+ * 跟在其后（quota-blocked / offline）。展示层靠它从路由快照的 skipped
+ * 里区分「额度/下线硬阻断」与其它跳过，不在各自入口复制字符串字面量。
+ */
+export const STATUS_SKIP_REASON_PREFIX = "runtime status ";
+/** 持续不稳定跳过原因的固定前缀（工单 08，同上口径）。 */
+export const UNSTABLE_SKIP_REASON_PREFIX = "persistent provider instability, skipped";
+/** 降级重试排除原因的固定前缀（工单 08：细分继承原因时排除该类条目）。 */
+export const FAILOVER_EXCLUSION_REASON_PREFIX = "excluded by failover policy";
 
 /** 选择器输入：本次任务对候选的能力与思考等级要求。 */
 export interface ModelSelectionRequirements {
@@ -209,7 +237,7 @@ export function selectModelCandidate(
       skipped.push({
         model: candidate,
         kind: "status",
-        reason: "excluded by failover policy for this spawn (an earlier attempt on this candidate failed)",
+        reason: `${FAILOVER_EXCLUSION_REASON_PREFIX} for this spawn (an earlier attempt on this candidate failed)`,
       });
       continue;
     }
@@ -252,7 +280,7 @@ export function selectModelCandidate(
       skipped.push({
         model: candidate,
         kind: "status",
-        reason: `runtime status ${status.verdict}${status.detail ? ` (${status.detail})` : ""}`,
+        reason: `${STATUS_SKIP_REASON_PREFIX}${status.verdict}${status.detail ? ` (${status.detail})` : ""}`,
       });
       continue;
     }
@@ -263,7 +291,7 @@ export function selectModelCandidate(
       skipped.push({
         model: candidate,
         kind: "status",
-        reason: `persistent provider instability, skipped (${status.detail ?? "repeated transient failures"})`,
+        reason: `${UNSTABLE_SKIP_REASON_PREFIX} (${status.detail ?? "repeated transient failures"})`,
       });
       continue;
     }

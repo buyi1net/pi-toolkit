@@ -19,8 +19,9 @@ import { baseModelRef } from "./model-health.ts";
 import { subagentsTableTranslator, type SubagentsTranslate } from "./messages/index.ts";
 import {
   aggregateFailoverExhaustion,
-  buildModelRouting,
+  buildModelRoutingFromSnapshot,
   describeModelRouting,
+  isFailoverSwitchable,
   shouldFailoverAfterFailure,
   type ModelFailoverAttempt,
   type ModelRoutingDetails,
@@ -115,7 +116,10 @@ export interface SubagentToolDeps {
   /**
    * 模型错误观测写入（工单 26，可选）：临时性路由失败（限流/过载/超时/
    * 临时服务错误）写入健康状态日志，供后续 spawn 的候选选择（持续不稳
-   * 定跳过）与观测复用。缺席时降级重试照常，只是状态不沉淀。
+   * 定跳过）与观测复用。工单 04 起记录不以「是否切换到下一候选」为前提：
+   * 有进度失败、没有剩余候选、预算不足、最后一个候选失败的临时性故障
+   * 同样写入；非临时类别在这里按 switchable 收窄，不会到达日志。缺席时
+   * 降级重试照常，只是状态不沉淀。
    */
   recordModelError?: (model: string, exception: RouteException) => void;
   /**
@@ -186,6 +190,8 @@ function applyRetentionToRunning(
  * 运行,dependsOn 消费者继续等待真实终态。
  *
  * 工单 26:携带该次运行的模型路由记录(首选/实际/降级原因,若为 tier 路径)。
+ * 工单 07:路由说明同时写进回注正文(从工单 06 快照生成,与同步等待同格式),
+ * 不只塞低层 details。
  */
 function registerDetachedLateDelivery(
   pi: ExtensionAPI,
@@ -216,13 +222,20 @@ function registerDetachedLateDelivery(
         : deps.resolveResultPresentation(late, running.name, {
             sessionPreserved: retentionDetails.outcome !== "cleaned",
           });
+      // 工单 07:迟到回注同样把路由说明写进正文;取消类终态(用户关 pane/
+      // 显式停止)没有结果,不附加。
+      const routingNote =
+        modelRouting && !late.stopped && !late.userClosed
+          ? describeModelRouting(modelRouting)
+          : null;
+      const content = routingNote ? `${presentation}\n\n${routingNote}` : presentation;
       const routeException = late.userClosed || late.stopped
         ? undefined
         : routeExceptionFromResult(late, running.model);
       pi.sendMessage(
         {
           customType: "subagent_result",
-          content: presentation,
+          content,
           display: true,
           details: {
             name: running.name,
@@ -755,25 +768,20 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             sessionFile: running.sessionFile,
             status: "member-started",
             member: true,
+            ...(plan.tierConfigProblems ? { configProblems: [...plan.tierConfigProblems] } : {}),
           },
         };
       }
 
       // ── 可见演示子代理(interactive):保持异步立即返回,pane 归用户操作。──
       // watcher 到达终态后经 steer 消息回注,不阻塞主 turn。演示路径不做
-      // 降级重试(pane 归用户,自动重启会偷换用户正在看的会话);tier 路径
-      // 的回注同样携带模型路由记录(选择期降级可见,工单 26)。
+      // 降级重试(pane 归用户,自动重启会偷换用户正在看的会话);路由记录
+      // 从工单 06 快照生成(覆盖 fallback 分支),正文附路由说明(工单 07)。
       if (running.interactive) {
-        const interactiveRouting: ModelRoutingDetails | null =
-          plan.tier != null && plan.tierPool != null
-            ? buildModelRouting({
-                tier: plan.tier,
-                pool: plan.tierPool,
-                actual: running.model ?? null,
-                attempts: [],
-                selectionSkips: plan.tierSelection?.skipped ?? [],
-              })
-            : null;
+        const interactiveRouting: ModelRoutingDetails | null = buildModelRoutingFromSnapshot(
+          running.modelRouting,
+          { actualModel: running.model ?? null },
+        );
         const interactiveWatch = started.watch as Promise<SubagentResult>;
         running.watchPromise = interactiveWatch;
         interactiveWatch
@@ -790,13 +798,22 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             // 这里回注会伪造/重复结果,直接跳过。
             if (result.handedOff) return;
             const presentation = deps.resolveResultPresentation(result, running.name);
+            // 工单 07:路由说明进 steer 正文(与同步等待同格式),不只塞
+            // details;取消类终态(用户关 pane/显式停止)没有结果,不附加。
+            const interactiveRoutingNote =
+              !result.userClosed && !result.stopped && interactiveRouting
+                ? describeModelRouting(interactiveRouting)
+                : null;
+            const content = interactiveRoutingNote
+              ? `${presentation}\n\n${interactiveRoutingNote}`
+              : presentation;
             const routeException = result.userClosed
               ? undefined
               : routeExceptionFromResult(result, running.model);
             pi.sendMessage(
               {
                 customType: "subagent_result",
-                content: presentation,
+                content,
                 display: true,
                 details: {
                   name: running.name,
@@ -856,6 +873,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             ...(running.cohortId ? { cohortId: running.cohortId } : {}),
             sessionFile: running.sessionFile,
             status: "started",
+            ...(plan.tierConfigProblems ? { configProblems: [...plan.tierConfigProblems] } : {}),
           },
         };
       }
@@ -882,35 +900,38 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       // 一次、顺序不回绕；timeoutMs 覆盖全部尝试的总预算。失败尝试按保留
       // 策略收尾；完成记录只在最终终态 settle 一次；结果 details.modelRouting
       // 记录首选/实际/降级原因；全候选耗尽返回聚合错误。判定细节在
-      // model-failover.ts（纯策略），错误观测写入 deps.recordModelError。
+      // model-failover.ts（纯策略），错误观测写入 deps.recordModelError——
+      // 工单 04 起不认「是否切换」为前提：判定返回不切换的临时性故障同样
+      // 写入（见循环内决策前的记录点），观测与重启决策解耦。
       const retentionPolicy = params.retention ?? "auto";
       const waitDeadline = timeoutMs != null ? Date.now() + timeoutMs : null;
+      // 工单 07：路由口径的唯一底子是工单 06 的 loadout 路由快照（运行态随
+      // spawn/resume/recover 携带），不再从计划对象各自拼。快照冻结首启事实
+      // （池/首选/选择期跳过/继承原因）；运行期 failover 尝试链由本层叠加
+      // （buildAttemptModelRouting）。降级重试的循环判定同样读快照的档位与
+      // 池；fallback 继承路径（无可用池）不参与运行期切换。
+      const routingSnapshot = running.modelRouting ?? null;
       const failoverBase =
-        plan.tier != null && (plan.tierPool != null || plan.fallbackReason != null)
+        routingSnapshot?.tier != null &&
+        routingSnapshot.pool != null &&
+        routingSnapshot.pool.length > 0 &&
+        routingSnapshot.fallbackReason == null
           ? {
-              tier: plan.tier,
-              pool: plan.tierPool?.length ? plan.tierPool : [plan.effectiveModel!],
-              preferred: plan.tierPool?.[0] ?? plan.effectiveModel!,
-              initialSkips: plan.tierSelection?.skipped ?? [],
-              fallbackReason: plan.fallbackReason,
+              tier: routingSnapshot.tier,
+              pool: routingSnapshot.pool,
+              preferred: routingSnapshot.preferred ?? routingSnapshot.pool[0]!,
             }
           : null;
       const failoverAttempts: ModelFailoverAttempt[] = [];
       const failedCandidates = new Set<string>();
       let activePlan = plan;
       let attemptIndex = 1;
-      /** 当前尝试的模型路由记录（tier 路径；其他路径 null）。 */
+      /** 当前尝试的模型路由记录（快照底子 + 运行期尝试链；非 tier 路径 null）。 */
       const buildAttemptModelRouting = (): ModelRoutingDetails | null =>
-        failoverBase
-          ? buildModelRouting({
-              tier: failoverBase.tier,
-              pool: failoverBase.pool,
-              actual: running.model ?? null,
-              attempts: failoverAttempts,
-              selectionSkips: failoverBase.initialSkips,
-              fallbackReason: failoverBase.fallbackReason ?? undefined,
-            })
-          : null;
+        buildModelRoutingFromSnapshot(routingSnapshot, {
+          actualModel: running.model ?? null,
+          attempts: failoverAttempts,
+        });
 
       // 循环体所有路径要么 return（终态/detach/聚合错误）要么 continue
       //（降级重试）；非 tier 路径首次迭代即走原单次逻辑，行为不变。
@@ -932,13 +953,14 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         // 不 settle completion(上游仍在跑,dependsOn 等真实终态)、不清理
         // retention、不伪造摘要,也不触发降级重试(等待已解除)。迟到回注
         // 与 handed-off 移交由同一机制幂等处理。
+        const releaseRouting = buildAttemptModelRouting();
         registerDetachedLateDelivery(
           pi,
           deps,
           running,
           watchPromise,
           retentionPolicy,
-          buildAttemptModelRouting(),
+          releaseRouting,
         );
         if (raced.kind === "timeout") {
           return {
@@ -961,7 +983,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
               elapsed: Math.floor((Date.now() - running.startTime) / 1000),
               timeoutMs,
               status: "timed-out",
-              ...(buildAttemptModelRouting() ?? {}),
+              ...(releaseRouting ? { modelRouting: releaseRouting } : {}),
             },
           };
         }
@@ -983,14 +1005,15 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             sessionFile: running.sessionFile,
             elapsed: Math.floor((Date.now() - running.startTime) / 1000),
             status: "detached",
-            ...(buildAttemptModelRouting() ?? {}),
+            ...(releaseRouting ? { modelRouting: releaseRouting } : {}),
           },
         };
       }
       const result: SubagentResult = raced;
 
-      // ── 工单 26：临时性路由故障的候选切换判定（仅 tier 候选池路径）──
-      if (failoverBase && !plan.fallbackReason) {
+      // ── 工单 26：临时性路由故障的候选切换判定（仅 tier 候选池路径；快照
+      // 无可用池的 fallback 继承不参与，已在 failoverBase 判定中排除）──
+      if (failoverBase) {
         const cancelledNow =
           started.signal.aborted || !!result.userClosed || !!result.stopped;
         const routeExceptionNow = cancelledNow
@@ -999,6 +1022,17 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         const untried = failoverBase.pool.filter(
           (candidate) => !failedCandidates.has(baseModelRef(candidate)),
         ).length;
+        // 工单 04：错误观测全覆盖——临时性故障在切换判定之前就按基础引用写入
+        // 观测日志，不再以「是否切换到下一候选」为前提：有进度失败（重启会
+        // 重复副作用所以交还编排者，但服务不稳定是观测事实）、没有剩余候选、
+        // 预算不足、最后一个候选失败的临时性故障同样记录；取消类终态不是路由
+        // 失败、非临时类别不反映服务不稳定，均不写入（switchable 收窄，与装配
+        // 层适配器和日志自身的过滤双保险）。
+        const failedModel =
+          running.model ?? activePlan.effectiveModel ?? failoverBase.preferred;
+        if (routeExceptionNow && isFailoverSwitchable(routeExceptionNow.kind) && deps.recordModelError) {
+          deps.recordModelError(failedModel, routeExceptionNow);
+        }
         const decision = shouldFailoverAfterFailure({
           result: {
             stopped: !!result.stopped,
@@ -1011,11 +1045,9 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
           untriedCandidates: untried,
         });
         if (decision.failover) {
-          // 本次尝试按失败收尾：记录降级链、写错误观测（供后续 spawn 的候选
-          // 选择与观测复用）、按保留策略清理工件。完成记录保持 pending——
-          // 依赖等待者只被最终终态唤醒一次，中间尝试失败不单独 settle。
-          const failedModel =
-            running.model ?? activePlan.effectiveModel ?? failoverBase.preferred;
+          // 本次尝试按失败收尾：记录降级链、按保留策略清理工件。完成记录保持
+          // pending——依赖等待者只被最终终态唤醒一次，中间尝试失败不单独 settle。
+          // 错误观测已在判定前写入（工单 04，见上）。
           failoverAttempts.push({
             index: attemptIndex,
             model: failedModel,
@@ -1024,9 +1056,6 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             elapsedSeconds: result.elapsed,
           });
           failedCandidates.add(baseModelRef(failedModel));
-          if (routeExceptionNow && deps.recordModelError) {
-            deps.recordModelError(failedModel, routeExceptionNow);
-          }
           applyRetentionToRunning(running, retentionPolicy, {
             cancelled: false,
             failed: true,
@@ -1161,8 +1190,9 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
           },
         };
       }
-      // 工单 26：降级说明附在正文末尾（规格 §6：不能让用户误以为调用了首选
-      // 模型）；未降级不附加。取消类终态没有结果，不附加。
+      // 工单 26/07：路由说明附在正文末尾（规格 §6：不能让用户误以为调用了
+      // 首选模型）；底子来自工单 06 快照，运行期尝试链叠加；继承父会话同样
+      // 有正文说明。未降级且非继承不附加；取消类终态没有结果，不附加。
       const modelRouting = buildAttemptModelRouting();
       const routingNote = modelRouting ? describeModelRouting(modelRouting) : null;
       const presentation = deps.resolveResultPresentation(result, running.name, {
@@ -1201,6 +1231,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
           ...(result.stats ? { stats: result.stats } : {}),
           ...(routeException ? { routeException } : {}),
           ...(modelRouting ? { modelRouting } : {}),
+          ...(plan.tierConfigProblems ? { configProblems: [...plan.tierConfigProblems] } : {}),
         },
       };
       } // for(;;)：工单 26 降级重试循环——所有路径在循环体内 return/continue

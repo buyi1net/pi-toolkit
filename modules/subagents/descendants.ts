@@ -264,6 +264,9 @@ export function buildFirstLayerOnlySnapshot(
 
 function firstLayerInput(running: RunningSubagent, now: number): TreeRowInput {
   const snapshot = classifyStatus(running.statusState, now);
+  // 工单 08：行内模型/思考等级优先读路由快照（与 argv 同源）；快照在场时
+  // 以它的值为准（包括合法的 null），缺快照的旧运行态才退回零散字段。
+  const routing = running.modelRouting ?? null;
   return {
     key: `first:${running.id}`,
     name: running.name,
@@ -274,8 +277,8 @@ function firstLayerInput(running: RunningSubagent, now: number): TreeRowInput {
     startTime: running.startTime,
     parentKey: null,
     snapshot,
-    model: running.model ?? null,
-    thinking: running.thinking ?? null,
+    model: routing ? routing.model : running.model ?? null,
+    thinking: routing ? routing.effectiveThinking : running.thinking ?? null,
   };
 }
 

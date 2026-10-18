@@ -6,15 +6,18 @@
 // 待删 → Enter 确认删除）与「＋ 添加模型」行（Enter 追加候选）。
 //
 // 档位显示名与固定排序（工单 22）：设置界面按 旗舰模型 → 均衡模型 → 快速模型
-// 从高到低显示；内部键 deep/balanced/fast 不改名（与配置、工具参数和报错原文
-// 兼容），显示名走 i18n 三语键（module.subagents.tier.name.*）。
+// 从高到低显示；内部键 flagship/balanced/fast 不改名（与配置、工具参数和报错
+// 原文兼容；deep/quick 等旧名只剩别名），显示名走 i18n 三语键
+// （module.subagents.tier.name.*）。
 //
 // 写盘落点（工单 04 归一裁决）全在 pi-toolkit.json 的 `modules.subagents` 节；
-// tier 解析仍是六级覆盖链，编辑器只写第 4 级（每次改动立即落盘，读侧回读盘上
-// 真相）。缺映射或本节配置非法时，原版报错文案摆在一级入口行的描述里，不进
-// 编辑器也能看见（与 spawn 时抛出的字符串逐字一致）。思考等级（工单 23）只写
-// 档位默认：spawn 时的覆盖优先级（任务显式 > 代理 frontmatter > 档位默认）在
-// 启动事务里裁决，不在这里。
+// tier 解析是六级逐档合并链（工单 00），编辑器只写第 4 级（每次改动立即落
+// 盘，读侧回读盘上真相）。入口行读工单 00 的单一读口（逐档生效值 + 生效
+// 层来源 + 配置问题清单）：计数与缺档判断看逐档合并后的生效值，不再只看
+// 本地节——本地配了却被更高层旧文件占档、或本地非法落低层，都能从问题清
+// 单与生效层来源里看出来（与 spawn 读同一份）。思考等级（工单 23）只写
+// 档位默认：spawn 时的覆盖优先级（任务显式 > 代理 frontmatter > 档位默认）
+// 在启动事务里裁决，不在这里。
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SettingItem } from "@earendil-works/pi-tui";
@@ -31,62 +34,84 @@ import {
   type RowChangeEntry,
 } from "../../kit/module.ts";
 import {
+  effectiveTierMapping,
   loadEffectiveTierConfig,
+  MODEL_TIERS,
   statusEnabledPatch,
+  subagentsSectionPath,
   tierRouteError,
+  type EffectiveTierRouteConfig,
   type TierConfigLoadResult,
   type TierMapping,
 } from "./config.ts";
 import { loadStatusConfig } from "./status.ts";
 import {
+  type EffectivePanelView,
   type PoolEditorRow,
   type SaveOutcome,
   type SubagentsPanelOptions,
   type SubagentsPanelState,
   type TierCandidate,
+  type TierEditorView,
   type TierMenuRegistry,
+  type TierPoolOwnership,
   SubagentsPanel,
   TIER_DISPLAY_ORDER,
+  buildEffectivePanelView,
   buildPoolEditorRows,
   configuredCountValue,
   discoverTierCandidates,
+  effectiveMappingFromView,
+  effectiveThinkingMapping,
   poolAfterMove,
   poolEditorRowId,
   poolEditorRowIds,
   nextThinkingLevel,
   readPanelState,
   saveTierPool,
+  saveTierTakeover,
   saveTierThinking,
   tierCandidateValue,
   tierDisplayName,
+  tierForeignEffective,
   tierNameKey,
+  tierPoolEditable,
   tierThinkingRowValue,
 } from "./pool-editor.ts";
 
 // 编辑器与面板纯逻辑在 pool-editor.ts（组件自绘，工单 47）；这里 re-export 维持
 // 菜单侧（harness / 一级装配）从 menu.ts 取物的既有口径。
 export {
+  type EffectivePanelView,
   type PoolEditorRow,
   type SaveOutcome,
   type SubagentsPanelOptions,
   type SubagentsPanelState,
   type TierCandidate,
+  type TierEditorView,
   type TierMenuRegistry,
+  type TierPoolOwnership,
   SubagentsPanel,
   TIER_DISPLAY_ORDER,
+  buildEffectivePanelView,
   buildPoolEditorRows,
   configuredCountValue,
   discoverTierCandidates,
+  effectiveMappingFromView,
+  effectiveThinkingMapping,
   poolAfterMove,
   poolEditorRowId,
   poolEditorRowIds,
   nextThinkingLevel,
   readPanelState,
   saveTierPool,
+  saveTierTakeover,
   saveTierThinking,
   tierCandidateValue,
   tierDisplayName,
+  tierForeignEffective,
   tierNameKey,
+  tierPoolEditable,
   tierThinkingRowValue,
 } from "./pool-editor.ts";
 
@@ -118,20 +143,48 @@ export const SUBAGENTS_ENABLED_FIELD = enabledField(
 );
 
 /**
- * 按显示顺序（旗舰 → 均衡 → 快速）第一个缺映射档的原版报错文案。取 routing.ts
- * 的 resolveTierForParams 输出，与真正 spawn 时抛出的字符串逐字一致；三档都
+ * 按显示顺序（旗舰 → 均衡 → 快速）第一个缺映射档的原版报错文案。按工单
+ * 00 的单一读口看逐档合并后的生效档（不再只看本地节）；取 routing.ts 的
+ * resolveTierForParams 输出，与真正 spawn 时的判定同源；三档都在生效链上
  * 配齐时返回 undefined。
  */
 export function firstTierProblem(
-  mapping: TierMapping,
+  effective: EffectiveTierRouteConfig,
   load: () => TierConfigLoadResult,
 ): string | undefined {
   for (const tier of TIER_DISPLAY_ORDER) {
-    if (mapping[tier]) continue;
+    if (effective.tiers[tier].pool) continue;
     const error = tierRouteError(tier, load);
     if (error) return error;
   }
   return undefined;
+}
+
+/**
+ * 池入口行的描述文案（工单 05）：配置问题永远优先（先是单一读口问题清单里
+ * 的链上问题，再回退本节非路由问题如 status），没有问题才明示外层生效档
+ * （本层不是最终生效层），都无则用默认描述。菜单与编辑器从此说同一件事：
+ * 显示的就是 spawn 生效的。
+ */
+export function poolEntryDescription(
+  effective: TierConfigLoadResult,
+  localSource: string,
+  state: SubagentsPanelState,
+  t: Translator,
+): string {
+  const problem =
+    (effective.config ? firstTierProblem(effective.config, () => effective) : effective.error) ??
+    effective.config?.problems[0] ??
+    state.problems[0];
+  if (problem) return problem;
+  const view: EffectivePanelView | null = effective.config
+    ? buildEffectivePanelView({ effective, localSource })
+    : null;
+  const foreignCount = view
+    ? MODEL_TIERS.filter((tier) => tierForeignEffective(view, tier)).length
+    : 0;
+  if (foreignCount > 0) return t("module.subagents.menu.foreignTiers", { count: foreignCount });
+  return t("module.subagents.menu.description");
 }
 
 /** 状态显示开关的显示值：本节点未声明时展示包内兜底默认 */
@@ -201,26 +254,28 @@ function subagentsStatusRow(options: {
 }
 
 /**
- * 顶层行（本单起）：模块开关、运行状态显示与模型候选池合并为一个「模型编排」入口，
- * 值位显示模块总开关的已开启/已关闭；页内三行保持原名（二级菜单统一编排另行处理）。
+ * 「模型编排」页内三行：模块开关、运行状态显示、模型与候选池入口。
+ * 单独导出供测试与二级页装配直取（与视觉模块 buildVisionMenuItems 同口径）。
  */
-export function buildSubagentsTopLevel(context: ModuleMenuContext): readonly SettingItem[] {
+export function buildSubagentsPageItems(context: ModuleMenuContext): readonly SettingItem[] {
   const t = context.t;
   const section = context.getConfig();
   const state = readPanelState(section);
   const load = () =>
     loadEffectiveTierConfig({ cwd: context.context.cwd, agentDir: context.agentDir });
-  // 缺映射（或本节点配置非法）时把原版报错摆在池入口行的描述里，不进编辑器也能看见
-  const problem = firstTierProblem(state.mapping, load) ?? state.problems[0];
+  // 单一读口（工单 00）：计数与缺档判断看逐档合并后的生效值，问题清单优先
+  // 展示链上各层逐档问题（本节 status 等非路由问题作次级回退）；本层不是
+  // 最终生效层时明示外层生效档数（工单 05）。
+  const effective = load();
+  const effectiveMapping: TierMapping = effective.config ? effectiveTierMapping(effective.config) : {};
+  const description = poolEntryDescription(
+    effective,
+    subagentsSectionPath(context.agentDir),
+    state,
+    t,
+  );
 
-  const enabledText = () => {
-    const current = normalizeConfigValue(SUBAGENTS_ENABLED_FIELD, context.getConfig()["enabled"]);
-    return (current ?? SUBAGENTS_ENABLED_FIELD.default) === true
-      ? t("module.subagents.entry.on")
-      : t("module.subagents.entry.off");
-  };
-
-  const pageItems: SettingItem[] = [
+  return [
     schemaFieldRow({
       t,
       id: "subagents.enabled",
@@ -239,8 +294,8 @@ export function buildSubagentsTopLevel(context: ModuleMenuContext): readonly Set
     {
       id: SUBAGENTS_POOL_ROW_ID,
       label: t("module.subagents.menu.label"),
-      description: problem ?? t("module.subagents.menu.description"),
-      currentValue: configuredCountValue(state.mapping, t),
+      description,
+      currentValue: configuredCountValue(effectiveMapping, t),
       submenu: (_currentValue, done) =>
         new SubagentsPanel({
           t,
@@ -250,10 +305,27 @@ export function buildSubagentsTopLevel(context: ModuleMenuContext): readonly Set
           saveConfig: (patch, hooks) => context.saveConfig(patch, hooks),
           requestRender: () => context.requestRender(),
           getSection: () => context.getConfig(),
+          loadEffective: load,
           onDone: (value) => done(value),
         }),
     },
   ];
+}
+
+/**
+ * 顶层行（本单起）：模块开关、运行状态显示与模型候选池合并为一个「模型编排」入口，
+ * 值位显示模块总开关的已开启/已关闭；页内三行保持原名（二级菜单统一编排另行处理）。
+ */
+export function buildSubagentsTopLevel(context: ModuleMenuContext): readonly SettingItem[] {
+  const t = context.t;
+  const enabledText = () => {
+    const current = normalizeConfigValue(SUBAGENTS_ENABLED_FIELD, context.getConfig()["enabled"]);
+    return (current ?? SUBAGENTS_ENABLED_FIELD.default) === true
+      ? t("module.subagents.entry.on")
+      : t("module.subagents.entry.off");
+  };
+
+  const pageItems: readonly SettingItem[] = buildSubagentsPageItems(context);
 
   return [
     {
@@ -263,7 +335,7 @@ export function buildSubagentsTopLevel(context: ModuleMenuContext): readonly Set
       currentValue: enabledText(),
       submenu: (_currentValue, done) =>
         new SettingsPanel({
-          items: pageItems,
+          items: [...pageItems],
           theme: context.theme,
           t,
           onChange: context.onChange,

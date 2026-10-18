@@ -26,9 +26,16 @@
 // 依赖方向：model-health.ts → routing.ts（思考等级后缀词汇表，单向）与
 // providers/api.ts（类型与常量的静态导出面）；model-selector.ts → 本文件。
 // providers 模块不反向依赖本文件（它的句柄只回报原始观测）。
+//
+// 工单 01（read 侧 TTL）：网关 read 按每条条目的观测时间检查保鲜期，超龄
+// 或无时间的条目降级为 unknown，不再当 quota-blocked / offline 硬阻断——
+// 上一轮查到的额度耗尽在额度恢复后不会继续挡模型，反向亦然；read 侧
+// 绝不做同步网络刷新，恢复以异步后台 refresh 为准。
 
-import { modelOwnThinkingSuffix } from "./routing.ts";
+import { baseModelRef } from "./routing.ts";
 import {
+  POOL_USAGE_READ_STALE_MS,
+  poolUsageObservedAt,
   PROVIDERS_POOL_USAGE_SERVICE_NAME,
   type PoolUsageState,
   type ProvidersPoolUsageService,
@@ -211,11 +218,10 @@ function mergeRuntimeStatuses(
   return fromErrors;
 }
 
-/** 候选引用的基础形态：剥掉合法的 ":thinking" 后缀（与目录查找同一口径）。 */
-export function baseModelRef(ref: string): string {
-  const own = modelOwnThinkingSuffix(ref);
-  return own ? ref.slice(0, ref.length - own.length - 1) : ref;
-}
+// 基础引用口径（剥掉思考等级后缀）随 modelOwnThinkingSuffix 定义在
+// routing.ts（工单 03 起解析层判重与这里的查表/去重共用同一实现）；从这里
+// 转发导出，既有导入方不变。
+export { baseModelRef };
 
 /** 池内引用去重后的基础引用列表（保序；查询与查表共用同一套键）。 */
 export function poolBaseRefs(pool: readonly string[]): string[] {
@@ -271,10 +277,27 @@ function verdictFromSnapshot(snapshot: UsageSnapshot): ModelRuntimeStatus {
  * - unsupported / no-credential：unconfigured（该供应商没有可行查询路径）；
  * - failed / pending / unresolved / 无记录：unknown——查询失败、在途、目录
  *   查不到模型都不是「不可用」，绝不阻断选择。
+ * 提供 now 时按条目观测时间检查 TTL（工单 01 read 侧）：超龄或没有观测
+ * 时间的条目降级为 unknown——「最近已知」只在保鲜期内可信，过期既不当
+ * 额度/下线硬阻断，也不虚构可用；恢复以异步后台刷新为准，本函数不做网络请求。
  */
-export function deriveModelRuntimeStatus(state: PoolUsageState | undefined): ModelRuntimeStatus {
+export function deriveModelRuntimeStatus(state: PoolUsageState | undefined, now?: number): ModelRuntimeStatus {
   if (!state) {
     return { verdict: "unknown", lastCheckedAt: null, detail: "no status recorded" };
+  }
+  const observedAt = poolUsageObservedAt(state);
+  if (now !== undefined && !Number.isFinite(observedAt)) {
+    // 旧形态/异常构造的无时间状态（工单 01）：无法核龄，按未知处理。
+    return { verdict: "unknown", lastCheckedAt: null, detail: "status entry has no fetch time; treated as unknown" };
+  }
+  if (now !== undefined && now - observedAt > POOL_USAGE_READ_STALE_MS) {
+    return {
+      verdict: "unknown",
+      lastCheckedAt: observedAt,
+      detail:
+        `status expired: fetched ${Math.round((now - observedAt) / 1000)}s ago ` +
+        `(stale after ${Math.round(POOL_USAGE_READ_STALE_MS / 1000)}s); treated as unknown until next refresh`,
+    };
   }
   switch (state.kind) {
     case "ready":
@@ -303,7 +326,10 @@ export function deriveModelRuntimeStatus(state: PoolUsageState | undefined): Mod
  * 与没有本工单完全一致（状态未知不停摆）。
  */
 export interface ModelHealthGateway {
-  /** 读取候选池最近已知状态（同步、无网络；未查询过的候选不在表内 = unknown） */
+  /**
+   * 读取候选池最近已知状态（同步、无网络；未查询过的候选不在表内 = unknown）。
+   * 工单 01：超龄或无观测时间的条目降级为 unknown（不硬阻断）。
+   */
   read(pool: readonly string[]): ModelHealthMap;
   /** 触发后台刷新（异步 fire-and-forget；任何失败静默吞掉） */
   refresh(pool: readonly string[]): void;
@@ -315,18 +341,26 @@ export interface ModelHealthGateway {
  * refresh 现取，缺席即空表/空操作。工单 26 起可挂错误观测日志：read 把
  * providers 判定与错误观测合成（见 mergeRuntimeStatuses），同一日志供
  * 工具层失败时写入（record），选择与观测读同一份状态（ADR 0007）。
+ * 工单 01 起 read 按条目观测时间检查 TTL（见 deriveModelRuntimeStatus）：
+ * 超龄条目降级为未知，不再当 quota-blocked / offline 硬阻断；read 仍不
+ * 抛错、不做网络请求，刷新照旧走异步后台。
  */
 export function createProvidersHealthGateway(
   services: { get<T>(name: string): T | undefined },
   journal?: ModelErrorJournal,
+  now?: () => number,
 ): ModelHealthGateway {
   const resolve = () => services.get<ProvidersPoolUsageService>(PROVIDERS_POOL_USAGE_SERVICE_NAME);
+  // 单一时钟：显式注入 > 错误观测日志时钟 > Date.now——TTL 检查与错误观测
+  // 窗口按同一时钟比对年龄（工单 01）。
+  const clock = now ?? journal?.now ?? Date.now;
   return {
     read(pool) {
       const refs = poolBaseRefs(pool);
       const map = new Map<string, ModelRuntimeStatus>();
       const service = resolve();
       if (!service && !journal) return map;
+      const readAt = clock();
       const known = new Map(
         (service ? service.snapshot(refs) : []).map((entry) => [entry.model, entry.state] as const),
       );
@@ -334,7 +368,7 @@ export function createProvidersHealthGateway(
         // 只对 providers 报告过状态的候选推导判定（工单 25 语义：从未查询过
         // 的候选不在表内 = 未知）；错误观测独立成条（日志有记录即有状态）。
         const state = known.get(ref);
-        const base = state !== undefined ? deriveModelRuntimeStatus(state) : undefined;
+        const base = state !== undefined ? deriveModelRuntimeStatus(state, readAt) : undefined;
         const fromErrors = journal
           ? deriveErrorObservationStatus(journal.observations(ref), journal.now())
           : null;

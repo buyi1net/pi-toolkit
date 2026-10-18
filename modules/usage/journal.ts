@@ -11,9 +11,15 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  ROUTING_INHERITANCE_CAUSES,
+  ROUTING_MODEL_ORIGINS,
+} from "../subagents/routing-snapshot.ts";
+import {
   deriveProvider,
   USAGE_ERROR_MESSAGE_MAX,
   USAGE_TASK_LABEL_MAX,
+  type UsageInheritanceCause,
+  type UsageModelSource,
   type UsageRecord,
   type UsageRunEvent,
   type UsageRunTokens,
@@ -82,6 +88,15 @@ export function createUsageRecord(
     tier: event.tier?.trim() || null,
     preferredModel,
     downgraded: preferredModel && model ? preferredModel !== model : null,
+    // 工单 08：模型来源与继承原因随事件落盘；词汇表外的值按 null 归一
+    // （守卫同词汇表校验，不容忍拼错值进面板）。
+    modelSource: event.modelSource != null && ROUTING_MODEL_ORIGINS.includes(event.modelSource)
+      ? event.modelSource
+      : null,
+    inheritanceCause:
+      event.inheritanceCause != null && ROUTING_INHERITANCE_CAUSES.includes(event.inheritanceCause)
+        ? event.inheritanceCause
+        : null,
     durationMs: Math.max(0, Math.round(num(event.elapsedSeconds) * 1000)),
     tokens: sanitizeTokens(event.tokens),
     toolCount: typeof event.toolCount === "number" && Number.isFinite(event.toolCount) ? event.toolCount : null,
@@ -129,6 +144,18 @@ export function isUsageRecord(value: unknown): value is UsageRecord {
   if (!nullableString(record.tier)) return false;
   if (!nullableString(record.preferredModel)) return false;
   if (!(record.downgraded === null || typeof record.downgraded === "boolean")) return false;
+  // 工单 08：新字段按闭词汇表校验；undefined 放行（工单 08 之前的旧记录
+  // 不带这两个键，按现状降级为 null，不让守卫把历史记录整行丢掉）。
+  if (
+    !(record.modelSource === undefined || record.modelSource === null ||
+      (typeof record.modelSource === "string" &&
+        (ROUTING_MODEL_ORIGINS as readonly string[]).includes(record.modelSource)))
+  ) return false;
+  if (
+    !(record.inheritanceCause === undefined || record.inheritanceCause === null ||
+      (typeof record.inheritanceCause === "string" &&
+        (ROUTING_INHERITANCE_CAUSES as readonly string[]).includes(record.inheritanceCause)))
+  ) return false;
   if (typeof record.durationMs !== "number" || !Number.isFinite(record.durationMs)) return false;
   if (!(record.tokens === null || isUsageTokens(record.tokens))) return false;
   if (!(record.toolCount === null || (typeof record.toolCount === "number" && Number.isFinite(record.toolCount)))) return false;
@@ -138,7 +165,9 @@ export function isUsageRecord(value: unknown): value is UsageRecord {
   return true;
 }
 
-/** 读取全部记录：文件不存在返回空；坏行跳过（跨进程追加中断的容忍口径）。 */
+/** 读取全部记录：文件不存在返回空；坏行跳过（跨进程追加中断的容忍口径）。
+ * 工单 08：旧记录缺 modelSource/inheritanceCause 键时归一为 null，
+ *  读方拿到的字段形状稳定（不会读到 undefined 冒充 null）。 */
 export function readUsageRecords(path: string): UsageRecord[] {
   if (!existsSync(path)) return [];
   let raw: string;
@@ -157,7 +186,13 @@ export function readUsageRecords(path: string): UsageRecord[] {
     } catch {
       continue;
     }
-    if (isUsageRecord(parsed)) records.push(parsed);
+    if (isUsageRecord(parsed)) {
+      records.push({
+        ...parsed,
+        modelSource: parsed.modelSource ?? null,
+        inheritanceCause: parsed.inheritanceCause ?? null,
+      });
+    }
   }
   return records;
 }

@@ -9,7 +9,11 @@
 //
 // 隐私口径（ADR 0007 决策 7）：统计默认只保存任务标识与截断摘要，不保存完整任务正文。
 
-import type { ModelRuntimeStatus } from "../subagents/index.ts";
+import type {
+  ModelRuntimeStatus,
+  RoutingInheritanceCause,
+  RoutingModelOrigin,
+} from "../subagents/index.ts";
 
 /** 模型与用量快照句柄名（读侧；编排查询接口） */
 export const USAGE_SNAPSHOT_SERVICE_NAME = "usage.snapshot";
@@ -25,6 +29,15 @@ export const USAGE_RECENT_LIMIT = 10;
 
 /** 统计口径的终态结果（handed-off 不是终态，由恢复路径的真实终态取代） */
 export type UsageOutcome = "completed" | "failed" | "cancelled";
+
+/**
+ * 实际模型来源（工单 08）：词汇表与判定函数在 subagents 的路由快照模块
+ * 单一维护（routingModelOrigin），这里只引用。"pool"=按档位候选池选中；
+ * "parent"=fallback 继承父会话；"declared"=显式/档案声明模型。
+ */
+export type UsageModelSource = RoutingModelOrigin;
+/** fallback 继承原因细分（工单 08）：仅 modelSource="parent" 时有值。 */
+export type UsageInheritanceCause = RoutingInheritanceCause;
 
 /** 一次运行的 Token / 成本小计（与 session usage 的累计口径一致） */
 export interface UsageRunTokens {
@@ -57,6 +70,13 @@ export interface UsageRunEvent {
   readonly tier?: string | null;
   /** 候选池首选（tier 路径）：实际模型与它不同即降级 */
   readonly preferredModel?: string | null;
+  /**
+   * 实际模型来源（工单 08：用量桥接统一读路由快照）；旧调用方/旧记录
+   * 缺省为 null，按现状「未知」口径展示。
+   */
+  readonly modelSource?: UsageModelSource | null;
+  /** fallback 继承原因细分（仅来源为 parent 时携带）；其余为 null。 */
+  readonly inheritanceCause?: UsageInheritanceCause | null;
   readonly elapsedSeconds: number;
   readonly tokens?: UsageRunTokens | null;
   readonly toolCount?: number | null;
@@ -89,6 +109,10 @@ export interface UsageRecord {
   readonly preferredModel: string | null;
   /** true=实际模型不是候选池首选；null=无法判定（显式 model / 旧记录） */
   readonly downgraded: boolean | null;
+  /** 实际模型来源（工单 08）；旧记录缺省为 null（按现状未知口径展示） */
+  readonly modelSource: UsageModelSource | null;
+  /** fallback 继承原因细分（仅来源为 parent 时非 null）；旧记录为 null */
+  readonly inheritanceCause: UsageInheritanceCause | null;
   readonly durationMs: number;
   readonly tokens: UsageRunTokens | null;
   readonly toolCount: number | null;

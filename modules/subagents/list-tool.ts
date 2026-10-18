@@ -5,6 +5,13 @@ import { existsSync } from "node:fs";
 import type { ListedAgentDefinition } from "./agents.ts";
 import type { NameRegistry, NameRegistryEntry, SubagentLoadout } from "./session.ts";
 import type { RuntimeRegistry } from "./registry.ts";
+import {
+  inheritanceBadgeText,
+  routingInheritanceCause,
+  routingModelOrigin,
+  type RoutingInheritanceCause,
+  type RoutingModelOrigin,
+} from "./routing-snapshot.ts";
 
 export interface SubagentsListDeps {
   discoverAgents: () => ListedAgentDefinition[];
@@ -29,12 +36,18 @@ export interface SessionSubagentView {
   resumable: boolean;
   model?: string | null;
   tier?: string | null;
+  /** 模型来源（工单 08：读路由快照；旧快照缺席时缺省，维持现状）。 */
+  modelSource?: RoutingModelOrigin;
+  /** fallback 继承原因细分；仅来源为 parent 时携带。 */
+  inheritanceCause?: RoutingInheritanceCause;
   cohortId?: string;
 }
 
 /**
  * 从会话名字注册表(补充运行态登记)构建当前父会话的子代理只读视图:
  * 只读展示名称、运行/完成/可恢复状态与 model/tier,不泄漏凭据。
+ * 工单 08：model/tier 与来源信息统一读路由快照（运行态 modelRouting、
+ * 完成/离线条目的 loadout.routing），快照缺席退回零散字段（现状口径）。
  */
 export function buildSessionSubagentViews(
   registry: NameRegistry,
@@ -45,13 +58,24 @@ export function buildSessionSubagentViews(
   const consider = (name: string, entry: NameRegistryEntry) => {
     const running = runtime?.findByName(name);
     if (running) {
+      // 工单 08：model/tier/来源统一读运行态路由快照；快照在场时以它的值
+      // 为准（包括合法的 null），缺快照的旧运行态退回零散字段。
+      const routing = running.modelRouting ?? null;
+      const origin = routingModelOrigin(routing);
+      const model = routing ? routing.model : running.model ?? null;
+      const tier = routing ? routing.tier : running.tier ?? null;
       views.push({
         name,
         ...(running.agent ? { agent: running.agent } : {}),
         status: "running",
         ...(running.member ? { member: true, memberRound: running.dispatchedRound ? "dispatched" : "idle" } : {}),
         resumable: false,
-        ...(running.model ? { model: running.model } : {}),
+        ...(model ? { model } : {}),
+        ...(tier ? { tier } : {}),
+        ...(origin ? { modelSource: origin } : {}),
+        // origin=parent 蕴含 fallbackReason 在场，分类函数必给值；null 兜底
+        // 只是类型层面的归一，不会出现在实际数据里。
+        ...(origin === "parent" ? { inheritanceCause: routingInheritanceCause(routing) ?? undefined } : {}),
         ...(running.cohortId ? { cohortId: running.cohortId } : {}),
       });
       return;
@@ -69,14 +93,20 @@ export function buildSessionSubagentViews(
     }
     const loadout = readSubagentLoadout(entry.sessionFile);
     const cohortId = loadout?.cohortId ?? entry.cohortId;
+    const routing = loadout?.routing ?? null;
+    const origin = routingModelOrigin(routing);
+    const model = routing ? routing.model : loadout?.model ?? null;
+    const tier = routing ? routing.tier : loadout?.tier ?? null;
     views.push({
       name,
       ...(loadout?.agent ? { agent: loadout.agent } : {}),
       status: "finished",
       ...(loadout?.member ? { member: true } : {}),
       resumable: Boolean(loadout),
-      ...(loadout?.model ? { model: loadout.model } : {}),
-      ...(loadout?.tier ? { tier: loadout.tier } : {}),
+      ...(model ? { model } : {}),
+      ...(tier ? { tier } : {}),
+      ...(origin ? { modelSource: origin } : {}),
+      ...(origin === "parent" ? { inheritanceCause: routingInheritanceCause(routing) ?? undefined } : {}),
       ...(cohortId ? { cohortId } : {}),
     });
   };
@@ -98,6 +128,12 @@ export function buildSessionSubagentViews(
   return views;
 }
 
+/** 继承运行的标签（工单 08）：fallback 不再记成无标签；非继承路径无标签。 */
+function inheritedBadge(view: SessionSubagentView): string {
+  if (view.modelSource !== "parent") return "";
+  return inheritanceBadgeText(view.inheritanceCause);
+}
+
 function formatSessionViewLine(view: SessionSubagentView): string {
   const memberBadge = view.member
     ? view.status === "running"
@@ -112,7 +148,7 @@ function formatSessionViewLine(view: SessionSubagentView): string {
   const model = view.model ? ` [${view.model}]` : "";
   const tier = view.tier ? ` [tier: ${view.tier}]` : "";
   const cohort = view.cohortId ? ` [cohort: ${view.cohortId}]` : "";
-  return `• ${view.name}${memberBadge}${badge}${resumable}${agent}${model}${tier}${cohort}`;
+  return `• ${view.name}${memberBadge}${badge}${resumable}${agent}${model}${tier}${inheritedBadge(view)}${cohort}`;
 }
 
 export function registerSubagentsListTool(
@@ -127,10 +163,12 @@ export function registerSubagentsListTool(
       "Scans project-local .pi/agents/ and global ~/.pi/agent/agents/. " +
       "Project-local agents override global ones with the same name. " +
       "scope=session|all additionally shows a READ-ONLY view of the subagents registered by the CURRENT parent session: " +
-      "their names, whether their session files still exist, running/finished/resumable state, model/tier, and optional cohortId. " +
+      "their names, whether their session files still exist, running/finished/resumable state, model/tier, " +
+      "model source from the routing snapshot (fallback runs are labeled as inheriting the parent session with the reason), " +
+      "and optional cohortId. " +
       "No credentials are included.",
     promptSnippet:
-      "List available subagent definitions; scope=session|all also shows a read-only view of this session's registered subagents (name, session present, running/finished/resumable, model/tier, cohortId).",
+      "List available subagent definitions; scope=session|all also shows a read-only view of this session's registered subagents (name, session present, running/finished/resumable, model/tier, parent-session inheritance label, cohortId).",
     parameters: Type.Object({
       scope: Type.Optional(
         Type.Union(
@@ -269,8 +307,11 @@ export function registerSubagentsListTool(
             const agent = view.agent ? theme.fg("dim", ` — ${view.agent}`) : "";
             const model = view.model ? theme.fg("dim", ` [${view.model}]`) : "";
             const tier = view.tier ? theme.fg("dim", ` [tier: ${view.tier}]`) : "";
+            const inherited = view.modelSource === "parent"
+              ? theme.fg("warning", inheritanceBadgeText(view.inheritanceCause))
+              : "";
             const cohort = view.cohortId ? theme.fg("dim", ` [cohort: ${view.cohortId}]`) : "";
-            return `  ${theme.fg("toolTitle", theme.bold(view.name))}${theme.fg(statusColor, badge)}${resumable}${agent}${model}${tier}${cohort}`;
+            return `  ${theme.fg("toolTitle", theme.bold(view.name))}${theme.fg(statusColor, badge)}${resumable}${agent}${model}${tier}${inherited}${cohort}`;
           })
           .join("\n");
       };

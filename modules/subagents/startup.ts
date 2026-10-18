@@ -72,11 +72,17 @@ import {
 } from "./launch-config.ts";
 import { loadTierRouteConfig, normalizeTier, resolveTierPoolForParams, isThinkingLevel, modelOwnThinkingSuffix, THINKING_LEVELS, type ModelTier, type ThinkingLevel, type TierRouteInjectedSource, type TierConfigLoadResult } from "./routing.ts";
 import {
+  buildRoutingSnapshot,
+  type RoutingFallbackReason,
+} from "./routing-snapshot.ts";
+import {
   normalizeModelCapability,
   selectModelCandidate,
   supportedThinkingLevels,
   resolveModelThinkingSupport,
+  modelMissingCapabilities,
   MODEL_CAPABILITIES,
+  type ModelCandidateRejection,
   type ModelCandidateSelection,
   type ModelCapability,
   type ModelCatalog,
@@ -184,13 +190,31 @@ export interface SpawnPlan {
    */
   tierPool: readonly string[] | null;
   /** 第四级继承的可观测原因；仅白名单触发。 */
-  fallbackReason: "pool-unconfigured" | "pool-status-unavailable" | null;
+  fallbackReason: RoutingFallbackReason | null;
   /**
    * 候选选择器结果（工单 24）：tier 路径实际选中的候选与被跳过候选的
    * 诊断记录。非 tier 路径（无 tier / 显式 model）为 null。effectiveModel
    * 即 selection.model；启动链据此把实际模型写进 loadout 与运行态。
    */
   tierSelection: ModelCandidateSelection | null;
+  /**
+   * 选择期被跳过的候选及原因（工单 06）：按池选中时来自
+   * selection.skipped，全池状态/额度阻断触发继承时来自
+   * failure.rejections（额度阻断与不稳定跳过的区分依据）；非 tier 路径
+   * 为 null。随路由快照进 loadout，展示面不再各自拼。
+   */
+  tierSelectionSkips: readonly ModelCandidateRejection[] | null;
+  /**
+   * 候选池生效层来源（工单 06）：该档池在配置链逐档合并后的声明层路径；
+   * 随路由快照进 loadout。
+   */
+  poolSource: string | null;
+  /**
+   * 配置链逐档问题清单（工单 00）：tier 解析读到的各层非法声明（本层该档
+   * 未生效、落低层）。无问题或未读配置（非 tier 路径）为 null；工具层把
+   * 非空清单附进结果 details——spawn 用低层配置时明确报，不静默。
+   */
+  tierConfigProblems: readonly string[] | null;
   effectiveAutoExit: boolean;
   /** 运行类别（启动与 watcher 选择的唯一依据）。 */
   interactive: boolean;
@@ -429,6 +453,9 @@ export function validateResumeTarget(
   if (loadout.tierThinking != null && !isThinkingLevel(loadout.tierThinking)) {
     return `loadout tierThinking invalid: ${loadout.tierThinking}`;
   }
+  if (loadout.parentThinking != null && !isThinkingLevel(loadout.parentThinking)) {
+    return `loadout parentThinking invalid: ${loadout.parentThinking}`;
+  }
   if (
     loadout.systemPromptMode != null &&
     loadout.systemPromptMode !== "append" &&
@@ -544,9 +571,10 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     );
     const targetCwdForSession = effectiveCwd ?? ctx.cwd;
 
-    // tier 解析先于 loadout 写入:显式 params.model 优先 tier;tier 无法归一化
-    // 或缺映射时直接拒绝启动,绝不静默换模型。loadout.model 存具体模型,
-    // tier 仅作记录,resume 不随配置漂移。
+    // tier 解析先于 loadout 写入:显式 params.model 优先 tier——且接管先于
+    // tier 校验(工单 02)：model 在场时拼错的 tier 不再报 Invalid tier，tier
+    // 只作记录；无显式 model 时 tier 无法归一化或缺映射才拒绝启动,绝不静默
+    // 换模型。loadout.model 存具体模型,tier 仅作记录,resume 不随配置漂移。
     // 对象包裹：闭包内赋值 + 外部读取时绕开 TS 控制流把 let 变量窄化成 null。
     const tierLoadRef: { value: TierConfigLoadResult | null } = { value: null };
     const tierPool = resolveTierPoolForParams(
@@ -580,6 +608,10 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     // 刷新，下一轮 spawn 受益。全池被过滤时返回结构化可诊断错误，不静默换档。
     let tierSelection: ModelCandidateSelection | null = null;
     let fallbackReason: SpawnPlan["fallbackReason"] = tierPool.fallbackReason ?? null;
+    // 工单 06：选择期跳过记录两条路径都收进计划——按池选中时是选中前的
+    // 过滤诊断，全池阻断触发继承时是逐候选的阻断原因（额度阻断与不稳定
+    // 跳过靠它区分）；非 tier 路径保持 null。
+    let tierSelectionSkips: readonly ModelCandidateRejection[] | null = null;
     let modelHealth: ModelHealthMap | undefined;
     if (tierPool.pool !== undefined && deps.modelHealth) {
       modelHealth = deps.modelHealth.read(tierPool.pool);
@@ -602,7 +634,12 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
             rejection.kind === "status" && !rejection.reason.includes("excluded by failover policy"),
           );
         if (!allStatusBlocked) {
-          const source = tierLoadRef.value?.sourcePath ?? "the pi-subagents config";
+          // 生效池来源随逐档合并而定（工单 00）：指到该档池实际生效的那一层。
+          const poolSource =
+            tierPool.tier != null
+              ? tierLoadRef.value?.config?.tiers[tierPool.tier].poolSource
+              : undefined;
+          const source = poolSource ?? tierLoadRef.value?.sourcePath ?? "the pi-subagents config";
           const rejections = outcome.failure.rejections
             .map((rejection) => `  - ${rejection.model}: ${rejection.reason}`)
             .join("\n");
@@ -631,8 +668,10 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
           };
         }
         fallbackReason = "pool-status-unavailable";
+        tierSelectionSkips = outcome.failure.rejections;
       } else {
         tierSelection = outcome.selection;
+        tierSelectionSkips = outcome.selection.skipped;
       }
     }
     // 模型四级优先级：显式 model > 显式 tier 池 > 档案 tier 池 > 父会话。
@@ -655,6 +694,32 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     const effectiveThinking = fallbackReason
       ? ctx.thinkingLevel
       : params.thinking ?? agentDefs?.thinking ?? tierThinking ?? undefined;
+    // 工单 02：能力要求同样不静默放行。显式 model、档案 model 与继承的父
+    // 会话模型都不经选择器的能力过滤，这里在思考等级最终核验的同一位置、
+    // 同一口径（对 effectiveModel 做最后一道核验）：目录里查得到该模型而它
+    // 缺少要求的能力标签时拒绝启动并给出可操作提示；目录查不到（自定义
+    // provider/目录过期/裸 id 歧义）时无法核验，维持原样交给子进程——不虚构
+    // 支持性，也不假设不支持。tier 路径选中的候选已过选择器同一套过滤，
+    // 这里自然通过，不需要豁免。
+    if (requiredCapabilities.length > 0 && effectiveModel && ctx.modelRegistry) {
+      const missing = modelMissingCapabilities(effectiveModel, requiredCapabilities, ctx.modelRegistry);
+      if (missing != null && missing.length > 0) {
+        return {
+          kind: "error",
+          error:
+            `Model "${effectiveModel}" does not support the capabilities required by agent ` +
+            `profile "${params.agent}" (missing: ${missing.join(", ")}). Use a model with these ` +
+            `capabilities, drop the explicit model override, or remove the requirement from ` +
+            `the agent profile's capabilities list.`,
+          details: {
+            error: "missing model capabilities",
+            model: effectiveModel,
+            required: [...requiredCapabilities],
+            missing: [...missing],
+          },
+        };
+      }
+    }
     // 工单 23：不静默声称不支持的目标模型已使用指定思考等级。实际会拼进
     // argv 的等级（显式/代理/档位，或模型自带后缀）在宿主目录里可查时必须
     // 被模型支持——宿主对不支持的等级会静默钳制到就近支持值，这里在启动前
@@ -792,6 +857,18 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
 
     const sessionDir = getDefaultSessionDirFor(targetCwdForSession, effectiveAgentDir);
 
+    // 工单 00：配置链逐档问题清单随计划携带（仅 tier 路径读过配置时非空）。
+    const tierConfigProblems =
+      tierLoadRef.value?.config && tierLoadRef.value.config.problems.length > 0
+        ? tierLoadRef.value.config.problems
+        : null;
+    // 工单 06：候选池生效层来源（逐档合并后该档池的声明层）；显式 model
+    // 胜出时未读配置，保持 null。
+    const poolSource =
+      tierPool.tier != null
+        ? tierLoadRef.value?.config?.tiers[tierPool.tier].poolSource ?? null
+        : null;
+
     return {
       kind: "plan",
       plan: {
@@ -810,6 +887,9 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         tier: tierPool.tier,
         tierPool: tierPool.pool ?? null,
         tierSelection,
+        tierSelectionSkips,
+        poolSource,
+        tierConfigProblems,
         fallbackReason,
         effectiveAutoExit,
         interactive: effectiveInteractive,
@@ -977,6 +1057,14 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
       splitEnv.NODE_USE_ENV_PROXY = "1";
     }
 
+    // 工单 06：完整路由结果随 loadout 落盘（纯函数构造，输入即本计划），
+    // 作为 resume/recover 重建与所有展示面的单一数据源。fallback 继承的
+    // 父会话思考等级由此真实进入快照（不再只存在于计划对象），resume 复用
+    // 同一份不会固化错误。
+    const routingSnapshot = buildRoutingSnapshot(plan);
+    const parentThinking =
+      routingSnapshot.effectiveThinkingSource === "parent" ? routingSnapshot.effectiveThinking : null;
+
     // Snapshot the fully-resolved sandbox beside the session file so a later
     // `subagent_message({ name })` resume can replay the same tool policy,
     // model, identity, and spawn permissions.
@@ -990,6 +1078,12 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
       // 档位默认思考等级（工单 23）：与 frontmatter/显式值分开快照，resume
       // 按同一覆盖链重放，不随配置漂移。
       tierThinking: plan.tierThinking,
+      // 工单 06：fallback 继承的父会话思考等级（覆盖链顶层，影响子进程
+      // 参数，纳入安全字段清单）。
+      parentThinking,
+      // 工单 06：路由快照（候选池/首选/实际选中/跳过原因/继承原因/生效层
+      // 来源/生效思考等级及其来源）。
+      routing: routingSnapshot,
       tier: plan.tier,
       ...(cohortId ? { cohortId } : {}),
       systemPromptMode: systemPromptMode ?? null,
@@ -1166,6 +1260,9 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         // 工单 28：用量快照的降级口径（启动时快照，不随配置漂移）
         ...(plan.tier != null ? { tier: plan.tier } : {}),
         ...(plan.tierPool != null ? { modelPool: plan.tierPool } : {}),
+        // 工单 06：路由快照随运行态登记，展示面（结果、list/inspect、用量）
+        // 从这一份读路由事实。
+        modelRouting: routingSnapshot,
         parentId: process.env.PI_SUBAGENT_ID ?? null,
         ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
         waitMode: memberMode ? "member-round" : effectiveInteractive ? "interactive" : "hard-barrier",
@@ -1415,8 +1512,14 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         // 不重新读配置,不随配置改变漂移。思考等级同一口径（工单 27）。
         model: effectiveLoadout.model ?? null,
         thinking: appliedLoadoutThinking(effectiveLoadout),
-        // 工单 28：档位随 loadout 快照重放；候选池未存快照，降级口径保持未知。
+        // 工单 06/28：档位、候选池与路由快照都随 loadout 重放（旧快照缺省
+        // 按现状降级，无池时降级口径保持未知）——resume 后的展示面能区分
+        // 「按池选中」与「继承父模型」，不随配置漂移。
         ...(effectiveLoadout.tier != null ? { tier: effectiveLoadout.tier } : {}),
+        ...(effectiveLoadout.routing?.pool != null
+          ? { modelPool: [...effectiveLoadout.routing.pool] }
+          : {}),
+        modelRouting: effectiveLoadout.routing ?? null,
         parentId: process.env.PI_SUBAGENT_ID ?? null,
         ...(plan.timeoutMs != null ? { timeoutMs: plan.timeoutMs } : {}),
         waitMode: "hard-barrier",
@@ -1530,7 +1633,8 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
             continue;
           }
           // 恢复路径：模型与实际思考等级都从 loadout 快照重建（工单 27），
-          // 不随配置漂移；快照缺失时按旧口径回 null。
+          // 不随配置漂移；快照缺失时按旧口径回 null。工单 06：档位、候选
+          // 池与路由快照同样从 loadout 重放，旧快照缺省降级。
           const recoveredLoadout = readSubagentLoadout(record.sessionFile);
           const running: RunningSubagent = {
             id: record.id,
@@ -1540,6 +1644,11 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
             agent: record.agent,
             model: recoveredLoadout?.model ?? null,
             thinking: recoveredLoadout ? appliedLoadoutThinking(recoveredLoadout) : null,
+            ...(recoveredLoadout?.tier != null ? { tier: recoveredLoadout.tier } : {}),
+            ...(recoveredLoadout?.routing?.pool != null
+              ? { modelPool: [...recoveredLoadout.routing.pool] }
+              : {}),
+            modelRouting: recoveredLoadout?.routing ?? null,
             parentId: record.parentId ?? null,
             ...(record.timeoutMs != null ? { timeoutMs: record.timeoutMs } : {}),
             ...(record.waitReleased ? { waitReleased: record.waitReleased } : {}),
@@ -1576,6 +1685,11 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
           agent: record.agent,
           model: recoveredLoadout?.model ?? null,
           thinking: recoveredLoadout ? appliedLoadoutThinking(recoveredLoadout) : null,
+          ...(recoveredLoadout?.tier != null ? { tier: recoveredLoadout.tier } : {}),
+          ...(recoveredLoadout?.routing?.pool != null
+            ? { modelPool: [...recoveredLoadout.routing.pool] }
+            : {}),
+          modelRouting: recoveredLoadout?.routing ?? null,
           parentId: record.parentId ?? null,
           ...(record.timeoutMs != null ? { timeoutMs: record.timeoutMs } : {}),
           ...(record.waitReleased ? { waitReleased: record.waitReleased } : {}),

@@ -1,6 +1,7 @@
 import type { SubagentActivityState } from "./activity.ts";
 import type { SubagentStatusState } from "./status.ts";
 import type { SessionStats } from "./session.ts";
+import type { LoadoutRoutingSnapshot } from "./routing-snapshot.ts";
 import type { HeadlessChild } from "./headless.ts";
 
 export interface SubagentResult {
@@ -67,6 +68,13 @@ export interface RunningSubagent {
    */
   tier?: string | null;
   modelPool?: readonly string[] | null;
+  /**
+   * 本次运行的路由快照（工单 06）：spawn 由计划构造，resume/recover 从
+   * loadout 重放。候选池、首选、实际选中、跳过原因、继承原因、生效层
+   * 来源、生效思考等级及其来源都在这一份里，后续展示面只读它不各自拼；
+   * 旧 loadout 缺省为 null 按现状降级。
+   */
+  modelRouting?: LoadoutRoutingSnapshot | null;
   /** 直接父子代理 run id;顶层子代理为 null。 */
   parentId?: string | null;
   /** 本次硬屏障等待上限;未配置时缺省。 */

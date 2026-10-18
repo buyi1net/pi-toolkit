@@ -82,6 +82,7 @@ import {
 import { withUsageRecording } from "./usage-bridge.ts";
 import type { UsageRunEvent } from "../usage/api.ts";
 import { loadTierRouteConfig, MODEL_TIERS, modelOwnThinkingSuffix, type TierRouteInjectedSource } from "./routing.ts";
+import { resolveAppliedThinking } from "./routing-snapshot.ts";
 import { routeExceptionFromResult, type RouteException } from "./route-error.ts";
 import type { ModelErrorJournal, ModelHealthGateway } from "./model-health.ts";
 import { isFailoverSwitchable } from "./model-failover.ts";
@@ -252,21 +253,18 @@ const FALLBACK_TRANSLATE = subagentsTableTranslator("en");
 const widgetText: SubagentsTranslate = (key, vars) => (hostOptions.t ?? FALLBACK_TRANSLATE)(key, vars);
 
 /**
- * 宿主 tier 层的注入候选。宿主节声明了 `models` 或 `thinking`（工单 23）任一
- * 对象时这一层才参与；两者都未声明时让链继续落到包内 config.json / example
- * 兜底。同层声明的 models 与 thinking 一起注入（层级整体生效，不拆开逐键
- * 取舍）：仅声明 thinking 的层会以 models:{} 参与链，若更低层本就配了候选池
- * （如手写的包内 config.json），缺映射会在 spawn 时以指向本节的原版报错
- * 显式暴露，而不是静默丢掉思考等级配置。
+ * 宿主 tier 层的注入候选（工单 00 逐档合并）：宿主节声明了 `models` 或
+ * `thinking` 任一键时这一层就参与，由配置链按逐档宽容判定取舍——非法取值
+ * 记入问题清单后落低层，不再在本层入口静默丢弃（否则「菜单说本节点有
+ * 问题」和「spawn 根本没读这个本节点」会同时成立）。两键都未声明时让链
+ * 继续落到包内 config.json / example 兜底。
  */
 export function resolveHostTierSources(): TierRouteInjectedSource[] {
   const host = hostSection();
   if (!host) return [];
   const raw: Record<string, unknown> = {};
-  const models = host.section.models;
-  const thinking = host.section.thinking;
-  if (isPlainObject(models) && Object.keys(models).length > 0) raw.models = models;
-  if (isPlainObject(thinking) && Object.keys(thinking).length > 0) raw.thinking = thinking;
+  if (host.section.models !== undefined) raw.models = host.section.models;
+  if (host.section.thinking !== undefined) raw.thinking = host.section.thinking;
   if (Object.keys(raw).length === 0) return [];
   return [{ source: host.source, raw }];
 }
@@ -1002,13 +1000,14 @@ function applySandboxToParts(
   // 本次调用写入 artifactDir/context/ 的文件路径,返回给调用方记入
   // running.contextFiles(retention 清理用);resume 路径忽略返回值。
   if (loadout.model) {
-    // 思考等级覆盖链（工单 23，规格 §4）：spawn 显式 thinkingOverride > 代理
-    // frontmatter thinking > 档位默认 tierThinking > 模型自带 ":level" 后缀。
-    // 模型自带后缀是最低层（"模型自身默认值"），任何更高层的等级都会先剥掉
-    // 后缀再拼接，不会拼成 ":max:low" 双后缀。旧快照（无 tierThinking）走同
-    // 一链路，缺省即为 undefined，行为不变。
-    const requested =
-      loadout.thinkingOverride ?? loadout.thinking ?? loadout.tierThinking ?? null;
+    // 思考等级覆盖链（工单 23 规格 §4 + 工单 06 父会话继承）：fallback 继承
+    // 的 parentThinking > spawn 显式 thinkingOverride > 代理 frontmatter
+    // thinking > 档位默认 tierThinking > 模型自带 ":level" 后缀。实现收在
+    // routing-snapshot.ts 的 resolveAppliedThinking，与 appliedLoadoutThinking
+    // 同源不漂移。模型自带后缀是最低层（"模型自身默认值"），任何更高层的
+    // 等级都会先剥掉后缀再拼接，不会拼成 ":max:low" 双后缀。旧快照（无
+    // parentThinking/tierThinking）走同一链路，缺省即为 undefined，行为不变。
+    const requested = resolveAppliedThinking(loadout).level;
     let model = loadout.model;
     if (requested != null) {
       const own = modelOwnThinkingSuffix(model);
@@ -2283,7 +2282,7 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
         injected: resolveHostTierSources(),
       });
       const union = loaded.config
-        ? MODEL_TIERS.flatMap((tier) => loaded.config?.models[tier] ?? [])
+        ? MODEL_TIERS.flatMap((tier) => loaded.config?.tiers[tier].pool ?? [])
         : [];
       if (union.length > 0) healthGateway.refresh(union);
     }
