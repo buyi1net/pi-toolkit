@@ -176,7 +176,7 @@ type SessionEntrySource = {
  *  比对，不是投影）。只认 getEntries（Pi 1.3.0 恒在）；接缝缺席时返回空数组，
  *  调用方按「读取失败跳过校验」处置——不用 buildContextEntries 等裁剪视图当
  *  身份集，那会把保留区间外的旧块误判成 mismatch */
-export function acpReadAllEntries(ctx: ExtensionContext): SessionEntry[] {
+function acpReadAllEntries(ctx: ExtensionContext): SessionEntry[] {
   const source = ctx.sessionManager as unknown as SessionEntrySource;
   if (typeof source.getEntries === "function") return source.getEntries();
   return [];
@@ -222,7 +222,7 @@ function acpReadHostProjection(ctx: ExtensionContext): SessionProjection {
  * 归一，多消息子 id `entryId@n` 同样归一到 entry id）。0 = 一致；>0 = sidecar
  * 属于另一份会话内容，按日志重建。
  */
-export function acpSidecarLogMismatch(state: CompressionState, entries: readonly SessionEntry[]): number {
+function acpSidecarLogMismatch(state: CompressionState, entries: readonly SessionEntry[]): number {
   if (state.blocks.length === 0) return 0;
   const known = new Set(entries.map((entry) => entry.id));
   let missing = 0;

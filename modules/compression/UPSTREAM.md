@@ -41,7 +41,7 @@ codex / acp 的实现已移植接入（工单 04–09），`acp-kernel` 已按�
 | `codex/protocol.ts` | `protocol.ts` | opaque item 校验、marker 改写、compaction_trigger 追加；SSE 收集归工单 05/06 |
 | `codex/profiles.ts` | `model-api.ts` | API→profile 推导与一致性；全局资格判断不进入（白名单先行） |
 | `codex/checkpoint.ts` | `checkpoint.ts` | 创建/解析/指纹/marker/replacement history/消息级投影；kind 换本仓标识 v1 |
-| `codex/checkpoint-projection.ts` | `checkpoint-projection.ts` | `buildSessionProjection` 缺席，改用 `buildContextEntries` 同口径推导 |
+| `codex/checkpoint-projection.ts` | `checkpoint-projection.ts` | Pi 1.3.0 起直接消费官方 `buildSessionProjection`（host-projection 接缝）；缺该 API 抛 `CodexHostProjectionUnsupportedError`，不保留本仓推导 |
 | `codex/remote.ts` | `remote.ts` + `remote-types.ts` | 协议接缝改成可注入 adapter 表；类型从 pi-coding-agent 公开导出推导 |
 | `codex/preflight.ts` | `model-api.ts`（资格判断部分） | 规格口径的确定性预检；适配器缺席也是失败 |
 | `codex/owner.ts` | `codex-compact.ts` | 主干保留；白名单资格、失败回退按规格保守实现；recovery/continuation/拒绝路由归后续工单 |
