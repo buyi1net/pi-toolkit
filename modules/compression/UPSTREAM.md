@@ -61,7 +61,7 @@ codex / acp 的实现已移植接入（工单 04–09），`acp-kernel` 已按�
 | 本仓文件 | 上游来源（`packages/pi-codex-compact/src/`） | 提取内容与主要适配 |
 |---|---|---|
 | `codex/remote-v2.ts` | `remote-v2.ts` + `protocol.ts`（SSE 收集） | Remote V2 适配器（provider.stream + onPayload 展开 + fetch 边界 tee 收集「恰好一个」item）；上游 codex-compact.ts 的 fetch 边界拒绝观察折进适配器 |
-| `codex/remote-shared.ts` | `remote-shared.ts` + `remote-types.ts` | usage 收集 / payload 校验 / SSE 预算；`normalizeContext` 替换为 providerStreamContext（依赖版本无该导出） |
+| `codex/remote-shared.ts` | `remote-shared.ts` + `remote-types.ts` | usage 收集 / payload 校验 / SSE 预算；Pi 1.3.0 起直接用官方 `normalizeContext` 折 TranscriptContext（providerTranscriptContext） |
 | `codex/compaction-failure.ts` | `compaction-failure.ts` + `terminal.ts` | OAuth 操作拒绝识别与有界观察；新增带标签错误类（owner 专用文案用）；redact/通知措辞未提取 |
 | `codex/rejection-state.ts` | `rejection-state.ts` | 拒绝路由键（身份改白名单字段）与暂停状态机（容量/观察语义原样） |
 | `codex/checkpoint-recovery.ts` | `checkpoint-recovery.ts` | opaque checkpoint → 明文续接摘要的推理请求；终端观察从 onProviderStreamEvent 移到 fetch 边界（依赖版本无该回调） |
@@ -98,8 +98,8 @@ codex / acp 的实现已移植接入（工单 04–09），`acp-kernel` 已按�
 | `validatedUsage` / `validatedCompactOutput` | `protocol.ts`（`validateCompactedResponse` 部分） | JSON 响应（非 SSE）的 usage 与「恰好一个 compaction item」校验；SSE 收集不在本工单 |
 | `createResponsesCompactAdapter` | `remote-compact.ts`（`requestResponsesCompact`） | 适配到工单 04 的 `CodexRemoteCompactionAdapter` 接缝（注入 protocolAdapters 表）；成功结果交给 owner 的 checkpoint 核心 |
 
-- 上游的 `normalizeContext`（pi-ai 1.1.0 导出）在本仓 pi-coding-agent 0.85.1 里不存在，
-  改为直接把 `request.context`（已是 convertToLlm 后的 LLM 形状）交给 `provider.stream`。
+- Pi 1.3.0 起与上游同源：压缩请求上下文经 remote-shared.ts 的官方 `normalizeContext`
+  折成 TranscriptContext 后再交 `provider.stream`（上游接缝一致）。
 - 上游用 `collectCompactResponse` 读 JSON body 再合成 SSE；本仓同款（`readJsonObject` +
   合成 SSE），provider 从 done 事件取 usage。
 - 上游 `test/remote-compact.test.ts` 的 fixture（成功 / 错误响应 / 非法 usage / 多结果 /

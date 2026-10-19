@@ -119,9 +119,11 @@ const EN = {
     "ACP owns this session's compression ({reason} trigger cancelled): context is projected by ACP and compression runs via the compress tool — Pi native summary is not used",
   "module.compression.acp.status": "ACP compression active: context projected by ACP (compress tool)",
   "module.compression.acp.hostUnsupported":
-    "ACP cannot project context on this host (missing session entry seam, {reason} trigger); no ACP state exists yet, so this compaction falls back to Pi native",
+    "ACP cannot project context on this host (no buildSessionProjection(); Pi 1.3.0+ required, {reason} trigger); no ACP state exists yet, so this compaction falls back to Pi native",
   "module.compression.acp.hostUnsupportedWithState":
-    "ACP cannot project context on this host but this session still has ACP state ({reason} trigger); compaction cancelled and the state is kept — resume on a supported host or start a new session",
+    "ACP cannot project context on this host (no buildSessionProjection(); Pi 1.3.0+ required) but this session still has ACP state ({reason} trigger); compaction cancelled and the state is kept — resume on a supported host or start a new session",
+  "module.compression.acp.hostProjectionUnsupported":
+    "This host does not provide buildSessionProjection() (Pi 1.3.0+ required): ACP projection is stopped — no legacy projection is emulated and nothing falls back silently",
   "module.compression.acp.compactUnavailable":
     "ACP state is unavailable (sidecar version incompatible or rebuild failed, {reason} trigger); compaction cancelled and nothing was faked — check the compression diagnosis or fix/remove the sidecar",
   "module.compression.acp.sidecarNewer":
@@ -147,7 +149,17 @@ const EN = {
   "module.compression.codex.notWhitelisted":
     "Current model resolved to codex mode without an explicit rule, official auto detection or a session override; codex compaction only applies to explicit provider/model rules, official OpenAI Responses / Codex OAuth links and the current session override, so this session keeps the existing policy (Pi native)",
   "module.compression.codex.resolve.noModel": "Codex compaction needs an active session model",
-  "module.compression.codex.status.running": "Codex remote compaction ({protocol})…",
+
+  // ── 工单 08：展示 owner 仲裁与扩展消息状态 ──
+  "module.compression.display.inProgress": "Context compression in progress ({mode})…",
+  "module.compression.display.succeeded": "Context compression complete ({mode}); continuing",
+  "module.compression.display.failed": "Context compression failed ({mode}): {reason}",
+  "module.compression.display.protected": "Compression paused to protect this session ({mode}): {reason}",
+  "module.compression.display.expired": "A previous context compression did not finish ({mode}); state expired",
+  "module.compression.display.concluded": "Context compression for this session has ended ({mode})",
+  "module.compression.display.recovering": "Recovering compression state ({mode})…",
+  "module.compression.display.recoverySucceeded": "Compression state recovered ({mode}); continuing",
+  "module.compression.display.recoveryFailed": "Compression state recovery failed ({mode}): {reason}",
 
   "module.compression.codex.unsupported.apiNotResponses":
     "Codex compaction unavailable before any request: model API {api} is not a Responses shape (known non-Responses API)",
@@ -155,6 +167,8 @@ const EN = {
     "Codex compaction unavailable: the rule profile conflicts with the profile derived from API {api}; remove the rule profile or fix the API",
   "module.compression.codex.unsupported.protocolUnavailable":
     "Codex compaction unavailable in this build: the {protocol} protocol adapter is not registered",
+  "module.compression.codex.hostProjectionUnsupported":
+    "Codex compaction stopped: the running Pi host does not provide buildSessionProjection (Pi 1.3.0+ required); upgrade the host to use Codex context compression",
 
   "module.compression.codex.outcome.fellBackNative":
     "— this compaction falls back to Pi native (onUnsupported=native)",
@@ -171,6 +185,8 @@ const EN = {
     "The saved transcript cannot verify the previous opaque checkpoint projection; history preserved",
   "module.compression.codex.checkpoint.projectionFailed":
     "Checkpoint projection failed for this request: the opaque history is not injected and the fallback summary text is used instead; the checkpoint is preserved. Use /tree to branch before the checkpoint or switch back to the original model.",
+  "module.compression.codex.checkpoint.hostProjectionUnsupported":
+    "Checkpoint replay needs a Pi 1.3.0+ host projection (buildSessionProjection); this host does not provide it, so the opaque history is not injected and the fallback summary text stays visible. Upgrade the Pi host to replay saved checkpoints.",
 
   "module.compression.codex.prepare.providerUnavailable": "The active Responses provider is unavailable",
   "module.compression.codex.prepare.emptyReplacement": "The remote response produced an empty replacement history",
@@ -308,7 +324,6 @@ const EN = {
   "module.compression.lifecycle.foreignProtected":
     "Cancelled this {reason} compaction: the newest compaction state ({identity}) was written by an external compression extension. The built-in module neither replays nor overwrites that opaque history; disable or migrate that extension first, or start a new session",
 
-  "module.compression.codex.recovery.status": "Recovering the Codex checkpoint into a plaintext summary…",
   "module.compression.codex.recovery.succeeded":
     "Codex remote compaction failed; the active checkpoint was recovered into a lossy plaintext continuation summary. The opaque history is superseded — retry /compact to create a fresh checkpoint",
   "module.compression.codex.recovery.failed":
@@ -488,9 +503,11 @@ const ZH_CN: typeof EN = {
     "ACP 已接管本会话压缩（{reason} 触发已取消）：上下文由 ACP 投影，压缩经 compress 工具执行，不使用 Pi 原生摘要",
   "module.compression.acp.status": "ACP 压缩已接管：上下文由 ACP 投影（compress 工具）",
   "module.compression.acp.hostUnsupported":
-    "宿主缺少会话 entry 接缝，ACP 无法投影上下文（{reason} 触发）；本会话尚无 ACP 状态，本次压缩交回 Pi 原生",
+    "宿主缺少 buildSessionProjection()（需要 Pi 1.3.0+），ACP 无法投影上下文（{reason} 触发）；本会话尚无 ACP 状态，本次压缩交回 Pi 原生",
   "module.compression.acp.hostUnsupportedWithState":
-    "宿主缺少会话 entry 接缝但本会话仍有 ACP 状态（{reason} 触发）：已取消压缩并保留状态——请回到受支持的宿主或新建会话",
+    "宿主缺少 buildSessionProjection()（需要 Pi 1.3.0+）但本会话仍有 ACP 状态（{reason} 触发）：已取消压缩并保留状态——请回到受支持的宿主或新建会话",
+  "module.compression.acp.hostProjectionUnsupported":
+    "宿主未提供 buildSessionProjection()（需要 Pi 1.3.0+）：ACP 投影已停止，不模拟旧版投影，也不静默回退",
   "module.compression.acp.compactUnavailable":
     "ACP 状态不可用（sidecar 版本不兼容或重建失败，{reason} 触发）：已取消压缩且不伪装成功——请查看压缩诊断或修复/删除 sidecar",
   "module.compression.acp.sidecarNewer":
@@ -516,7 +533,17 @@ const ZH_CN: typeof EN = {
   "module.compression.codex.notWhitelisted":
     "当前模型解析为 codex 模式，但既没有显式规则、也没命中官方自动检测、也不是当前会话覆盖：codex 压缩只对显式 provider/model 规则、官方 OpenAI Responses / Codex OAuth 链路与当前会话覆盖生效，本会话继续沿用既有策略（Pi 原生）",
   "module.compression.codex.resolve.noModel": "Codex 压缩需要会话中存在活动模型",
-  "module.compression.codex.status.running": "Codex 远程压缩中（{protocol}）…",
+
+  // ── 工单 08：展示 owner 仲裁与扩展消息状态 ──
+  "module.compression.display.inProgress": "上下文压缩进行中（{mode}）…",
+  "module.compression.display.succeeded": "上下文压缩完成（{mode}），继续工作",
+  "module.compression.display.failed": "上下文压缩失败（{mode}）：{reason}",
+  "module.compression.display.protected": "已暂停压缩以保护本会话（{mode}）：{reason}",
+  "module.compression.display.expired": "上一次上下文压缩未完成（{mode}），状态已过期",
+  "module.compression.display.concluded": "本次会话的上下文压缩已结束（{mode}）",
+  "module.compression.display.recovering": "正在恢复上下文压缩状态（{mode}）…",
+  "module.compression.display.recoverySucceeded": "上下文压缩状态已恢复（{mode}），继续工作",
+  "module.compression.display.recoveryFailed": "上下文压缩状态恢复失败（{mode}）：{reason}",
 
   "module.compression.codex.unsupported.apiNotResponses":
     "Codex 压缩不可用（发请求前已判定）：模型 API {api} 不是 Responses 形状（已知非 Responses API）",
@@ -524,6 +551,8 @@ const ZH_CN: typeof EN = {
     "Codex 压缩不可用：规则声明的 profile 与 API {api} 推导的 profile 冲突；请删除规则里的 profile 声明或修正 API",
   "module.compression.codex.unsupported.protocolUnavailable":
     "Codex 压缩在本构建中不可用：{protocol} 协议适配器未接入",
+  "module.compression.codex.hostProjectionUnsupported":
+    "Codex 压缩已停止：当前 Pi 宿主缺少 buildSessionProjection（需要 Pi 1.3.0+）；请升级宿主后再使用 Codex 上下文压缩",
 
   "module.compression.codex.outcome.fellBackNative":
     "——本次压缩回退 Pi 原生（onUnsupported=native）",
@@ -540,6 +569,8 @@ const ZH_CN: typeof EN = {
     "保存的会话日志无法验证上一个 opaque checkpoint 的投影；历史已保留",
   "module.compression.codex.checkpoint.projectionFailed":
     "本次请求的 checkpoint 投影失败：未注入 opaque 历史，改用 fallback 摘要文案继续，checkpoint 保留。可用 /tree 在压缩点前分支或换回原模型。",
+  "module.compression.codex.checkpoint.hostProjectionUnsupported":
+    "checkpoint 回放需要 Pi 1.3.0+ 的宿主投影（buildSessionProjection）；当前宿主缺少该 API，opaque 历史不会注入，模型只能看到 fallback 摘要文案。请升级 Pi 宿主后回放已保存的 checkpoint。",
 
   "module.compression.codex.prepare.providerUnavailable": "活动的 Responses provider 不可用",
   "module.compression.codex.prepare.emptyReplacement": "远端响应产出了空的 replacement history",
@@ -677,7 +708,6 @@ const ZH_CN: typeof EN = {
   "module.compression.lifecycle.foreignProtected":
     "已取消本次{reason}压缩：最新压缩状态（{identity}）由外部压缩扩展写入，内置模块不回放也不覆盖它的 opaque 历史；请先停用/迁移该外部扩展，或新建会话",
 
-  "module.compression.codex.recovery.status": "正在把 Codex checkpoint 恢复为明文续接摘要…",
   "module.compression.codex.recovery.succeeded":
     "Codex 远程压缩失败，已按摘要恢复把 checkpoint 转为有损的明文续接摘要：opaque 历史已被新摘要取代；需要新的 checkpoint 可再次 /compact",
   "module.compression.codex.recovery.failed":
@@ -849,9 +879,11 @@ const ZH_TW: typeof EN = {
     "ACP 已接管本會話壓縮（{reason} 觸發已取消）：上下文由 ACP 投影，壓縮經 compress 工具執行，不使用 Pi 原生摘要",
   "module.compression.acp.status": "ACP 壓縮已接管：上下文由 ACP 投影（compress 工具）",
   "module.compression.acp.hostUnsupported":
-    "宿主缺少會話 entry 接縫，ACP 無法投影上下文（{reason} 觸發）；本會話尚無 ACP 狀態，本次壓縮交回 Pi 原生",
+    "宿主缺少 buildSessionProjection()（需要 Pi 1.3.0+），ACP 無法投影上下文（{reason} 觸發）；本會話尚無 ACP 狀態，本次壓縮交回 Pi 原生",
   "module.compression.acp.hostUnsupportedWithState":
-    "宿主缺少會話 entry 接縫但本會話仍有 ACP 狀態（{reason} 觸發）：已取消壓縮並保留狀態——請回到受支援的宿主或新建會話",
+    "宿主缺少 buildSessionProjection()（需要 Pi 1.3.0+）但本會話仍有 ACP 狀態（{reason} 觸發）：已取消壓縮並保留狀態——請回到受支援的宿主或新建會話",
+  "module.compression.acp.hostProjectionUnsupported":
+    "宿主未提供 buildSessionProjection()（需要 Pi 1.3.0+）：ACP 投影已停止，不模擬舊版投影，也不靜默回退",
   "module.compression.acp.compactUnavailable":
     "ACP 狀態不可用（sidecar 版本不相容或重建失敗，{reason} 觸發）：已取消壓縮且不偽裝成功——請查看壓縮診斷或修復/刪除 sidecar",
   "module.compression.acp.sidecarNewer":
@@ -877,7 +909,17 @@ const ZH_TW: typeof EN = {
   "module.compression.codex.notWhitelisted":
     "目前模型解析為 codex 模式，但既沒有明確規則、也沒命中官方自動檢測、也不是目前會話覆蓋：codex 壓縮只對明確 provider/model 規則、官方 OpenAI Responses / Codex OAuth 鏈路與目前會話覆蓋生效，本會話繼續沿用既有策略（Pi 原生）",
   "module.compression.codex.resolve.noModel": "Codex 壓縮需要會話中存在活動模型",
-  "module.compression.codex.status.running": "Codex 遠端壓縮中（{protocol}）…",
+
+  // ── 工單 08：展示 owner 仲裁與擴展消息狀態 ──
+  "module.compression.display.inProgress": "上下文壓縮進行中（{mode}）…",
+  "module.compression.display.succeeded": "上下文壓縮完成（{mode}），繼續工作",
+  "module.compression.display.failed": "上下文壓縮失敗（{mode}）：{reason}",
+  "module.compression.display.protected": "已暫停壓縮以保護本會話（{mode}）：{reason}",
+  "module.compression.display.expired": "上一次上下文壓縮未完成（{mode}），狀態已過期",
+  "module.compression.display.concluded": "本次會話的上下文壓縮已結束（{mode}）",
+  "module.compression.display.recovering": "正在恢復上下文壓縮狀態（{mode}）…",
+  "module.compression.display.recoverySucceeded": "上下文壓縮狀態已恢復（{mode}），繼續工作",
+  "module.compression.display.recoveryFailed": "上下文壓縮狀態恢復失敗（{mode}）：{reason}",
 
   "module.compression.codex.unsupported.apiNotResponses":
     "Codex 壓縮不可用（發請求前已判定）：模型 API {api} 不是 Responses 形狀（已知非 Responses API）",
@@ -885,6 +927,8 @@ const ZH_TW: typeof EN = {
     "Codex 壓縮不可用：規則宣告的 profile 與 API {api} 推導的 profile 衝突；請刪除規則裡的 profile 宣告或修正 API",
   "module.compression.codex.unsupported.protocolUnavailable":
     "Codex 壓縮在本建置中不可用：{protocol} 協定介面卡未接入",
+  "module.compression.codex.hostProjectionUnsupported":
+    "Codex 壓縮已停止：目前 Pi 宿主缺少 buildSessionProjection（需要 Pi 1.3.0+）；請升級宿主後再使用 Codex 上下文壓縮",
 
   "module.compression.codex.outcome.fellBackNative":
     "——本次壓縮回退 Pi 原生（onUnsupported=native）",
@@ -901,6 +945,8 @@ const ZH_TW: typeof EN = {
     "儲存的會話日誌無法驗證上一個 opaque checkpoint 的投影；歷史已保留",
   "module.compression.codex.checkpoint.projectionFailed":
     "本次請求的 checkpoint 投影失敗：未注入 opaque 歷史，改用 fallback 摘要文案繼續，checkpoint 保留。可用 /tree 在壓縮點前分支或換回原模型。",
+  "module.compression.codex.checkpoint.hostProjectionUnsupported":
+    "checkpoint 回放需要 Pi 1.3.0+ 的宿主投影（buildSessionProjection）；目前宿主缺少該 API，opaque 歷史不會注入，模型只能看到 fallback 摘要文案。請升級 Pi 宿主後回放已儲存的 checkpoint。",
 
   "module.compression.codex.prepare.providerUnavailable": "活動的 Responses provider 不可用",
   "module.compression.codex.prepare.emptyReplacement": "遠端回應產出了空的 replacement history",
@@ -1038,7 +1084,6 @@ const ZH_TW: typeof EN = {
   "module.compression.lifecycle.foreignProtected":
     "已取消本次{reason}壓縮：最新壓縮狀態（{identity}）由外部壓縮擴充寫入，內建模組不回放也不覆蓋它的 opaque 歷史；請先停用/遷移該外部擴充，或新建會話",
 
-  "module.compression.codex.recovery.status": "正在把 Codex checkpoint 復原為明文續接摘要…",
   "module.compression.codex.recovery.succeeded":
     "Codex 遠端壓縮失敗，已按摘要復原把 checkpoint 轉為有損的明文續接摘要：opaque 歷史已被新摘要取代；需要新的 checkpoint 可再次 /compact",
   "module.compression.codex.recovery.failed":

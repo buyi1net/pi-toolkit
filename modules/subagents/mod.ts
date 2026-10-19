@@ -101,6 +101,8 @@ import type { RunningSubagent, SubagentResult } from "./types.ts";
 import {
   buildPiPromptArgs,
   buildSubagentToolAllowlist,
+  declaredMcpTools,
+  MCP_TOOL_PREFIX,
   resolveEffectiveAutoExit,
   resolveEffectiveInteractive,
   resolveEffectiveSessionMode,
@@ -371,7 +373,7 @@ function getToolExtensionPath(tool: string): string | undefined {
  */
 export interface ToolProvisionReport {
   tool: string;
-  kind: "builtin" | "module" | "extension";
+  kind: "builtin" | "module" | "extension" | "mcp";
   provider?: string;
 }
 
@@ -384,6 +386,16 @@ export function classifyToolProvisions(allowlist: string): {
   for (const raw of allowlist.split(",")) {
     const tool = raw.trim();
     if (!tool) continue;
+    // 工单 05：mcp__ 条目由子进程的 MCP 服务器提供（Pi 在服务器连接后
+    // 注册 mcp__ 工具）。父进程看不到子进程的 mcp.json / registerMcpServer
+    // 来源，无法像扩展工具那样核验提供方；Pi 对未匹配的 mcp__ 条目也只是
+    // 静默不注册，不报错。因此不判缺失——隔离由能力门保证：未声明 mcp__
+    // 条目时启动参数整体关闭 MCP（applySandboxToParts 的 --no-mcp），声明
+    // 了也只有声明过的 pattern 可达（Pi --tools 的 MCP 过滤语义）。
+    if (tool.startsWith(MCP_TOOL_PREFIX)) {
+      provided.push({ tool, kind: "mcp" });
+      continue;
+    }
     if (BUILTIN_TOOLS.has(tool)) {
       provided.push({ tool, kind: "builtin" });
       continue;
@@ -1062,6 +1074,19 @@ function applySandboxToParts(
       if (skipSelfInjection && resolved === selfEntryPath) continue;
       parts.push("-e", escape(resolved));
     }
+  }
+
+  // 工单 05：Pi 1.3.0 的 --tools 普通名称白名单不会移除 MCP 工具——未列名的
+  // MCP 服务器仍会连接，其工具经 codemode 脚本 / tool_search 可达（docs/cli.md
+  // “MCP tools”："MCP tools are kept unless an entry starts with mcp__"；mcp
+  // 扩展还会在有 codemode/deferred 服务器时自动激活 codemode/tool_search）。
+  // 因此子代理默认严格隔离：allowlist 未显式声明 mcp__ 条目时，启动参数整体
+  // 关闭内置 MCP 支持（--no-mcp：服务器不连接、不注册任何 MCP 工具，包括
+  // list_mcp_resources 等资源工具）；只有 profile 显式声明 mcp__<server>__<tool|*>
+  // 时才放行，此时 Pi 的 --tools 过滤会把 MCP 收敛到声明过的 pattern，未声明的
+  // 服务器不可达。权限口径见 describeMcpIsolation（随 spawn 结果展示）。
+  if (declaredMcpTools(loadout.toolAllowlist).length === 0) {
+    parts.push("--no-mcp");
   }
 
   // Normal extension discovery is intentionally preserved, but delegation is

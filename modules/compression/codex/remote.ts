@@ -8,9 +8,10 @@
 //   后续真实协议共用同一条核心链路（创建 → 保存 → 校验 → 回放）。
 // - 协议枚举用本仓 api.ts 的 CodexProtocol（与策略解析 / 规则配置同源），
 //   不引入上游的 "auto" 设置值（协议选择已由策略解析完成）。
-// - 类型不从 pi-ai 直接导入（pi-ai 不是本包直接依赖、package.json 不动）：
-//   Model / Provider / headers / usage 全部从 pi-coding-agent 的公开导出
-//   结构推导，请求上下文用自有结构形状（convertToLlm 的返回消息）。
+// - 类型口径：pi-ai 已按宿主依赖规则登记为 peer/dev 依赖（Pi 1.3.0），工具声明
+//   形状直接用官方 Tool 的 parameters 类型；Model / Provider / headers / usage
+//   仍从 pi-coding-agent 的公开导出结构推导，请求上下文用自有结构形状
+//   （convertToLlm 的返回消息，normalizeContext 的输入同形）。
 //
 // adapter 的契约（工单 05/06/07 实现，owner 侧前置校验）：
 // - 请求带全量上下文（已按 priorCheckpoint 投影）、profile、鉴权与信号；
@@ -19,6 +20,7 @@
 // - adapter 内部负责远端响应的收集、校验与重试，失败以异常上抛（owner
 //   按 prepare 阶段失败处理，遵守规格回退规则）。
 
+import type { Tool } from "@earendil-works/pi-ai";
 import type {
   CompactionResult,
   ExtensionContext,
@@ -46,14 +48,17 @@ export type CodexRemoteUsage = NonNullable<CompactionResult["usage"]>;
 /** LLM 消息（convertToLlm 的返回元素形状） */
 export type CodexRemoteLlmMessage = ReturnType<typeof import("@earendil-works/pi-coding-agent").convertToLlm>[number];
 
-/** 压缩请求的工具描述 */
+/** 压缩请求的工具描述（pi-ai Tool 的声明形；parameters 是 provider 侧 schema） */
 export interface CodexRemoteTool {
   readonly name: string;
   readonly description: string;
-  readonly parameters: unknown;
+  readonly parameters: Tool["parameters"];
 }
 
-/** 远程压缩请求的上下文（pi-ai Context 的结构形状） */
+/**
+ * 远程压缩请求的上下文（pi-ai Context 的只读结构形状；normalizeContext 的输入，
+ * 不是 provider 输入——provider 只接受官方折出的 TranscriptContext）
+ */
 export interface CodexRemoteContext {
   readonly systemPrompt?: string;
   readonly messages: readonly CodexRemoteLlmMessage[];

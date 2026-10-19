@@ -20,8 +20,8 @@ import {
   type SearchDoc,
   type SearchResult,
 } from "acp-kernel";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { acpEntriesToCoreMessages } from "./projection.ts";
+import type { ProjectedSessionEntry } from "@earendil-works/pi-coding-agent";
+import { acpCoreMessagesOfProjectedEntry } from "./projection.ts";
 
 /** 被任一块覆盖（active 与否都算）的原始消息 id 集合 */
 function buildCoveredIds(state: CompressionState): Set<string> {
@@ -53,20 +53,22 @@ function toSearchRole(role: string): MessageInput["role"] | null {
 /**
  * 构建搜索索引：块摘要文档 + 被折叠原始消息文档。消息文档的 ref 用内核
  * 引用（mNNNNN，与视图里的 acp 标签同坐标系）；无引用登记的老消息退化用
- * 原始 entry id（decompress 同样接受）。
+ * 坐标 id（decompress 同样接受）。索引源是宿主投影（工单 03）：被
+ * context_edit 删除的消息没有投影消息，天然不进索引。
  */
-export function acpBuildSearchDocs(state: CompressionState, entries: readonly SessionEntry[]): SearchDoc[] {
+export function acpBuildSearchDocs(
+  state: CompressionState,
+  projected: readonly ProjectedSessionEntry[],
+): SearchDoc[] {
   const covered = buildCoveredIds(state);
   const owner = buildOwnerMap(state);
   const tierByBlock = new Map(state.blocks.map((block) => [block.blockId, block.tier]));
 
   const messages: MessageInput[] = [];
-  for (const entry of entries) {
-    if (entry.type !== "message") continue;
-    const message = (entry as { message?: { role?: string } }).message;
-    const role = toSearchRole(message?.role ?? "");
-    if (!role) continue;
-    for (const core of acpEntriesToCoreMessages([entry])) {
+  for (const slot of projected) {
+    for (const core of acpCoreMessagesOfProjectedEntry(slot)) {
+      const role = toSearchRole(core.role);
+      if (!role) continue;
       if (!covered.has(core.id)) continue; // 仍可见的消息不进索引
       const text = core.text ?? "";
       if (text.trim().length < 2) continue;
@@ -96,11 +98,11 @@ export interface AcpSearchReport {
 /** 执行一次搜索（空结果同样返回报告，反馈文本由 acpFormatSearchResults 生成） */
 export function acpRunSearch(
   state: CompressionState,
-  entries: readonly SessionEntry[],
+  projected: readonly ProjectedSessionEntry[],
   query: string,
   limit?: number,
 ): AcpSearchReport {
-  const docs = acpBuildSearchDocs(state, entries);
+  const docs = acpBuildSearchDocs(state, projected);
   const blockCount = docs.filter((doc) => doc.kind === "block").length;
   const messageCount = docs.filter((doc) => doc.kind === "message").length;
   const results = query.trim().length === 0 ? [] : searchBlocks(docs, query, { limit });

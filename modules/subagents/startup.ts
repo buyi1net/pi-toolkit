@@ -179,6 +179,12 @@ export interface SpawnPlan {
   targetCwdForSession: string;
   effectiveModel: string | null;
   effectiveTools: string | undefined;
+  /**
+   * 工单 05：最终 --tools 白名单（与 spawn 阶段拼 argv / loadout 同一份数据）。
+   * null 表示无限制（不传 --tools）。启动时用它判断 MCP 能力门
+   * （declaredMcpTools）并把权限说明（describeMcpIsolation）带给工具层。
+   */
+  toolAllowlist: string | null;
   effectiveSkills: string | undefined;
   effectiveThinking: string | undefined;
   /** 档位解析出的默认思考等级（已计入 effectiveThinking；单独存供 loadout 记录）。 */
@@ -762,27 +768,27 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     // pi 会静默丢弃 --tools 白名单里没有注册者的工具名，声明与实际不一致
     // 只会在子代理跑到任务中途才暴露。这里按最终白名单逐名核验提供方，
     // 缺失即拒绝启动并给出可操作的修复路径；核验器缺省（旧注入层）时跳过。
-    if (deps.validateToolProvision) {
-      const grantSpawning = !!(agentDefs?.subagentAgents && agentDefs.subagentAgents.length > 0);
-      const toolAllowlist = buildSubagentToolAllowlist(agentDefs?.tools, {
-        grantSpawning,
-        ...(memberMode ? { grantTeamSend: true } : {}),
-      });
-      if (typeof toolAllowlist === "string") {
-        const missing = deps.validateToolProvision(toolAllowlist);
-        if (missing.length > 0) {
-          const error =
-            `Agent profile "${params.agent ?? "(unnamed)"}" declares tools that no extension can provide: ` +
-            `${missing.join(", ")}. The child would silently start WITHOUT them (pi drops unknown ` +
-            `--tools entries without warning). Fix: install the backing extension under ` +
-            `${join(deps.getAgentConfigDir(), "extensions")}, or register it via registerToolExtension, ` +
-            `or edit the agent profile's tools list.`;
-          return {
-            kind: "error",
-            error,
-            details: { error: "unprovidable tools", agent: params.agent ?? null, missing },
-          };
-        }
+    // 工单 05：白名单只算一次并随计划携带（plan.toolAllowlist），spawn 阶段
+    // 与 MCP 能力门/权限说明用同一份，不重复解析。
+    const grantSpawning = !!(agentDefs?.subagentAgents && agentDefs.subagentAgents.length > 0);
+    const toolAllowlist = buildSubagentToolAllowlist(agentDefs?.tools, {
+      grantSpawning,
+      ...(memberMode ? { grantTeamSend: true } : {}),
+    });
+    if (deps.validateToolProvision && typeof toolAllowlist === "string") {
+      const missing = deps.validateToolProvision(toolAllowlist);
+      if (missing.length > 0) {
+        const error =
+          `Agent profile "${params.agent ?? "(unnamed)"}" declares tools that no extension can provide: ` +
+          `${missing.join(", ")}. The child would silently start WITHOUT them (pi drops unknown ` +
+          `--tools entries without warning). Fix: install the backing extension under ` +
+          `${join(deps.getAgentConfigDir(), "extensions")}, or register it via registerToolExtension, ` +
+          `or edit the agent profile's tools list.`;
+        return {
+          kind: "error",
+          error,
+          details: { error: "unprovidable tools", agent: params.agent ?? null, missing },
+        };
       }
     }
 
@@ -881,6 +887,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         targetCwdForSession,
         effectiveModel: effectiveModel ?? null,
         effectiveTools: agentDefs?.tools,
+        toolAllowlist,
         effectiveSkills: agentDefs?.skills,
         effectiveThinking,
         tierThinking,
@@ -918,7 +925,8 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
       localAgentDir,
       targetCwdForSession,
       effectiveModel,
-      effectiveTools,
+      // 工单 05：计划阶段已算好的最终白名单（与装载核验、MCP 能力门同源）。
+      toolAllowlist,
       effectiveSkills,
       effectiveAutoExit,
       interactive: effectiveInteractive,
@@ -1044,10 +1052,8 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     // configured extensions as the parent. The loadout still records the
     // resolved tool policy so resume does not widen callable tools.
     // member 注入 team_send(profile 不能靠 tools 自授,同 spawning 的授权模型)。
-    const toolAllowlist = buildSubagentToolAllowlist(effectiveTools, {
-      grantSpawning,
-      ...(memberMode ? { grantTeamSend: true } : {}),
-    });
+    // 工单 05：白名单在计划阶段算一次（plan.toolAllowlist），这里不再重算，
+    // 与装载核验、MCP 能力门（applySandboxToParts 的 --no-mcp 判定）同一份数据。
 
     // 工单 29：装载捆绑 web 工具（web_search/web_fetch）时，子进程的全局
     // fetch 只有在 Node >= 24 且 NODE_USE_ENV_PROXY=1 时才走 HTTP(S)_PROXY；

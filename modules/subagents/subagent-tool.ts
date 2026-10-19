@@ -40,6 +40,7 @@ import {
   type DependencyOutcome,
 } from "./dependencies.ts";
 import { SubagentParams } from "./params.ts";
+import { describeMcpIsolation } from "./launch-config.ts";
 import { cleanupSubagentArtifacts, resolveRetentionDecision } from "./retention.ts";
 import type { RuntimeRegistry } from "./registry.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
@@ -634,6 +635,10 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         };
       }
       const plan = planned.plan;
+      // 工单 05：MCP 能力门权限说明（显式声明时列出 pattern，否则说明隔离）；
+      // 计划携带的 toolAllowlist 是唯一输入，工具层不重算策略。三个返回面
+      // （member ack / interactive ack / 硬屏障终态）用同一份。
+      const mcpNote = plan.toolAllowlist !== undefined ? describeMcpIsolation(plan.toolAllowlist) : null;
       const timeoutMs = params.timeoutMs ?? null;
 
       const parentArtifactDir = deps.getArtifactDir(
@@ -768,6 +773,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             sessionFile: running.sessionFile,
             status: "member-started",
             member: true,
+            ...(mcpNote ? { mcp: mcpNote } : {}),
             ...(plan.tierConfigProblems ? { configProblems: [...plan.tierConfigProblems] } : {}),
           },
         };
@@ -873,6 +879,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             ...(running.cohortId ? { cohortId: running.cohortId } : {}),
             sessionFile: running.sessionFile,
             status: "started",
+            ...(mcpNote ? { mcp: mcpNote } : {}),
             ...(plan.tierConfigProblems ? { configProblems: [...plan.tierConfigProblems] } : {}),
           },
         };
@@ -1231,6 +1238,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
           ...(result.stats ? { stats: result.stats } : {}),
           ...(routeException ? { routeException } : {}),
           ...(modelRouting ? { modelRouting } : {}),
+          ...(mcpNote ? { mcp: mcpNote } : {}),
           ...(plan.tierConfigProblems ? { configProblems: [...plan.tierConfigProblems] } : {}),
         },
       };

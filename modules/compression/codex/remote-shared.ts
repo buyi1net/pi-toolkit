@@ -4,20 +4,24 @@
 // remote-types.ts（MIT，来源登记见 ../UPSTREAM.md）。提取与适配：
 // - collectProviderUsage（遍历 provider 事件流收集 usage）与 abortError /
 //   assertPreparedInput / MAX_SSE_BYTES 保留上游算法；
-// - 类型不从 pi-ai 直接导入（pi-ai 不是本包直接依赖、package.json 不动）：
-//   provider 流与 usage 的形状从 pi-coding-agent 公开导出结构推导（与 04 的
-//   remote.ts 同款口径）；
-// - providerStreamContext：上游经 pi-ai 的 normalizeContext 把 Context 折成
-//   TranscriptContext；本仓依赖版本（pi-coding-agent 0.85.1 的 pi-ai）的
-//   provider.stream 直接接受 { systemPrompt?, messages, tools? } 形状，这里做
-//   同义的只读转写（readonly 数组 → 可变数组），不引入版本外的接缝。
+// - 类型口径：pi-ai 已按宿主依赖规则登记为 peer/dev 依赖（Pi 1.3.0），provider 流
+//   与 usage 的形状继续从 pi-coding-agent 公开导出结构推导，provider-context helper
+//   经命名空间导入调用 pi-ai 1.3.0 官方 normalizeContext（宿主缺该导出时由
+//   resolveNormalizeContext 抛 ProviderTranscriptContextUnsupportedError，不做版本
+//   探测、不回退旧输入形状）；
+// - providerTranscriptContext：与上游同源——经 pi-ai 的 normalizeContext 把
+//   Context（systemPrompt + tools + messages）折成带 brand 的 TranscriptContext，
+//   system prompt 与工具声明折入 leading system message，其余消息原顺序保留；
+//   这是 Pi 1.3.0 provider.stream 的唯一合法输入形状（旧版 { systemPrompt,
+//   messages, tools } 直传不再提供）。
 //
-// 工单 06（responses/compact）与 07（Context Management）的协议适配器可复用
-// 本文件；三单各自只改自己的协议文件。
+// 工单 06（responses/compact）、07（Context Management）与 checkpoint recovery 的
+// 协议适配器共用本文件的 provider-context helper 与收集工具。
 
+import * as piAi from "@earendil-works/pi-ai";
 import type { JsonObject } from "./protocol.ts";
 import { isJsonObject } from "./protocol.ts";
-import type { CodexRemoteProvider, CodexRemoteUsage } from "./remote.ts";
+import type { CodexRemoteContext, CodexRemoteProvider, CodexRemoteUsage } from "./remote.ts";
 
 /** 上游同款 SSE 尺寸上限（远端响应收集的字节预算） */
 export const MAX_SSE_BYTES = 8 * 1024 * 1024;
@@ -25,11 +29,8 @@ export const MAX_SSE_BYTES = 8 * 1024 * 1024;
 /** provider 事件流类型（pi-ai AssistantMessageEventStream 的结构推导形） */
 export type CodexProviderStream = ReturnType<CodexRemoteProvider["stream"]>;
 
-/** provider.stream 的第二参（请求上下文；pi-ai Context 的结构推导形） */
-export type CodexProviderStreamContext = Parameters<CodexRemoteProvider["stream"]>[1];
-
-/** provider.stream 的工具元素形（parameters 是 provider 侧 schema） */
-type CodexProviderTool = NonNullable<CodexProviderStreamContext["tools"]>[number];
+/** provider.stream 的第二参（Pi 1.3.0 的 TranscriptContext，官方 normalizeContext 产出） */
+export type CodexProviderTranscriptContext = Parameters<CodexRemoteProvider["stream"]>[1];
 
 export function abortError(): DOMException {
   return new DOMException("Compaction aborted", "AbortError");
@@ -44,30 +45,44 @@ export function assertPreparedInput(payload: JsonObject): JsonObject[] {
 }
 
 /**
- * 把压缩请求上下文（CodexRemoteContext，readonly）转写成 provider.stream 接受的
- * 请求上下文。不增删语义字段；克隆一层避免调用方共享引用。
+ * 宿主 pi-ai 缺 Pi 1.3.0 normalizeContext 的显式失败（单向升级：只报宿主不支持，
+ * 不探测版本、不回退旧版 { systemPrompt, messages, tools } 直传口径）。
  */
-export function providerStreamContext(context: {
-  readonly systemPrompt?: string;
-  readonly messages: readonly unknown[];
-  readonly tools?: readonly { readonly name: string; readonly description: string; readonly parameters: unknown }[];
-}): CodexProviderStreamContext {
-  return {
+export class ProviderTranscriptContextUnsupportedError extends Error {
+  constructor() {
+    super(
+      "Host @earendil-works/pi-ai does not provide normalizeContext (Pi 1.3.0+ required); " +
+        "Codex remote compaction cannot build the provider.stream TranscriptContext without it",
+    );
+    this.name = "ProviderTranscriptContextUnsupportedError";
+  }
+}
+
+/**
+ * 从宿主 pi-ai 命名空间取 normalizeContext：缺导出或导出不是函数，一律按「宿主
+ * 不支持」受控报错。命名空间可注入，能力检查本身可单测；生产路径用默认参数即
+ * 宿主真实导出（命名空间导入，缺导出不会在插件加载期把整个模块图链接失败）。
+ */
+export function resolveNormalizeContext(piAiNamespace: typeof piAi = piAi): typeof piAi.normalizeContext {
+  const normalize = piAiNamespace?.normalizeContext;
+  if (typeof normalize !== "function") throw new ProviderTranscriptContextUnsupportedError();
+  return normalize;
+}
+
+/**
+ * 把压缩请求上下文（CodexRemoteContext，readonly 的 Context 结构形状）交给官方
+ * normalizeContext 折成 provider.stream 要求的 TranscriptContext：system prompt 与
+ * 工具声明由官方折入 leading system message，messages 顺序与只读内容原样保留。
+ * 四条 Codex 路径（Remote V2 / responses-compact / Context Management / checkpoint
+ * recovery）共用本 helper；除官方 normalizeContext 外不构造 provider 输入形状。
+ */
+export function providerTranscriptContext(context: CodexRemoteContext): CodexProviderTranscriptContext {
+  const normalizeContext = resolveNormalizeContext();
+  return normalizeContext({
     ...(context.systemPrompt === undefined ? {} : { systemPrompt: context.systemPrompt }),
-    messages: [...context.messages] as CodexProviderStreamContext["messages"],
-    ...(context.tools === undefined
-      ? {}
-      : {
-          tools: context.tools.map(
-            (tool): CodexProviderTool => ({
-              name: tool.name,
-              description: tool.description,
-              // 压缩请求的工具 schema 对 provider 侧是透传的不透明值
-              parameters: tool.parameters as CodexProviderTool["parameters"],
-            }),
-          ),
-        }),
-  };
+    messages: [...context.messages],
+    ...(context.tools === undefined ? {} : { tools: [...context.tools] }),
+  });
 }
 
 /**

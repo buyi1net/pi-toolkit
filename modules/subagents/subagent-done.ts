@@ -348,23 +348,23 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_execution_start", (event) => {
-    recorder.toolExecutionStart((event as any).toolCallId, (event as any).toolName);
+    recorder.toolExecutionStart(event.toolCallId, event.toolName, event.parentToolCallId);
   });
 
   pi.on("tool_call", (event) => {
-    recorder.toolCall((event as any).toolCallId, (event as any).toolName);
+    recorder.toolCall(event.toolCallId, event.toolName, event.parentToolCallId);
   });
 
   pi.on("tool_execution_update", (event) => {
-    recorder.toolExecutionUpdate((event as any).toolCallId, (event as any).toolName);
+    recorder.toolExecutionUpdate(event.toolCallId, event.toolName, event.parentToolCallId);
   });
 
   pi.on("tool_result", (event) => {
-    recorder.toolResult((event as any).toolCallId, (event as any).toolName);
+    recorder.toolResult(event.toolCallId, event.toolName, event.parentToolCallId);
   });
 
   pi.on("tool_execution_end", (event) => {
-    recorder.toolExecutionEnd((event as any).toolCallId, (event as any).toolName);
+    recorder.toolExecutionEnd(event.toolCallId, event.toolName, event.parentToolCallId);
   });
 
   pi.on("session_shutdown", (event) => {

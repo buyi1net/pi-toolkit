@@ -42,7 +42,7 @@ import {
   assertPreparedInput,
   collectProviderUsage,
   MAX_SSE_BYTES,
-  providerStreamContext,
+  providerTranscriptContext,
 } from "./remote-shared.ts";
 import type {
   CodexRemoteCompactionAdapter,
@@ -269,7 +269,7 @@ export function createRemoteV2CompactionAdapter(
     let sentInput: ReturnType<typeof assertPreparedInput> | undefined;
     const stream = request.provider.stream(
       request.model,
-      providerStreamContext(request.context),
+      providerTranscriptContext(request.context),
       {
         ...(request.apiKey === undefined ? {} : { apiKey: request.apiKey }),
         ...(request.headers === undefined ? {} : { headers: request.headers }),

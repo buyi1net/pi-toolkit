@@ -755,23 +755,54 @@ export function mergeNewEntries(
 export interface SessionStats {
   model: string | null;
   toolCount: number;
-  /** Cumulative token usage across all assistant turns. */
+  /** Cumulative token usage across every independently billed entry (Pi 1.3.0): assistant turns, toolResult usage, standalone usage entries, compaction / branch summary usage. */
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
   /** Current context size: the last assistant turn's totalTokens. */
   contextTokens: number;
-  /** Cumulative cost in USD across all assistant turns. */
+  /** Cumulative cost in USD across every independently billed entry. */
   cost: number;
+}
+
+/** 会话 entry 里有限数值字段的提取：非有限值按 0 处理（手写/损坏文件不炸统计）。 */
+function usageNum(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+/** 把一份 usage 累进 stats：只加用量与费用，不碰 context token 口径。 */
+function accumulateUsage(stats: SessionStats, usage: Record<string, unknown>): void {
+  stats.inputTokens += usageNum(usage.input);
+  stats.outputTokens += usageNum(usage.output);
+  stats.cacheReadTokens += usageNum(usage.cacheRead);
+  stats.cacheWriteTokens += usageNum(usage.cacheWrite);
+  const cost = usage.cost;
+  if (cost && typeof cost === "object") stats.cost += usageNum((cost as Record<string, unknown>).total);
+}
+
+/** entry 顶层的 usage 字段（usage / compaction / branch_summary entry；对象时返回）。 */
+function entryUsage(entry: SessionEntry): Record<string, unknown> | undefined {
+  const usage = (entry as { usage?: unknown }).usage;
+  return usage && typeof usage === "object" ? (usage as Record<string, unknown>) : undefined;
+}
+
+/** message entry 里挂在 message 上的 usage 字段（assistant / toolResult；对象时返回）。 */
+function messageUsage(msg: MessageEntry["message"]): Record<string, unknown> | undefined {
+  const usage = (msg as { usage?: unknown }).usage;
+  return usage && typeof usage === "object" ? (usage as Record<string, unknown>) : undefined;
 }
 
 /**
  * Parse a completed subagent session JSONL into aggregate stats for display:
  * model, tool-call count, cumulative token usage + cost, and current context
- * size. Cumulative usage fields are summed across every assistant turn; the
- * context size is taken from the last assistant turn's `totalTokens` (the live
- * context window occupancy). Returns null if the file can't be read.
+ * size. Cumulative usage fields follow the Pi 1.3.0 session-stats scope: every
+ * independently billed entry counts once — assistant turns, toolResult usage,
+ * standalone `usage` entries (e.g. cache warming), and compaction / branch
+ * summary summary-generation usage. The context size stays the last assistant
+ * turn's `totalTokens` (the live context window occupancy); non-assistant
+ * entries never override it. Unknown entry types are skipped. Returns null if
+ * the file can't be read.
  */
 function summarizeEntries(entries: SessionEntry[]): SessionStats {
   const stats: SessionStats = {
@@ -791,8 +822,22 @@ function summarizeEntries(entries: SessionEntry[]): SessionStats {
       if (typeof modelId === "string" && modelId) stats.model = modelId;
       continue;
     }
+    // 独立计费但不是 assistant 回合的 entry（Pi 1.3.0）：usage entry（cache
+    // warming 等模型调用）、compaction / branch summary 的摘要生成调用。
+    // 累计用量与费用各一次，但不参与 context token 与 toolCount 口径。
+    if (entry.type === "usage" || entry.type === "compaction" || entry.type === "branch_summary") {
+      const usage = entryUsage(entry);
+      if (usage) accumulateUsage(stats, usage);
+      continue;
+    }
     if (entry.type !== "message") continue;
     const msg = (entry as MessageEntry).message;
+    if (msg.role === "toolResult") {
+      // 嵌套模型工具的调用费：usage 挂在结果消息上，独立计费一次。
+      const usage = messageUsage(msg);
+      if (usage) accumulateUsage(stats, usage);
+      continue;
+    }
     if (msg.role !== "assistant") continue;
 
     const model = (msg as { model?: unknown }).model;
@@ -801,18 +846,11 @@ function summarizeEntries(entries: SessionEntry[]): SessionStats {
       if (block.type === "toolCall") stats.toolCount++;
     }
 
-    const usage = (msg as { usage?: Record<string, unknown> }).usage;
-    if (usage && typeof usage === "object") {
-      const num = (value: unknown): number =>
-        typeof value === "number" && Number.isFinite(value) ? value : 0;
-      stats.inputTokens += num(usage.input);
-      stats.outputTokens += num(usage.output);
-      stats.cacheReadTokens += num(usage.cacheRead);
-      stats.cacheWriteTokens += num(usage.cacheWrite);
-      const total = num(usage.totalTokens);
+    const usage = messageUsage(msg);
+    if (usage) {
+      accumulateUsage(stats, usage);
+      const total = usageNum(usage.totalTokens);
       if (total > 0) stats.contextTokens = total;
-      const cost = usage.cost;
-      if (cost && typeof cost === "object") stats.cost += num((cost as Record<string, unknown>).total);
     }
   }
   return stats;

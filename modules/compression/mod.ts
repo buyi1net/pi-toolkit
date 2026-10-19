@@ -52,15 +52,19 @@
 // owner 未实现、内部异常、Codex 各阶段失败）由调度器与 owner 自己在事件现场
 // 呈现并去重；ACP 侧诊断（接管、sidecar 重建/损坏/版本不兼容、投影失败）由
 // 引擎/owner 在事件现场经 ui.notify 呈现，mod.ts 按诊断键去重（同一情形每会话
-// 提示一次，新会话清空）。
+// 提示一次，新会话清空）。工单 11 起 ACP 的压缩 / 恢复状态优先走扩展消息
+// （display 接缝：对话编辑框上方的 custom 条目，不进模型上下文）：扩展消息接缝
+// 就位的会话里，接管 / 失败 / 受保护反馈与 sidecar 恢复类内部诊断不再逐条进
+// 对话通知，也不写状态栏常驻提示；无接缝的宿主保持原去重通知 + 状态栏兜底。
 //
-// 事件契约注：本仓编译目标（pi-coding-agent 0.85.x）没有 context_with_system
-// 事件；规格里的「context_with_system 阶段」按实际 `context` 事件适配（工单 04/08
-// 口径，宿主 1.3.0 的 context_with_system 属后续升级时再评估的接缝）。
+// 事件契约注：Pi 1.3.0 提供 context_with_system（可改 system prompt），本模块刻意
+// 只注册 `context`——压缩只改 conversation messages，不动 system prompt 与工具
+// 声明（工单 04/08 口径）；规格里的「context_with_system 阶段」按 `context` 事件
+// 适配。若后续需要改 system 面，按单向升级流程重新评估，不做运行期探测。
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ENABLED_FIELD, type ModuleContext } from "../../kit/module.ts";
-import { COMPRESSION_STATUS_SERVICE_NAME, type ModelIdentity } from "./api.ts";
+import { COMPRESSION_STATUS_SERVICE_NAME, type CompressionMode, type ModelIdentity } from "./api.ts";
 import { createCodexOwnerModule } from "./codex/owner.ts";
 import { createRemoteV2CompactionAdapter } from "./codex/remote-v2.ts";
 import { createResponsesCompactAdapter } from "./codex/remote-compact.ts";
@@ -69,6 +73,13 @@ import { readCompressionSettings } from "./config.ts";
 import { createCompressionFallbackLedger } from "./fallback.ts";
 import { createAcpEngine, type AcpCompressionEngine } from "./acp/engine.ts";
 import { createAcpOwner } from "./acp/owner.ts";
+import {
+  COMPRESSION_DISPLAY_ENTRY_TYPE,
+  createDisplayPresentation,
+  createDisplayReporter,
+  type CompressionDisplayEntryData,
+  type CompressionDisplayReporter,
+} from "./display.ts";
 import { readAcpSidecarBlockCount } from "./acp/sidecar.ts";
 import { makeAcpCompressTool } from "./acp/compress-tool.ts";
 import { makeAcpDecompressTool } from "./acp/decompress-tool.ts";
@@ -90,14 +101,14 @@ function acpPossibleInSettings(section: unknown): boolean {
 
 /** 当前会话模型是否命中 ACP 策略（context 投影与 compress 工具的每次调用判定） */
 function sessionResolvesAcp(context: ModuleContext, ctx: ExtensionContext): boolean {
-  if (!ctx.model) return false;
+  return resolveModeFor(context, ctx.model) === "acp";
+}
+
+/** 模型身份 → 当前配置下的压缩模式（无模型时 undefined；展示收束判定共用） */
+function resolveModeFor(context: ModuleContext, model: ExtensionContext["model"]): CompressionMode | undefined {
+  if (!model) return undefined;
   const { settings } = readCompressionSettings(context.getConfig());
-  const resolution = resolveCompressionStrategy(
-    modelIdentityFromModel(ctx.model),
-    settings,
-    sessionCompressionOverride.get(),
-  );
-  return resolution.mode === "acp";
+  return resolveCompressionStrategy(modelIdentityFromModel(model), settings, sessionCompressionOverride.get()).mode;
 }
 
 export function registerCompression(context: ModuleContext): void {
@@ -134,8 +145,42 @@ export function registerCompression(context: ModuleContext): void {
   context.services.register(COMPRESSION_STATUS_SERVICE_NAME, statusService);
 
   // ACP 诊断通道：引擎在事件现场产出（带 ctx），这里按键去重后 ui.notify；
-  // 新会话（session_start / session_shutdown）清空
+  // 新会话（session_start / session_shutdown）清空。
+  // 工单 11：sidecar / 恢复类内部诊断不逐条进对话——有扩展消息接缝的会话里，
+  // 恢复生命周期（recovering / recovery-succeeded / recovery-failed）承载用户可见
+  // 状态；sidecar-config-generation 是纯内部信息（配置代际变化，无需用户行动），
+  // 直接静默。projection-unavailable 与恢复失败同根因（状态缺席），由恢复失败
+  // 消息覆盖不重复告知。无扩展消息接缝的会话保持原去重通知兜底
   const acpDiagSeen = new Set<string>();
+  const RECOVERY_ROUTED_DIAGNOSTICS = new Set([
+    "sidecar-mismatch",
+    "sidecar-corrupt",
+    "sidecar-newer",
+    "sidecar-rebuilt",
+    "sidecar-rebuild-failed",
+    "sidecar-config-generation",
+    "projection-unavailable",
+  ]);
+
+  // 展示 owner 仲裁与扩展消息接缝（工单 08）：展示 owner 与压缩 owner 同源（同一
+  // 套五级优先级，由策略解析推出），扩展压缩状态用不进模型上下文的 custom 条目承载。
+  // 渲染器注册一次（只显示同一展示 owner 的最新条目，旧条目保留用于恢复与审计）。
+  const displayPresentation = createDisplayPresentation();
+  displayPresentation.registerRenderer(context.pi, context.t);
+  // 展示上报接缝（owner / compress 工具消费）：把状态推进经 controller 转成宿主
+  // custom 条目（plain custom 被 sessionEntryToContextMessages 忽略，不进模型上下文）。
+  // appendCustomEntry 需 sessionManager，按 ctx 惰性构造；无 UI 或缺接缝时不展示。
+  function displayFor(ctx: ExtensionContext): CompressionDisplayReporter | undefined {
+    if (!ctx.hasUI) return undefined;
+    const sessionManager = ctx.sessionManager as {
+      appendCustomEntry?: (customType: string, data?: unknown) => string;
+    };
+    if (typeof sessionManager.appendCustomEntry !== "function") return undefined;
+    return createDisplayReporter(
+      displayPresentation,
+      (data: CompressionDisplayEntryData) => sessionManager.appendCustomEntry!(COMPRESSION_DISPLAY_ENTRY_TYPE, data),
+    );
+  }
 
   // Lazy engine 代理（工单 01）：关闭或配置已无 ACP 可能性时不创建引擎（彻底旁路，
   // 不读不写 sidecar）；启用且存在 ACP 可能性时在装配期创建一次（保持既有 ACP 会话
@@ -152,9 +197,19 @@ export function registerCompression(context: ModuleContext): void {
     engine = createAcpEngine({
       t: context.t,
       diagnostics: (key, level, message, ctx) => {
+        // 工单 11：恢复类内部诊断不逐条进对话（扩展消息承载；无接缝时兜底通知）
+        if (displayFor(ctx) && RECOVERY_ROUTED_DIAGNOSTICS.has(key)) return;
         if (acpDiagSeen.has(key)) return;
         acpDiagSeen.add(key);
         if (ctx.hasUI) ctx.ui.notify(message, level);
+      },
+      // 工单 11：sidecar 恢复生命周期 → 扩展消息（恢复中 / 恢复成功 / 恢复失败）
+      recoveryEvents: (event, ctx) => {
+        const display = displayFor(ctx);
+        if (!display) return;
+        if (event.kind === "recovering") display.recovering("acp");
+        else if (event.kind === "recovered") display.recoverSucceed("acp");
+        else display.recoverFail("acp", event.reason);
       },
       // 工单 10：ACP 高级配置实时读取口（级联合并在 acp/config.ts 的接缝里做）
       readAcpSettings: () => readCompressionSettings(context.getConfig()).settings.acp,
@@ -170,6 +225,8 @@ export function registerCompression(context: ModuleContext): void {
     t: context.t,
     // 工单 06：ACP 无法投影而回退 Pi 原生时记降级（来源 acp + 机读原因）
     fallback: fallbackLedger,
+    // 工单 08：展示上报接缝（扩展消息生命周期推进）
+    display: displayFor,
   });
 
   // Codex owner：三条远程协议适配器接线（工单 05 Remote V2 / 06 responses-compact /
@@ -186,6 +243,8 @@ export function registerCompression(context: ModuleContext): void {
       "context-management": createContextManagementAdapter(),
     },
     pi: context.pi,
+    // 工单 08：展示上报接缝（扩展消息生命周期推进）
+    display: displayFor,
   });
 
   // 统一压缩调度器：一个模块实例一个调度器（诊断去重与状态行随实例走）；
@@ -231,6 +290,20 @@ export function registerCompression(context: ModuleContext): void {
     codexOwner.beginSession(ctx);
     acpOwnerBundle.beginSession(ctx);
     acpDiagSeen.clear();
+    // 工单 08：展示状态恢复——从会话分支重建展示 controller，把陈旧的进行中条目
+    // 解释为过期（追加一条过期条目收束，不重放「正在压缩」）；已收束状态只读取不追加
+    try {
+      const expired = displayPresentation.controller.restore(ctx.sessionManager.getBranch());
+      if (expired !== undefined) {
+        const sessionManager = ctx.sessionManager as {
+          appendCustomEntry?: (customType: string, data?: unknown) => string;
+        };
+        const id = sessionManager.appendCustomEntry?.(COMPRESSION_DISPLAY_ENTRY_TYPE, expired);
+        if (id !== undefined) displayPresentation.markVisibleEntry(id);
+      }
+    } catch {
+      // 恢复异常不击穿会话启动（展示是旁路能力）
+    }
     const currentEngine = engineFor();
     if (currentEngine) {
       try {
@@ -256,9 +329,24 @@ export function registerCompression(context: ModuleContext): void {
   // 模型切换：只重新解析策略（快照按当前模型 + 实时配置派生），不清除会话覆盖——
   // 工单 05 的会话内存覆盖叠在策略解析之上，切换模型不该把它复位。
   // 工单 06：降级结论绑定的是旧模型的能力复核结果，模型切换即复位降级记录
-  context.pi.on("model_select", (event) => {
+  context.pi.on("model_select", (event, ctx) => {
     if (event.model) sessionModel = modelIdentityFromModel(event.model);
     fallbackLedger.reset();
+    // 工单 11：模型切换即时收束（不等下一次压缩事件）：新模型不再解析为展示
+    // 进行中的压缩模式时，旧 owner 的进行中扩展消息立即收束（不留「正在压缩」）；
+    // 已有 ACP sidecar 的跨模式保护仍由调度器的私态探测负责（收束展示不改变
+    // 压缩决策）。规则 / 覆盖 / 总开关等无独立事件的切换由 session_before_compact
+    // 边界收束兜底
+    const current = displayPresentation.controller.current;
+    if (current?.state === "in-progress") {
+      const nextMode = resolveModeFor(context, event.model);
+      // 工单 12：模块已关闭时扩展 owner 整体退场（无压缩执行权也无展示权），
+      // 同模式模型切换也不再悬挂进行中消息——策略解析不看总开关，仅靠模式比较
+      // 会漏掉关闭态（展示归属串线）
+      if (!compressionEnabled() || (nextMode !== undefined && nextMode !== current.mode)) {
+        displayFor(ctx)?.conclude(current.mode);
+      }
+    }
   });
 
   // 压缩成功（工单 04 的 native 记账接缝）：只有 Pi 原生压缩算进 native 状态；
@@ -269,8 +357,23 @@ export function registerCompression(context: ModuleContext): void {
   });
 
   // 唯一的压缩事件入口：session_before_compact（调度器内部分发给 native 或
-  // 已注入的 owner；模块关闭时由调度器的关闭态接缝旁路）
-  context.pi.on("session_before_compact", (event, ctx) => scheduler.handleBeforeCompact(event, ctx));
+  // 已注入的 owner；模块关闭时由调度器的关闭态接缝旁路）。
+  // 工单 11：事件边界收束陈旧展示——上次展示进行中的模式已不是当前解析模式
+  // （模型切换 / 规则变更 / 会话覆盖切换都可能造成且未必有独立事件），旧 owner
+  // 的进行中消息不得遗留「正在压缩」；新 owner 的生命周期随后自行开启
+  context.pi.on("session_before_compact", async (event, ctx) => {
+    const stale = displayPresentation.controller.current;
+    if (stale?.state === "in-progress") {
+      const mode = resolveModeFor(context, ctx.model);
+      // 工单 12：总开关关闭同样在此收束——resolveModeFor 不看总开关（仍按规则 /
+      // 覆盖解析出原模式），仅靠模式比较会漏掉关闭态：进行中消息将与 Pi 原生
+      // 压缩（无私态时放行）或保护取消并存
+      if (!compressionEnabled() || (mode !== undefined && mode !== stale.mode)) {
+        displayFor(ctx)?.conclude(stale.mode);
+      }
+    }
+    return scheduler.handleBeforeCompact(event, ctx);
+  });
 
   // 投影接缝：Codex 与 ACP 互斥分发（同一模型只会命中一种模式，命中方改写，
   // 另一方原样放行）。Codex 侧：checkpoint marker → 请求视图 / replacement
@@ -320,6 +423,8 @@ export function registerCompression(context: ModuleContext): void {
       readAcpSettings: () => readCompressionSettings(context.getConfig()).settings.acp,
       // 工单 06：ACP 压缩成功且 sidecar 落盘完成 → 清除降级标记（幂等）
       clearFallback: () => fallbackLedger.clear(),
+      // 工单 08：ACP 压缩真正成功（建块且 sidecar 落盘）→ 收束扩展进行中消息
+      conclude: (ctx) => displayFor(ctx)?.succeed("acp"),
     }),
   );
   context.pi.registerTool(

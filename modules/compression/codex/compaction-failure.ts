@@ -12,10 +12,10 @@
 // code=hardened_oauth_rule_missing + type=rejected_by_hardened_oauth_boundary
 // 配对才算 OAuth 操作拒绝；诊断文本里「提到」这两个词不算证据。
 //
-// 适配点：上游对 SSE 事件的观察走 pi-ai 的 onProviderStreamEvent 回调；本仓依赖
-// 版本（pi-coding-agent 0.85.1 的 pi-ai）没有该回调，观察统一落在 fetch 边界
-// （inspectFailureResponse 看失败响应体，observeSseRejections 透传字节的同时
-// 解析完整数据帧）——对 provider 适配器零要求。
+// 适配点：上游对 SSE 事件的观察走 pi-ai 的 onProviderStreamEvent 回调（Pi 1.3.0 有
+// 该选项，但适配器支持是显式声明的，且要在提供方接线）；本仓不走该回调，观察统一
+// 落在 fetch 边界（inspectFailureResponse 看失败响应体，observeSseRejections
+// 透传字节的同时解析完整数据帧）——对 provider 适配器零要求。
 
 import { abortError, MAX_SSE_BYTES } from "./remote-shared.ts";
 import { isJsonObject } from "./protocol.ts";

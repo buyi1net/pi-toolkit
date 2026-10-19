@@ -1,34 +1,79 @@
-// ACP 投影层（工单 08）：Pi 会话 entry ⇄ acp-kernel CoreMessage 的双向转换。
+// ACP 投影层（升级规格批次 C / 工单 03）：Pi 1.3.0 宿主投影 ⇄ acp-kernel CoreMessage
+// 的双向转换。
 //
-// 移植自 billion-context-pi 的 src/messages.ts（MIT，见模块 UPSTREAM.md），
-// 按工单 08 的最小闭环裁剪：
-// - 正向 acpEntriesToCoreMessages：把 Pi 的 SessionEntry[]（buildContextEntries
-//   产出的稳定 entry id）投影成内核 CoreMessage[]。entry id 即压缩块的
-//   direct/effective message id；assistant 多工具调用按 call 拆分为
-//   `<entryId>#<callId>` 子 id（基 id 参与覆盖判定）。
-// - 反向 acpCoreOutToAgentMessages：把内核 processTurn 的输出（已剪枝、已打
-//   引用标签）重建回 Pi 的 AgentMessage[]。内核合成节点（`acp_summary_*`）
-//   被过滤——摘要内容经由留在视图里的 compress 工具调用参数呈现（上游同款
-//   口径）；被剪枝的消息按基 id 对不上即丢弃；内核正文改写（紧急截断等，
-//   上游 messages.ts 的 body-mutation 语义）按内核正文重建，否则截断永远
-//   到不了模型。
-// - 引用标签（`<acp tokens="…" type="…">mNNNNN</acp>`）注入规则与上游一致：
-//   user / toolResult 打标签，assistant 不打（模型会回声自己的标签）。内核
-//   输出的 core.text 把标签放在正文开头；宿主视图把标签追加在正文末尾
-//   （方向差异在 coreBodyOf / patchTag 各自处理）。
-// - 请求视图变换（工单 11 的评审修复 F1）：acpDropCompressReasoning（丢弃
-//   已闭环 compress 调用里超限的历史 thinking，上游 reasoning-drop.ts 移植）
-//   与 acpStripHistoricalImages（剥离历史消息的图片载荷，内核 wire 层
-//   stripHistoricalImages 的 AgentMessage 适配）都在重建视图上做纯变换，
-//   只改发出请求，不改会话日志。
+// 坐标源（工单 03 契约）：宿主 buildSessionProjection() 返回的 ProjectedSessionEntry
+// （source entry + 已应用 context_edit 的 projected message）。正向
+// acpProjectedEntriesToCoreMessages 把投影消息转内核 CoreMessage[]：source entry
+// id 即压缩块坐标系；assistant 多工具调用按 call 拆分为 `<entryId>#<callId>` 子 id；
+// 同一 entry 的第 2+ 条消息（compaction 的 summary）用 `<entryId>@n` 子 id。
+// UsageEntry / context_edit / 未知 entry 的投影 messages 为空，天然不进坐标，也不会
+// 被猜成用户消息；只有宿主投影产出的模型消息进入 ACP。
+// - 反向 acpCoreOutToAgentMessages：把内核 processTurn 的输出（已剪枝、已打引用
+//   标签）重建回 Pi 的 AgentMessage[]。内核合成节点（`acp_summary_*`）被过滤——
+//   摘要内容经由留在视图里的 compress 工具调用参数呈现（上游同款口径）；被剪枝的
+//   消息按坐标 id 对不上即丢弃；内核正文改写（紧急截断等，上游 messages.ts 的
+//   body-mutation 语义）按内核正文重建，否则截断永远到不了模型。
+// - 引用标签（`<acp tokens="…" type="…">mNNNNN</acp>`）注入规则：宿主
+//   convertToLlm 会把消息 content 直传给模型的角色（user / toolResult / system /
+//   custom）打标签；assistant 不打（模型会回声自己的标签）；branchSummary /
+//   compactionSummary / bashExecution 不打（宿主按 summary/command 渲染，标签
+//   打进 content 模型看不到），内核改写它们的正文时降级为 user 文本消息保证可见。
+//   内核输出的 core.text 把标签放在正文开头；宿主视图把标签追加在正文末尾（方向
+//   差异在 coreBodyOf / patchTag 各自处理）。
+// - 请求视图变换（工单 11 的评审修复 F1）：acpDropCompressReasoning（丢弃已闭环
+//   compress 调用里超限的历史 thinking，上游 reasoning-drop.ts 移植）与
+//   acpStripHistoricalImages（剥离历史消息的图片载荷，内核 wire 层
+//   stripHistoricalImages 的 AgentMessage 适配）都在重建视图上做纯变换，只改发出
+//   请求，不改会话日志。
 //
-// 未移植（按需再议）：EntryProjectionCache 增量缓存、标签 token
-// 计数稳定化改写、思考量计量（thinkingTokens）、图片计量、reasoning 投影。
+// 宿主导出口径（升级工单 03）：convertToLlm / sessionEntryToContextMessages 经命名
+// 空间导入 + 受控能力检查（resolveConvertToLlm / resolveSessionEntryToContextMessages）
+// 取用——缺 Pi 1.3.0 导出时抛 AcpHostProjectionUnsupportedError，不会在插件加载期
+// 以 ESM 链接失败的形式把整个模块图拖下水，也不复制宿主投影算法。
+//
+// 未移植（按需再议）：EntryProjectionCache 增量缓存、标签 token 计数稳定化改写、
+// 思考量计量（thinkingTokens）、图片计量、reasoning 投影。
 
+import * as piHost from "@earendil-works/pi-coding-agent";
+import type { ProjectedSessionEntry, SessionEntry, SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import type { CoreMessage } from "acp-kernel";
-import type { SessionEntry, SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 
-/** Pi 的 LLM 消息类型（经 SessionMessageEntry 取型；0.85.x 未直接导出 AgentMessage） */
+/**
+ * 宿主缺 Pi 1.3.0 投影导出（convertToLlm / sessionEntryToContextMessages）时的显式
+ * 失败（单向升级：只报宿主不支持，不探测版本、不复制旧版投影算法）。
+ */
+export class AcpHostProjectionUnsupportedError extends Error {
+  constructor(api: string) {
+    super(`Host pi-coding-agent does not provide ${api} (Pi 1.3.0+ required); ACP projection cannot continue`);
+    this.name = "AcpHostProjectionUnsupportedError";
+  }
+}
+
+/**
+ * 从宿主命名空间取 convertToLlm：缺导出或导出不是函数，一律按「宿主不支持」受控
+ * 报错。命名空间可注入，能力检查本身可单测；生产路径用默认参数即宿主真实导出。
+ */
+export function resolveConvertToLlm(host: typeof piHost = piHost): typeof piHost.convertToLlm {
+  const convert = host?.convertToLlm;
+  if (typeof convert !== "function") throw new AcpHostProjectionUnsupportedError("convertToLlm");
+  return convert;
+}
+
+/**
+ * 从宿主命名空间取 sessionEntryToContextMessages（投影窗口外原始 entry 的官方基础
+ * 消息来源）：缺导出或导出不是函数，一律按「宿主不支持」受控报错。
+ */
+export function resolveSessionEntryToContextMessages(
+  host: typeof piHost = piHost,
+): typeof piHost.sessionEntryToContextMessages {
+  const toMessages = host?.sessionEntryToContextMessages;
+  if (typeof toMessages !== "function") {
+    throw new AcpHostProjectionUnsupportedError("sessionEntryToContextMessages");
+  }
+  return toMessages;
+}
+
+/** Pi 的 LLM 消息类型（经 SessionMessageEntry 取型） */
 export type AcPAgentMessage = SessionMessageEntry["message"];
 
 /** 内核引用标签（与 acp-kernel render-refs 的输出一致）：`<acp …>mNNNNN</acp>` */
@@ -82,15 +127,10 @@ function stringifyArgs(args: unknown): string {
   }
 }
 
-/** custom_message：Pi 原生语义里参与 LLM 上下文，投影为 user 文本消息 */
-function customEntryText(entry: SessionEntry): string {
-  if (entry.type !== "custom_message") return "";
-  const text = acpExtractText((entry as { content?: unknown }).content);
-  if (text.length > 0) return text;
-  return "";
-}
-
-/** 单条 AgentMessage → CoreMessage[]（assistant 多 call 拆分；空文本丢弃） */
+/** 单条 AgentMessage → CoreMessage[]（assistant 多 call 拆分；空文本丢弃）。
+ *  非直传角色（custom / bashExecution / branchSummary / compactionSummary）按宿主
+ *  convertToLlm 的口径转 user 文本（标签文本与模型实际所见同源）；未知角色
+ *  convertToLlm 丢弃，不猜成用户消息 */
 export function acpProjectMessage(message: AcPAgentMessage, id: string): CoreMessage[] {
   const msg = message as AnyMessage;
   if (msg.role === "user") {
@@ -137,21 +177,55 @@ export function acpProjectMessage(message: AcPAgentMessage, id: string): CoreMes
     if (!text.trim()) return [];
     return [{ id, role: "assistant", contentType: "text", text }];
   }
-  // 其它角色（custom 等）：有文本才投影
-  const text = acpExtractText(msg.content);
-  return text.length > 0 ? [{ id, role: "user", contentType: "text", text }] : [];
+  if (msg.role === "system") {
+    // Pi 1.3.0 会把 transcript system message 持久化为 message entry：内核支持
+    // system 角色，token 口径与宿主一致
+    const text = acpExtractText(msg.content);
+    return text.length > 0 ? [{ id, role: "system", contentType: "text", text }] : [];
+  }
+  const [llm] = resolveConvertToLlm()([message]);
+  if (!llm || (llm.role !== "user" && llm.role !== "system")) return [];
+  const text = acpExtractText((llm as { content?: unknown }).content);
+  if (text.trim().length === 0) return [];
+  return [{ id, role: llm.role, contentType: "text", text }];
 }
 
-/** Pi SessionEntry[] → 内核 CoreMessage[]（entry id 即压缩坐标系的原点） */
-export function acpEntriesToCoreMessages(entries: readonly SessionEntry[]): CoreMessage[] {
+/** 宿主投影 entry 的第 n 条消息的坐标 id：首条用 source entry id，后续加 @n
+ *  后缀（# 命名空间保留给 assistant 多 call 拆分；@n 目前只有 compaction 的
+ *  第二条消息即 summary 会用到） */
+function coreIdOfEntryMessage(entryId: string, index: number): string {
+  return index === 0 ? entryId : `${entryId}@${index + 1}`;
+}
+
+/** 单个宿主投影 entry（source entry + projected messages）→ CoreMessage[] */
+export function acpCoreMessagesOfProjectedEntry(slot: ProjectedSessionEntry): CoreMessage[] {
   const out: CoreMessage[] = [];
+  slot.messages.forEach((message, index) => {
+    out.push(...acpProjectMessage(message as AcPAgentMessage, coreIdOfEntryMessage(slot.sourceEntry.id, index)));
+  });
+  return out;
+}
+
+/** 宿主投影 entry 列表 → 内核 CoreMessage[]（token 估算 / 压缩坐标 / 请求视图的唯一原料） */
+export function acpProjectedEntriesToCoreMessages(
+  projected: readonly ProjectedSessionEntry[],
+): CoreMessage[] {
+  const out: CoreMessage[] = [];
+  for (const slot of projected) out.push(...acpCoreMessagesOfProjectedEntry(slot));
+  return out;
+}
+
+/** 投影窗口外的原始 entry（树导航/分支切换后块覆盖的旧消息）→ CoreMessage[]：
+ *  逐条用官方 sessionEntryToContextMessages 取基础消息（官方语义，不复制投影
+ *  算法；这些 entry 不在当前投影内，宿主对它们没有 context_edit 结论） */
+export function acpExtraEntriesToCoreMessages(entries: readonly SessionEntry[]): CoreMessage[] {
+  const out: CoreMessage[] = [];
+  const hostEntryMessages = resolveSessionEntryToContextMessages();
   for (const entry of entries) {
-    if (entry.type === "message") {
-      out.push(...acpProjectMessage((entry as { message: AcPAgentMessage }).message, entry.id));
-    } else {
-      const text = customEntryText(entry);
-      if (text.length > 0) out.push({ id: entry.id, role: "user", contentType: "text", text });
-    }
+    const messages = hostEntryMessages(entry);
+    messages.forEach((message, index) => {
+      out.push(...acpProjectMessage(message as AcPAgentMessage, coreIdOfEntryMessage(entry.id, index)));
+    });
   }
   return out;
 }
@@ -199,10 +273,23 @@ function contentBlocksOf(message: AnyMessage): AnyContentBlock[] {
   return raw as AnyContentBlock[];
 }
 
-/** 把内核标签打进 user / toolResult 的最后一个文本块（先剥旧标签再追加新标签） */
+/** 宿主 convertToLlm 会把 content 直传给模型的角色（标签打进 content 才可见） */
+function taggableRole(role: unknown): boolean {
+  return role === "user" || role === "toolResult" || role === "system" || role === "custom";
+}
+
+/** 消息经宿主 convertToLlm 后模型可见的文本（与非直传角色的坐标口径同源） */
+function acpLlmTextOf(message: AcPAgentMessage): string | null {
+  const [llm] = resolveConvertToLlm()([message]);
+  if (!llm) return null;
+  return acpExtractText((llm as { content?: unknown }).content);
+}
+
+/** 把内核标签打进可打角色的最后一个文本块（先剥旧标签再追加新标签；
+ *  assistant 不打——模型会回声自己的标签，summary/command 渲染角色打了也看不见） */
 function patchTag(original: AcPAgentMessage, tag: string): AcPAgentMessage {
   const base = original as AnyMessage;
-  if (base.role === "assistant") return original; // assistant 不打标签（上游口径）
+  if (!taggableRole(base.role)) return original;
   const blocks = contentBlocksOf(base).map((block) =>
     block && typeof block === "object" && typeof block.text === "string"
       ? { ...block, text: peelTag(block.text) }
@@ -245,11 +332,30 @@ export function acpCoreOutToAgentMessages(
       }
       // 尊重内核正文改写（紧急截断等）：core.text 与原文的正文不一致时按内核
       // 正文重建——否则截断永远到不了模型（上游 messages.ts 同款语义）。
-      // assistant 不走该路径（与打标签同口径：视图保持原样）。
+      // assistant 不走该路径（与打标签同口径：视图保持原样）；summary/command
+      // 渲染角色（branchSummary / compactionSummary / bashExecution）的 content
+      // 宿主不直传，改写时降级为 user 文本消息保证截断可见。
       const base = original as AnyMessage;
       const coreBody = coreBodyOf(core.text ?? "", match[0]);
+      if (base.role === "assistant") {
+        // assistant 不打标签也不改正文（上游口径：模型会回声自己的标签）
+        out.push(original);
+        continue;
+      }
+      if (!taggableRole(base.role)) {
+        const hostText = acpLlmTextOf(original);
+        if (coreBody !== null && hostText !== null && trimEndOf(coreBody) !== trimEndOf(hostText)) {
+          out.push({
+            role: "user",
+            content: [{ type: "text", text: `${coreBody}\n\n${match[0]}` }],
+            timestamp: Date.now(),
+          } as AcPAgentMessage);
+          continue;
+        }
+        out.push(original);
+        continue;
+      }
       if (
-        base.role !== "assistant" &&
         coreBody !== null &&
         trimEndOf(coreBody) !== trimEndOf(acpExtractText(base.content))
       ) {
@@ -289,11 +395,14 @@ export function acpCoreOutToAgentMessages(
   return out;
 }
 
-/** 从 entry 列表建「基 id → 原始消息」索引（反向投影的原料） */
-export function acpOriginalsOf(entries: readonly SessionEntry[]): Map<string, AcPAgentMessage> {
+/** 从宿主投影 entry 列表建「坐标 id → 投影消息」索引（反向投影的原料；
+ *  assistant 拆分基 id 与多消息子 id 都指向各自投影消息） */
+export function acpOriginalsOf(projected: readonly ProjectedSessionEntry[]): Map<string, AcPAgentMessage> {
   const map = new Map<string, AcPAgentMessage>();
-  for (const entry of entries) {
-    if (entry.type === "message") map.set(entry.id, (entry as { message: AcPAgentMessage }).message);
+  for (const slot of projected) {
+    slot.messages.forEach((message, index) => {
+      map.set(coreIdOfEntryMessage(slot.sourceEntry.id, index), message as AcPAgentMessage);
+    });
   }
   return map;
 }

@@ -4,13 +4,18 @@
 // 移植自 billion-context-pi 的 src/runtime.ts + index.ts 的 context 变换 +
 // src/compress-tool.ts / decompress-tool.ts / search-tool.ts 的执行核心
 // （MIT，见模块 UPSTREAM.md），按工单边界裁剪：
+// - 坐标源（升级规格批次 C / 工单 03）：每次操作读一次 Pi 1.3.0 宿主投影
+//   sessionManager.buildSessionProjection()（source entry + 已应用 context_edit
+//   的 projected message），投影/压缩/重建/搜索/解压/反向索引共用同一份
+//   projected entry 列表；宿主缺该接缝时明确报宿主不支持并停止（不复制旧
+//   projection 算法、不静默回退）；
 // - 压缩执行：模型经 compress 工具提交范围+摘要 → 内核 applyCompression 建
 //   压缩块（块保存 + 引用登记）→ sidecar 原子落盘；
-// - 上下文投影：context 事件里对会话 entry 跑内核 processTurn（分配引用、打
-//   标签、按活动块剪枝），重建 Pi AgentMessage 视图后交回宿主；重建后、nudge
-//   注入前应用请求视图变换（评审修复 F1）：reasoning 处理丢弃已闭环 compress
-//   调用里超限的历史 thinking、stripImages 剥离历史图片（只改请求视图，不动
-//   会话日志；内核正文改写——紧急截断——由投影层按内核正文重建）；
+// - 上下文投影：context 事件里对宿主投影消息跑内核 processTurn（分配引用、
+//   打标签、按活动块剪枝），重建 Pi AgentMessage 视图后交回宿主；重建后、
+//   nudge 注入前应用请求视图变换（评审修复 F1）：reasoning 处理丢弃已闭环
+//   compress 调用里超限的历史 thinking、stripImages 剥离历史图片（只改请求
+//   视图，不动会话日志；内核正文改写——紧急截断——由投影层按内核正文重建）；
 // - 最小 nudge：内核判定需要压缩时，向请求视图追加一条一次性提醒（紧急档
 //   每次请求都注入）；增长步长/频率调优归工单 10；
 // - 解压/搜索（工单 09）：decompress 把块或单条消息的原文找回（内联进视图
@@ -45,11 +50,13 @@ import {
 import type {
   ContextEvent,
   ExtensionContext,
+  ProjectedSessionEntry,
   SessionEntry,
   SessionMessageEntry,
+  SessionProjection,
 } from "@earendil-works/pi-coding-agent";
 
-/** Pi 的 LLM 消息类型（经 SessionMessageEntry 取型；0.85.x 未直接导出 AgentMessage） */
+/** Pi 的 LLM 消息类型（经 SessionMessageEntry 取型；包根未直接导出 AgentMessage） */
 type AgentMessage = SessionMessageEntry["message"];
 import type { Translator } from "../../../i18n/index.ts";
 import type { AcpAdvancedSettings } from "../api.ts";
@@ -62,8 +69,9 @@ import {
 import {
   acpCoreOutToAgentMessages,
   acpDropCompressReasoning,
-  acpEntriesToCoreMessages,
+  acpExtraEntriesToCoreMessages,
   acpOriginalsOf,
+  acpProjectedEntriesToCoreMessages,
   acpStripHistoricalImages,
   ACP_DEFAULT_STRIP_KEEP_RECENT,
 } from "./projection.ts";
@@ -95,6 +103,14 @@ export type AcpDiagnostics = (
   message: string,
   ctx: ExtensionContext,
 ) => void;
+
+/** sidecar 恢复生命周期事件（工单 11 展示接缝）：恢复中（按会话日志重建开始）/ 恢复
+ *  成功（重建出块）/ 恢复失败（版本不兼容或重建不出）。展示层（mod.ts）把它映射
+ *  为扩展消息的恢复状态；未注入 = 恢复事件无展示（诊断通道仍可用作兜底） */
+export type AcpRecoveryEvent =
+  | { readonly kind: "recovering" }
+  | { readonly kind: "recovered" }
+  | { readonly kind: "failed"; readonly reason: "newer-schema" | "rebuild-failed" };
 
 /** 会话运行态槽：状态未加载时 state 缺席；加载失败时 failure 携带机读原因 */
 interface AcpSessionSlot {
@@ -152,22 +168,59 @@ export interface AcpSearchOutcome {
   readonly messageCount: number;
 }
 
-/** 全量日志读取（分支校验用）：优先 getEntries（含非当前分支），宿主无该接缝时
- *  退化为当前分支视图。避免树导航后把合法 sidecar 误判为不一致。 */
+type SessionEntrySource = {
+  getEntries?: () => SessionEntry[];
+};
+
+/** 读全部会话日志 entry（含非当前分支）：sidecar 分支一致性校验用（日志身份
+ *  比对，不是投影）。只认 getEntries（Pi 1.3.0 恒在）；接缝缺席时返回空数组，
+ *  调用方按「读取失败跳过校验」处置——不用 buildContextEntries 等裁剪视图当
+ *  身份集，那会把保留区间外的旧块误判成 mismatch */
 export function acpReadAllEntries(ctx: ExtensionContext): SessionEntry[] {
-  const source = ctx.sessionManager as unknown as {
-    getEntries?: () => SessionEntry[];
-    buildContextEntries?: () => SessionEntry[];
-  };
+  const source = ctx.sessionManager as unknown as SessionEntrySource;
   if (typeof source.getEntries === "function") return source.getEntries();
-  if (typeof source.buildContextEntries === "function") return source.buildContextEntries();
   return [];
+}
+
+// ───────────────────────────────────────────────────────────
+// 宿主投影接缝（升级规格批次 C / 工单 03）
+// ───────────────────────────────────────────────────────────
+
+/** Pi 1.3.0 宿主投影接缝的运行期形状（sessionManager.buildSessionProjection） */
+type HostProjectionSource = {
+  buildSessionProjection?: () => SessionProjection;
+};
+
+/** 宿主没有 buildSessionProjection()（Pi < 1.3.0）：ACP 的坐标源不存在。
+ *  明确失败：不复制旧 projection 算法、不静默回退，压缩停止 */
+class AcpHostProjectionUnsupportedError extends Error {
+  constructor() {
+    super("host sessionManager has no buildSessionProjection() (Pi >= 1.3.0 required)");
+    this.name = "AcpHostProjectionUnsupportedError";
+  }
+}
+
+/** 宿主是否具备 ACP 所需的投影接缝（owner preflight 探针；运行期探测——
+ *  编译期类型表不代表运行期宿主能力，旧宿主可能仍加载本包） */
+export function acpHostSupported(ctx: ExtensionContext): boolean {
+  const source = ctx.sessionManager as unknown as HostProjectionSource;
+  return typeof source.buildSessionProjection === "function";
+}
+
+/** 读宿主投影（Pi 1.3.0 的 source entry + projected message 是 ACP 的唯一坐标源；
+ *  token 估算 / 引用坐标 / 压缩块范围 / 搜索 / 请求历史全部从这一份出发） */
+function acpReadHostProjection(ctx: ExtensionContext): SessionProjection {
+  const source = ctx.sessionManager as unknown as HostProjectionSource;
+  const build = source.buildSessionProjection;
+  if (typeof build !== "function") throw new AcpHostProjectionUnsupportedError();
+  return build.call(source);
 }
 
 /**
  * sidecar 与会话日志的分支一致性校验（fork/拷贝/回退场景，工单 09）：统计块的
  * 直接覆盖 id 里在日志中找不到基 id 的数量（拆分 id `entryId#callId` 按基 id
- * 归一）。0 = 一致；>0 = sidecar 属于另一份会话内容，按日志重建。
+ * 归一，多消息子 id `entryId@n` 同样归一到 entry id）。0 = 一致；>0 = sidecar
+ * 属于另一份会话内容，按日志重建。
  */
 export function acpSidecarLogMismatch(state: CompressionState, entries: readonly SessionEntry[]): number {
   if (state.blocks.length === 0) return 0;
@@ -175,49 +228,37 @@ export function acpSidecarLogMismatch(state: CompressionState, entries: readonly
   let missing = 0;
   for (const block of state.blocks) {
     for (const id of block.directMessageIds) {
-      const base = id.split("#")[0]!;
+      const base = id.split("#")[0]!.replace(/@\d+$/, "");
       if (!known.has(base)) missing += 1;
     }
   }
   return missing;
 }
 
-type SessionEntrySource = {
-  buildContextEntries?: () => SessionEntry[];
-};
-
-/** 读当前会话 entry 列表（Pi 宿主的稳定 entry id 是压缩坐标系原点） */
-export function acpReadContextEntries(ctx: ExtensionContext): SessionEntry[] {
-  const source = ctx.sessionManager as unknown as SessionEntrySource;
-  if (typeof source.buildContextEntries === "function") return source.buildContextEntries();
-  return [];
-}
-
-/** 宿主是否具备 ACP 所需的 entry 接缝（preflight：不具备时 ACP 无法投影） */
-export function acpHostSupported(ctx: ExtensionContext): boolean {
-  const source = ctx.sessionManager as unknown as SessionEntrySource;
-  return typeof source.buildContextEntries === "function";
-}
-
 /**
  * 会话日志里是否留有成功的 compress 调用（sidecar 重建的前置判断）。
- * 工单 06：宿主 0.85.x 不读 AgentToolResult.isError，被拒的预注册工具调用会以
- * 成功的工具结果落进日志；那类条目带的 details.toolUnavailable 才是拒绝标记，
- * 不能当成压缩历史。
+ * 历史日志数据兼容：旧宿主（0.85.x）不读 AgentToolResult.isError，被拒的预注册
+ * 工具调用会以成功形态留在旧日志里；那类条目带的 details.toolUnavailable 才是
+ * 拒绝标记，不能当成压缩历史（Pi 1.3.0 起 isError 按官方语义落盘，这条判定继续
+ * 覆盖历史会话数据）。工单 03 起扫描宿主投影的 messages：被 context_edit 删除的
+ * compress 结果不在模型视图里，也不构成可重放历史。
  */
-export function acpHasCompressHistory(entries: readonly SessionEntry[]): boolean {
-  for (const entry of entries) {
-    if (entry.type !== "message") continue;
-    const message = (entry as {
-      message?: { role?: string; toolName?: string; isError?: boolean; details?: unknown };
-    }).message;
-    if (
-      message?.role === "toolResult" &&
-      message.toolName === "compress" &&
-      message.isError !== true &&
-      !isAcpToolUnavailableDetails(message.details)
-    ) {
-      return true;
+export function acpHasCompressHistory(projected: readonly ProjectedSessionEntry[]): boolean {
+  for (const slot of projected) {
+    for (const message of slot.messages as {
+      role?: string;
+      toolName?: string;
+      isError?: boolean;
+      details?: unknown;
+    }[]) {
+      if (
+        message?.role === "toolResult" &&
+        message.toolName === "compress" &&
+        message.isError !== true &&
+        !isAcpToolUnavailableDetails(message.details)
+      ) {
+        return true;
+      }
     }
   }
   return false;
@@ -286,12 +327,12 @@ function estimateTokensOf(messages: readonly CoreMessage[]): number {
   return total;
 }
 
-function lastUserEntryId(entries: readonly SessionEntry[]): string {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const entry = entries[i];
-    if (entry.type !== "message") continue;
-    const role = (entry as { message?: { role?: string } }).message?.role;
-    if (role === "user") return entry.id;
+function lastUserEntryId(projected: readonly ProjectedSessionEntry[]): string {
+  for (let i = projected.length - 1; i >= 0; i--) {
+    const slot = projected[i]!;
+    if ((slot.messages as readonly { role?: string }[]).some((m) => m?.role === "user")) {
+      return slot.sourceEntry.id;
+    }
   }
   return "none";
 }
@@ -307,6 +348,8 @@ export interface AcpEngineOptions {
   readonly protection?: AcpProtectionPolicy;
   /** ACP 高级配置读取口（工单 10）：每次投影/压缩/重建前实时读取（缺省 = 全默认） */
   readonly readAcpSettings?: () => AcpAdvancedSettings;
+  /** sidecar 恢复生命周期展示接缝（工单 11）：未注入 = 恢复事件无展示 */
+  readonly recoveryEvents?: (event: AcpRecoveryEvent, ctx: ExtensionContext) => void;
 }
 
 export interface AcpCompressionEngine {
@@ -340,6 +383,15 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
   const runtimeFor = (ctx: ExtensionContext): AcpResolvedRuntime =>
     acpRuntimeFor(ctx, options.readAcpSettings, protection, diagnostics, escalationSeen, t);
 
+  /** 恢复事件发射（工单 11）：展示是旁路能力，接缝异常不击穿恢复本身 */
+  function emitRecovery(event: AcpRecoveryEvent, ctx: ExtensionContext): void {
+    try {
+      options.recoveryEvents?.(event, ctx);
+    } catch {
+      // 展示接缝异常不击穿状态装载 / 重建
+    }
+  }
+
   function keyOf(ctx: ExtensionContext): string {
     const { sessionId, sessionFile } = sessionRefOf(ctx);
     return sessionFile ? `file:${sessionFile}` : `session:${sessionId}`;
@@ -370,8 +422,15 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
    * - corrupt：报告后走同一重建路径（会话日志是事实源）；重建不出块时从
    *   初始状态开始并提示；
    * - newer-schema：明确失败（不解释不重写），状态缺席，压缩运行降级。
+   *
+   * 工单 03：重建的重放原料与宿主投影同源——调用方要么直接传入已读好的
+   * projected（投影/压缩/搜索/解压路径，单次操作只读一份），要么传惰性读取器
+   * （beginSession：sidecar 可直接装载时不读投影，只有重建分支才需要）。
    */
-  async function ensureSessionState(ctx: ExtensionContext): Promise<AcpSessionSlot> {
+  async function ensureSessionState(
+    ctx: ExtensionContext,
+    projectedSource: readonly ProjectedSessionEntry[] | (() => readonly ProjectedSessionEntry[]),
+  ): Promise<AcpSessionSlot> {
     const key = keyOf(ctx);
     const { sessionId, sessionFile } = sessionRefOf(ctx);
     const existing = slots.get(key);
@@ -419,6 +478,9 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
       );
     } else if (loaded.status === "newer-schema") {
       slot.failure = { kind: "newer-schema", detail: `schema v${loaded.schemaVersion ?? "?"}` };
+      // 工单 11：版本不兼容是确定性恢复失败（不尝试重建）——恢复中 → 恢复失败
+      emitRecovery({ kind: "recovering" }, ctx);
+      emitRecovery({ kind: "failed", reason: "newer-schema" }, ctx);
       diagnostics(
         "sidecar-newer",
         "error",
@@ -436,14 +498,24 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
       );
     }
 
-    // 缺失 / 损坏 / 与日志不一致：按会话日志重建（日志是事实源——compress
-    // 调用参数原样留在 assistant 消息里，成功的 toolResult 标记了可重放）
-    const entries = acpReadContextEntries(ctx);
-    if (acpHasCompressHistory(entries)) {
+    // 缺失 / 损坏 / 与日志不一致：按宿主投影重放重建（日志是事实源——compress
+    // 调用参数原样留在 assistant 消息里，成功的 toolResult 标记了可重放）。
+    // 惰性读取器抛错时先撤销本次占位槽：不携带着空槽活过本次会话（后续操作
+    // 重试装载，而不是永远拿到「状态装载失败」的错误归类）
+    let projected: readonly ProjectedSessionEntry[];
+    try {
+      projected = typeof projectedSource === "function" ? projectedSource() : projectedSource;
+    } catch (error) {
+      slots.delete(key);
+      throw error;
+    }
+    if (acpHasCompressHistory(projected)) {
+      // 工单 11：日志可重放 → 恢复生命周期开始（恢复中）；结果随重建走向收束
+      emitRecovery({ kind: "recovering" }, ctx);
       try {
         const rebuilt = rebuildCompressionState(
           createInitialState(),
-          acpEntriesToCoreMessages(entries),
+          acpProjectedEntriesToCoreMessages(projected),
           runtimeFor(ctx).kernel,
         );
         if (rebuilt.blocksRebuilt > 0) {
@@ -465,6 +537,8 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
             t("module.compression.acp.sidecarRebuilt", { blocks: String(rebuilt.blocksRebuilt) }),
             ctx,
           );
+          // 状态已重建可用（落盘失败由上面的 error 诊断承载，后续保存重试）：恢复成功
+          emitRecovery({ kind: "recovered" }, ctx);
           return slot;
         }
         if (loaded.status === "corrupt") {
@@ -477,6 +551,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
             t("module.compression.acp.sidecarRebuildFailed"),
             ctx,
           );
+          emitRecovery({ kind: "failed", reason: "rebuild-failed" }, ctx);
           return slot;
         }
       } catch (error) {
@@ -487,8 +562,13 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
           t("module.compression.acp.sidecarRebuildFailedWith", { error: describeError(error) }),
           ctx,
         );
+        emitRecovery({ kind: "failed", reason: "rebuild-failed" }, ctx);
         return slot;
       }
+      // 历史在场但一块都重放不出且非 corrupt（mismatch / missing 场景）：状态按
+      // 初始值继续——会话照常工作、无需用户行动，恢复生命周期同样收束，
+      // 不留悬空的「正在恢复」
+      emitRecovery({ kind: "recovered" }, ctx);
     }
     // 无历史（或缺失且无历史）：初始状态；无会话文件时只驻内存
     slot.state = createInitialState();
@@ -516,6 +596,29 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
     }
   }
 
+  /** 宿主不支持诊断（工单 03：缺 buildSessionProjection 时用户可见的明确失败） */
+  function reportHostUnsupported(ctx: ExtensionContext): void {
+    diagnostics(
+      "host-projection-unsupported",
+      "error",
+      t("module.compression.acp.hostProjectionUnsupported"),
+      ctx,
+    );
+  }
+
+  /** 读宿主投影；缺接缝时诊断后抛翻译过的错误（工具路径：isError 文本） */
+  function requireHostProjection(ctx: ExtensionContext): SessionProjection {
+    try {
+      return acpReadHostProjection(ctx);
+    } catch (error) {
+      if (error instanceof AcpHostProjectionUnsupportedError) {
+        reportHostUnsupported(ctx);
+        throw new Error(t("module.compression.acp.hostProjectionUnsupported"));
+      }
+      throw error;
+    }
+  }
+
   async function handleContext(
     event: ContextEvent,
     ctx: ExtensionContext,
@@ -525,7 +628,19 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
     const key = keyOf(ctx);
     const release = await acquireLock(key);
     try {
-      const slot = await ensureSessionState(ctx);
+      // 宿主投影是唯一坐标源：缺接缝时明确停止（诊断后原样放行本次请求，
+      // 不伪造投影也不复制旧算法；压缩所有权的处置归 owner preflight）
+      let projection: SessionProjection;
+      try {
+        projection = acpReadHostProjection(ctx);
+      } catch (error) {
+        if (error instanceof AcpHostProjectionUnsupportedError) {
+          reportHostUnsupported(ctx);
+          return undefined;
+        }
+        throw error;
+      }
+      const slot = await ensureSessionState(ctx, projection.entries);
       if (!slot.state) {
         // sidecar 明确失败（newer-schema / 重建失败）：投影无法进行。报告后
         // 原样放行本次请求（不伪造投影）；before_compact 已取消原生压缩，
@@ -538,15 +653,14 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
         );
         return undefined;
       }
-      const entries = acpReadContextEntries(ctx);
-      const coreMessages = acpEntriesToCoreMessages(entries);
+      const coreMessages = acpProjectedEntriesToCoreMessages(projection.entries);
       const runtime = runtimeFor(ctx);
       const tokenCount = estimateTokensOf(coreMessages);
       const turn = core.processTurn({ messages: coreMessages, state: slot.state, config: runtime.kernel, tokenCount });
       slot.state = turn.state;
       await persistState(turn.state, ctx);
 
-      let rebuilt = acpCoreOutToAgentMessages(turn.messages, acpOriginalsOf(entries));
+      let rebuilt = acpCoreOutToAgentMessages(turn.messages, acpOriginalsOf(projection.entries));
 
       // 请求视图变换（评审修复 F1）：消费 runtime.merged 的宿主侧策略字段。
       // 顺序与上游一致（reasoning drop 在 nudge 注入前，合成 nudge 不能追溯
@@ -567,7 +681,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
       // 一次；紧急档（用量 ≥ 紧急阈值）每次请求都注入；文本用解析后的提示词
       // （含覆写）。增长步长/阈值由级联覆盖进内核 Config。
       if (turn.nudge?.shouldInject) {
-        const turnKey = lastUserEntryId(entries);
+        const turnKey = lastUserEntryId(projection.entries);
         const emergency = turn.nudge.breakdown?.emergencyOverride === 1;
         if (emergency || slot.nudgeTurnKey !== turnKey) {
           slot.nudgeTurnKey = turnKey;
@@ -630,12 +744,12 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
           ? args.summaryMaxChars
           : undefined;
 
-      const slot = await ensureSessionState(ctx);
+      const projection = requireHostProjection(ctx);
+      const slot = await ensureSessionState(ctx, projection.entries);
       if (!slot.state) {
         throw new Error(t("module.compression.acp.stateUnavailable"));
       }
-      const entries = acpReadContextEntries(ctx);
-      const coreMessages = acpEntriesToCoreMessages(entries);
+      const coreMessages = acpProjectedEntriesToCoreMessages(projection.entries);
       const config = runtimeFor(ctx).kernel;
       const tokenCount = estimateTokensOf(coreMessages);
       // 先跑一次投影让引用就位（applyCompression 按 byRef 解析范围端点）
@@ -701,12 +815,14 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
     const key = keyOf(ctx);
     const release = await acquireLock(key);
     try {
-      const slot = await ensureSessionState(ctx);
+      const projection = requireHostProjection(ctx);
+      const slot = await ensureSessionState(ctx, projection.entries);
       if (!slot.state) {
         throw new Error(t("module.compression.acp.stateUnavailable"));
       }
       const state = slot.state;
-      const entries = acpReadContextEntries(ctx);
+      const projected = projection.entries;
+      const projectedCores = acpProjectedEntriesToCoreMessages(projected);
       const arg = typeof args.blockId === "string" ? args.blockId.trim() : "";
       const full = args.full === true;
       const wantInline = args.inline === true;
@@ -716,7 +832,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
       const rawId = /^m\d+$/.test(arg) ? state.messageRefs.byRef[arg] : arg;
       const ownerBlock = rawId ? state.blocks.find((b) => b.effectiveMessageIds.includes(rawId)) : undefined;
       if (ownerBlock && rawId) {
-        const found = acpFindMessageByRef(arg, state, entries);
+        const found = acpFindMessageByRef(arg, state, projectedCores);
         if (!found || !found.text) {
           return {
             text: `Message ${arg} (in block ${ownerBlock.blockId}) has no restorable text content in the session log.`,
@@ -727,7 +843,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
         const wantFile = toFile !== undefined || args.inline === false || !acpMessageFitsInline(found.text);
         if (!wantFile) {
           // 单消息重复插入防护：上次结果仍在视图时不重复插入
-          const visible = acpFindVisibleInlineRestore(arg, state, entries);
+          const visible = acpFindVisibleInlineRestore(arg, state, projected);
           if (visible) {
             return {
               text: `Message ${arg} (block ${ownerBlock.blockId}) was already restored inline earlier in this conversation (see the decompress result at entry ${visible.resultEntryId}); re-inserting would duplicate context. Use compress to re-fold it when done, or pass toFile to write a copy to disk.`,
@@ -774,14 +890,19 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
         };
       }
 
-      // 块覆盖区的原始消息：当前分支视图 + 缺席时经 getEntry 补齐（树导航后
+      // 块覆盖区的原始消息：当前宿主投影 + 缺席时经 getEntry 补齐（树导航后
       // 分支视图可能不含旧分支消息；日志里都有）
-      const baseIds = new Set(entries.map((entry) => entry.id));
-      const missing = [...new Set(block.effectiveMessageIds.map((id) => id.split("#")[0]!))].filter(
-        (id) => !baseIds.has(id),
-      );
+      const baseIds = new Set(projected.map((slot) => slot.sourceEntry.id));
+      const missing = [
+        ...new Set(
+          block.effectiveMessageIds.map((id) => id.split("#")[0]!.replace(/@\d+$/, "")),
+        ),
+      ].filter((id) => !baseIds.has(id));
       const extraEntries = missing.length > 0 ? acpFetchMissingEntries(missing, ctx) : [];
-      const resolvedCoreMessages = acpEntriesToCoreMessages([...entries, ...extraEntries]);
+      const resolvedCoreMessages = [
+        ...projectedCores,
+        ...acpExtraEntriesToCoreMessages(extraEntries),
+      ];
       const collected = collectBlockContent(state, block, resolvedCoreMessages, { full });
       if (collected.count === 0) {
         return {
@@ -793,7 +914,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
 
       // 3) 内联模式：内容直接回到当前请求视图（作为 decompress 工具结果）
       if (wantInline && toFile === undefined) {
-        const visible = acpFindVisibleInlineRestore(blockId, state, entries);
+        const visible = acpFindVisibleInlineRestore(blockId, state, projected);
         if (visible) {
           return {
             text: `Block ${blockId} was already restored inline earlier in this conversation (see the decompress result at entry ${visible.resultEntryId}); re-inserting would duplicate context. It stays compressed — re-fold it with compress and a fresh summary, or pass toFile to write a copy to disk.`,
@@ -841,7 +962,23 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
     const key = keyOf(ctx);
     const release = await acquireLock(key);
     try {
-      const slot = await ensureSessionState(ctx);
+      let projection: SessionProjection;
+      try {
+        projection = acpReadHostProjection(ctx);
+      } catch (error) {
+        if (error instanceof AcpHostProjectionUnsupportedError) {
+          // 只读工具不抛错：文本告知宿主不支持（诊断通道同时报告）
+          reportHostUnsupported(ctx);
+          return {
+            text: "search_context is unavailable: this host does not provide buildSessionProjection() (Pi 1.3.0+ required).",
+            matches: 0,
+            blockCount: 0,
+            messageCount: 0,
+          };
+        }
+        throw error;
+      }
+      const slot = await ensureSessionState(ctx, projection.entries);
       const query = typeof args.query === "string" ? args.query : "";
       const limit =
         typeof args.limit === "number" && Number.isFinite(args.limit) && args.limit > 0
@@ -856,8 +993,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
           messageCount: 0,
         };
       }
-      const entries = acpReadContextEntries(ctx);
-      const report = acpRunSearch(slot.state, entries, query, limit);
+      const report = acpRunSearch(slot.state, projection.entries, query, limit);
       return {
         text: acpFormatSearchResults(report, query, slot.state),
         matches: report.results.length,
@@ -899,8 +1035,25 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
       const release = await acquireLock(keyOf(ctx));
       try {
         // 会话开始重新绑定（上一会话的槽在 shutdown 已释放；resume/fork 换了
-        // 会话文件则键不同，天然隔离）
-        await ensureSessionState(ctx);
+        // 会话文件则键不同，天然隔离）。投影只在需要重建时读（sidecar 可直接
+        // 装载的会话不依赖投影）；宿主缺接缝：明确诊断后停止，不伪造可投影的
+        // 假象（后续处置归 owner preflight）；其它投影接缝异常：诊断后不绑定
+        // （占位槽已由 ensureSessionState 撤销，下次操作重试装载）
+        try {
+          await ensureSessionState(ctx, () => acpReadHostProjection(ctx).entries);
+        } catch (error) {
+          if (error instanceof AcpHostProjectionUnsupportedError) {
+            reportHostUnsupported(ctx);
+            return;
+          }
+          diagnostics(
+            "projection-failed",
+            "error",
+            t("module.compression.acp.projectionFailed", { error: describeError(error) }),
+            ctx,
+          );
+          return;
+        }
       } finally {
         release();
       }

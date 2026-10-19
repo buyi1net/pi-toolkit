@@ -64,7 +64,7 @@ export function collectSessionStatus(
 	};
 
 	// 命中率只取最新 assistant 请求，口径与 Pi 原生 Footer 一致；
-	// toolResult / compaction 的 usage 不参与 CH。
+	// toolResult / compaction / branch summary / usage entry 的 usage 不参与 CH。
 	let latestCacheHitPercent: number | undefined;
 
 	for (const entry of entries) {
@@ -79,6 +79,10 @@ export function collectSessionStatus(
 			}
 		} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
 			usage = entry.message.usage as UsageValue;
+		} else if (entry.type === "usage" && entry.usage) {
+			// Pi 1.3.0 的独立 usage entry（如 cache warming）：一次独立计费的模型
+			// 调用，不挂在任何 assistant message 上，逐条累计一次即可。
+			usage = entry.usage as UsageValue;
 		} else if ((entry.type === "compaction" || entry.type === "branch_summary") && entry.usage) {
 			usage = entry.usage as UsageValue;
 		}

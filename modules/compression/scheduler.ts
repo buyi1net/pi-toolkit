@@ -207,8 +207,8 @@ export function createCompressionScheduler(
   }
   const t = options.t;
   let notifiedSignature: string | undefined;
-  /** 会话内最近一次解析结果（模型切换/配置变更后的重解析诊断用，工单 11） */
-  let lastResolution: CompressionStrategyResolution | undefined;
+  /** 工单 08：重解析诊断改为内部诊断隔离（trackResolutionChange 为空接缝），
+   *  会话内不再跟踪上一次解析结果；session_start 的边界诊断不依赖它 */
 
   const notify = (ctx: ExtensionContext, message: string, level: "info" | "warning" | "error"): void => {
     if (ctx.hasUI) ctx.ui.notify(message, level);
@@ -233,25 +233,15 @@ export function createCompressionScheduler(
     return options.getConfig()[ENABLED_FIELD] !== false;
   }
 
-  /** 策略变化诊断（工单 11：模型切换/配置变更在事件边界被重新解析）：新旧任一
-   * 值得注意时提示一次；两侧都是默认 native 的会话保持安静 */
-  function trackResolutionChange(ctx: ExtensionContext, resolution: CompressionStrategyResolution | undefined): void {
-    if (lastResolution === undefined || resolution === undefined) return;
-    const changed =
-      lastResolution.mode !== resolution.mode ||
-      lastResolution.source !== resolution.source ||
-      lastResolution.protocol !== resolution.protocol ||
-      lastResolution.triggerPolicy !== resolution.triggerPolicy;
-    if (!changed) return;
-    if (!(resolutionNoteworthy(lastResolution) || resolutionNoteworthy(resolution))) return;
-    notify(
-      ctx,
-      t("module.compression.lifecycle.reparsed", {
-        previous: `${compressionModeLabel(lastResolution.mode, t)}（${compressionSourceLabel(lastResolution.source, t)}）`,
-        diagnosis: formatResolutionDiagnosis(resolution, t),
-      }),
-      "info",
-    );
+  /**
+   * 策略重新解析的内部诊断隔离（工单 08）：模型切换 / 配置变更在事件边界被重新解析时，
+   * 命中规则、接口、上下文窗口、协议等内部诊断不再作为普通对话消息展示——这些信息
+   * 只保留在设置页诊断面（menu.ts 的 formatResolutionDiagnosis）与内部诊断里。
+   * 本接缝不再向对话区发任何消息（此前的 lifecycle.reparsed 对话通知已移除）。
+   * 保留为显式空接缝：调用方仍能在这里挂接未来的内部诊断记录，而不改对话呈现。
+   */
+  function trackResolutionChange(_ctx: ExtensionContext, _resolution: CompressionStrategyResolution | undefined): void {
+    // 内部诊断隔离（工单 08）：不发对话消息
   }
 
   /** 会话当前的活动私有状态报告（跨模式切换保护，工单 11；外部扩展声明检测，
@@ -429,10 +419,8 @@ export function createCompressionScheduler(
           )
         : undefined;
       const decision = decideCompactHandling(resolution, event.reason, owners);
-      // 生命周期边界（工单 11）：本次事件的重新解析结果与会话内上一次不同
-      // （模型切换 / 配置实时变更）→ 一次性诊断，之后按新策略处置
+      // 生命周期边界（工单 11）：重新解析结果变化不再发对话消息（工单 08 内部诊断隔离）
       trackResolutionChange(ctx, resolution);
-      lastResolution = resolution;
 
       if (decision.outcome === "cancel") {
         // 取消自动压缩：不写入任何 summary（Pi 契约下宿主只发 aborted 事件），
@@ -526,12 +514,13 @@ export function createCompressionScheduler(
     beginSession(ctx: ExtensionContext): void {
       notifiedSignature = undefined;
       setStatus(ctx, undefined);
-      lastResolution = undefined;
       // 关闭态：不做策略解析诊断（模块已整体旁路，由设置页展示开关状态）
       if (!compressionEnabled()) return;
       // 生命周期边界的重新解析诊断（工单 11）：resume / fork / 宿主重载都以
       // session_start 到达——用当前模型实时解析一次策略， noteworthy 的解析
-      // 给一行 info（默认 native 会话保持安静）；后续事件的解析变化另行提示。
+      // 给一行 info（默认 native 会话保持安静）。工单 08 只隔离事件边界的
+      // trackResolutionChange 重解析诊断；会话启动的模式通告不属于工单 08
+      // 列举的「命中规则、接口、上下文窗口、协议」内部诊断范畴，保留不变。
       // 解析失败不击穿会话启动（配置问题由配置节诊断另行呈现）
       try {
         const resolution = resolveCurrent(ctx);
@@ -544,9 +533,8 @@ export function createCompressionScheduler(
             "info",
           );
         }
-        lastResolution = resolution;
       } catch {
-        lastResolution = undefined;
+        // 解析失败不击穿会话启动（工单 08：不再跟踪 lastResolution）
       }
     },
   };

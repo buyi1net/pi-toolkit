@@ -14,8 +14,8 @@
 // - codexCheckpointIdentity 是新增：把规格要求的 provider / model / profile /
 //   protocol 身份校验收敛成一个纯函数，owner 的 prepare 与 projection 阶段共用。
 //
-// Pi 契约（工单 03 核验本仓 runtime 的 pi-coding-agent，宿主 pi CLI 1.3.0 携带的
-// npm 包实际为 0.85.1——dist/core/compaction/compaction.d.ts）：
+// Pi 契约（工单 03 建立，升级工单 02 在 Pi 1.3.0 发行件上复核：
+// pi-coding-agent 的 dist/core/compaction/compaction.d.ts）：
 // CompactionResult 至少含 summary / firstKeptEntryId / tokensBefore，可带 usage
 // 与 details——checkpoint details 随 compaction entry 一起由宿主落盘，
 // summary 即 checkpoint marker 的 fallback 文案（不是把 opaque 历史解码成明文）。

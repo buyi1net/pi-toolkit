@@ -28,7 +28,7 @@ import {
   assertPreparedInput,
   type CodexProviderStream,
   MAX_SSE_BYTES,
-  providerStreamContext,
+  providerTranscriptContext,
 } from "./remote-shared.ts";
 import { isJsonObject } from "./protocol.ts";
 import type { CodexRemoteCompactionRequest } from "./remote.ts";
@@ -143,7 +143,7 @@ export async function recoverCheckpoint(
   try {
     stream = request.provider.stream(
       request.model,
-      providerStreamContext(request.context),
+      providerTranscriptContext(request.context),
       {
         ...(request.apiKey === undefined ? {} : { apiKey: request.apiKey }),
         ...(request.headers === undefined ? {} : { headers: request.headers }),

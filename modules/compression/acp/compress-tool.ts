@@ -148,6 +148,9 @@ export interface AcpCompressToolDeps {
   /** 降级清除接缝（工单 06 的第三路）：compress 真正建块并完成 sidecar 原子
    *  落盘后幂等调用；未注入 = 没有降级状态可清 */
   readonly clearFallback?: () => void;
+  /** 展示收束接缝（工单 08）：ACP 压缩真正成功（建块且 sidecar 落盘）时把扩展
+   *  进行中的压缩消息收束为成功；未注入 = 无展示 */
+  readonly conclude?: (ctx: ExtensionContext) => void;
 }
 
 /** 工具面覆写应用到定义（上游 surface.ts 的 applyToolPromptOverrides 同款；
@@ -199,6 +202,8 @@ export function makeAcpCompressTool(deps: AcpCompressToolDeps): ToolDefinition<t
         // 工单 06：ACP 压缩真正成功（建了块且 sidecar 落盘完成）才清降级；
         // 没有建块（参数被内核拒掉的面板）不算成功，降级标记保持
         if (outcome.persisted) deps.clearFallback?.();
+        // 工单 08：ACP 压缩真正成功才收束扩展进行中消息（没建块不收束）
+        if (outcome.persisted) deps.conclude?.(ctx);
       } catch (error) {
         // 参数/状态错误：抛出让 Pi 标记 isError（会话日志里的失败调用，
         // 重建流程会跳过它）

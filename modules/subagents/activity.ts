@@ -58,6 +58,16 @@ export type ActivityReadResult =
 
 export type SubagentShutdownReason = "quit" | "reload" | "new" | "resume" | "fork";
 
+/**
+ * Pi 1.3.0 嵌套工具事件判定：携带 parentToolCallId 的事件由宿主 nested-tool-calls
+ * 为工具经 ctx.executeTool() 发起的调用发出（id 形如 <父 id>/<n>）。这类事件的
+ * start/update/result 不得覆盖父工具的身份字段，end 不得把父工具判成结束——
+ * 单布尔 toolActive 的清除只属于顶层（模型发起的）调用的 end。
+ */
+function isNestedToolEvent(parentToolCallId: string | undefined): boolean {
+  return parentToolCallId !== undefined;
+}
+
 export interface SubagentActivityRecorder {
   sessionStart(): void;
   input(): void;
@@ -70,11 +80,11 @@ export interface SubagentActivityRecorder {
   beforeProviderRequest(): void;
   afterProviderResponse(): void;
   messageUpdate(messageEventType?: string): void;
-  toolExecutionStart(toolCallId?: string, toolName?: string): void;
-  toolCall(toolCallId?: string, toolName?: string): void;
-  toolExecutionUpdate(toolCallId?: string, toolName?: string): void;
-  toolResult(toolCallId?: string, toolName?: string): void;
-  toolExecutionEnd(toolCallId?: string, toolName?: string): void;
+  toolExecutionStart(toolCallId?: string, toolName?: string, parentToolCallId?: string): void;
+  toolCall(toolCallId?: string, toolName?: string, parentToolCallId?: string): void;
+  toolExecutionUpdate(toolCallId?: string, toolName?: string, parentToolCallId?: string): void;
+  toolResult(toolCallId?: string, toolName?: string, parentToolCallId?: string): void;
+  toolExecutionEnd(toolCallId?: string, toolName?: string, parentToolCallId?: string): void;
   askQuestion(): void;
   sessionShutdown(reason: SubagentShutdownReason): void;
   /** 工单 45：满掉待写定时器并停写（测试夹具与宿主关停用；终态保底仍可再写一次）。 */
@@ -621,44 +631,57 @@ export function createSubagentActivityRecorder(params: {
         if (!current.toolActive) markActive(current, "streaming", observedAt);
       }, "throttled");
     },
-    toolExecutionStart(toolCallId, toolName) {
+    toolExecutionStart(toolCallId, toolName, parentToolCallId) {
       record("tool_execution_start", (current, observedAt) => {
         current.toolActive = true;
-        current.toolCallId = toolCallId;
-        current.toolName = toolName;
-        current.toolStartedAt = observedAt;
+        if (!isNestedToolEvent(parentToolCallId)) {
+          // 顶层调用才建立工具身份；嵌套调用保持父工具的身份字段
+          current.toolCallId = toolCallId;
+          current.toolName = toolName;
+          current.toolStartedAt = observedAt;
+        }
         markActive(current, "tool", observedAt, true);
       }, "immediate");
     },
-    toolCall(toolCallId, toolName) {
+    toolCall(toolCallId, toolName, parentToolCallId) {
       record("tool_call", (current, observedAt) => {
         current.toolActive = true;
-        current.toolCallId = toolCallId ?? current.toolCallId;
-        current.toolName = toolName ?? current.toolName;
+        if (!isNestedToolEvent(parentToolCallId)) {
+          current.toolCallId = toolCallId ?? current.toolCallId;
+          current.toolName = toolName ?? current.toolName;
+        }
         markActive(current, "tool", observedAt);
       }, "immediate");
     },
-    toolExecutionUpdate(toolCallId, toolName) {
+    toolExecutionUpdate(toolCallId, toolName, parentToolCallId) {
       record("tool_execution_update", (current, observedAt) => {
         current.toolActive = true;
-        current.toolCallId = toolCallId ?? current.toolCallId;
-        current.toolName = toolName ?? current.toolName;
+        if (!isNestedToolEvent(parentToolCallId)) {
+          current.toolCallId = toolCallId ?? current.toolCallId;
+          current.toolName = toolName ?? current.toolName;
+        }
         markActive(current, "tool", observedAt);
       }, "throttled");
     },
-    toolResult(toolCallId, toolName) {
+    toolResult(toolCallId, toolName, parentToolCallId) {
       record("tool_result", (current) => {
-        current.toolCallId = toolCallId ?? current.toolCallId;
-        current.toolName = toolName ?? current.toolName;
+        if (!isNestedToolEvent(parentToolCallId)) {
+          current.toolCallId = toolCallId ?? current.toolCallId;
+          current.toolName = toolName ?? current.toolName;
+        }
         refreshActiveScope(current);
       }, "immediate");
     },
-    toolExecutionEnd(toolCallId, toolName) {
+    toolExecutionEnd(toolCallId, toolName, parentToolCallId) {
       record("tool_execution_end", (current, observedAt) => {
-        current.toolActive = false;
-        current.toolCallId = toolCallId ?? current.toolCallId;
-        current.toolName = toolName ?? current.toolName;
-        current.toolEndedAt = observedAt;
+        if (!isNestedToolEvent(parentToolCallId)) {
+          // 只有顶层（模型发起的）调用结束才清除 toolActive；嵌套调用结束时
+          // 父工具仍在执行，误清会把活动快照错判回 turn/streaming scope
+          current.toolActive = false;
+          current.toolEndedAt = observedAt;
+          current.toolCallId = toolCallId ?? current.toolCallId;
+          current.toolName = toolName ?? current.toolName;
+        }
         refreshActiveScope(current);
       }, "immediate");
     },

@@ -21,8 +21,7 @@ import { isAbsolute, join, resolve, relative, basename, dirname } from "node:pat
 import { homedir, tmpdir } from "node:os";
 import type { CompressionState, CoreMessage } from "acp-kernel";
 import { parseBlockIdArg } from "acp-kernel";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { acpEntriesToCoreMessages } from "./projection.ts";
+import type { ProjectedSessionEntry, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { isAcpToolUnavailableDetails } from "./tool-guard.ts";
 
 /** 自动解压输出的目录（与上游 billion-context-pi 同落点） */
@@ -107,21 +106,20 @@ export function acpMessageFitsInline(text: string): boolean {
 }
 
 /**
- * 按引用在会话日志里找单条消息原文：接受内核引用（mNNNNN，经 byRef 换回
- * 原始 id）或原始 entry id（含 `entryId#callId` 拆分形态）。找不到返回 null。
+ * 按引用在宿主投影里找单条消息文本：接受内核引用（mNNNNN，经 byRef 换回
+ * 坐标 id）或坐标 id（含 `entryId#callId` 拆分与 `entryId@n` 子消息形态）。
+ * coreMessages 必须与坐标系同源（宿主投影转出的 CoreMessage）。找不到返回
+ * null——被 context_edit 删除的目标不在投影里，也不可恢复。
  */
 export function acpFindMessageByRef(
   ref: string,
   state: CompressionState,
-  entries: readonly SessionEntry[],
+  coreMessages: readonly CoreMessage[],
 ): { text: string; role: CoreMessage["role"]; rawId: string } | null {
   const rawId = /^m\d+$/.test(ref) ? state.messageRefs.byRef[ref] : ref;
   if (!rawId) return null;
-  for (const entry of entries) {
-    if (entry.type !== "message") continue;
-    for (const core of acpEntriesToCoreMessages([entry])) {
-      if (core.id === rawId) return { text: core.text ?? "", role: core.role, rawId };
-    }
+  for (const core of coreMessages) {
+    if (core.id === rawId) return { text: core.text ?? "", role: core.role, rawId };
   }
   return null;
 }
@@ -155,41 +153,49 @@ function blockIdArgOf(arguments_: unknown): string | null {
 
 /**
  * 同一目标的内联解压结果是否仍在当前视图（未压缩掉）：
- * 扫描会话日志里成功的 decompress 调用（参数 blockId 与目标一致），其
- * toolResult 条目未被任何活动块覆盖时即“仍可见”。reload / resume / fork 后
- * 照样成立（日志是事实源）；结果被压缩回收后返回 null，允许重新插入。
- * 工单 06：宿主 0.85.x 不读 AgentToolResult.isError，被拒的预注册工具调用会以
- * 成功形态落进日志——那类条目带 details.toolUnavailable，不算「已恢复」
- * （否则一次拒绝会让后续真解压永远被当成重复插入）。
+ * 扫描宿主投影里成功的 decompress 调用（参数 blockId 与目标一致），其
+ * toolResult 消息未被任何活动块覆盖时即“仍可见”。reload / resume / fork 后
+ * 照样成立（被 context_edit 删除的调用/结果不在投影里，自然不算「已恢复」）；
+ * 结果被压缩回收后返回 null，允许重新插入。
+ * 工单 06：宿主不读 AgentToolResult.isError，被拒的预注册工具调用会以成功形态
+ * 落进日志——那类条目带 details.toolUnavailable，不算「已恢复」（否则一次
+ * 拒绝会让后续真解压永远被当成重复插入）。
  */
 export function acpFindVisibleInlineRestore(
   target: string,
   state: CompressionState,
-  entries: readonly SessionEntry[],
+  projected: readonly ProjectedSessionEntry[],
 ): { resultEntryId: string } | null {
   const canonical = acpCanonicalTarget(target, state);
   const callArgById = new Map<string, string>();
   const okResults: { toolCallId: string; entryId: string }[] = [];
-  for (const entry of entries) {
-    if (entry.type !== "message") continue;
-    const message = (entry as { message?: { role?: string; toolName?: string; toolCallId?: string; isError?: boolean; details?: unknown; content?: unknown } }).message;
-    if (!message) continue;
-    if (message.role === "assistant") {
-      for (const call of toolCallsOf(message.content)) {
-        if (call.name !== "decompress") continue;
-        const arg = blockIdArgOf(call.arguments);
-        if (arg !== null && acpCanonicalTarget(arg, state) === canonical) {
-          callArgById.set(call.id, canonical);
+  for (const slot of projected) {
+    for (const message of slot.messages as {
+      role?: string;
+      toolName?: string;
+      toolCallId?: string;
+      isError?: boolean;
+      details?: unknown;
+      content?: unknown;
+    }[]) {
+      if (!message) continue;
+      if (message.role === "assistant") {
+        for (const call of toolCallsOf(message.content)) {
+          if (call.name !== "decompress") continue;
+          const arg = blockIdArgOf(call.arguments);
+          if (arg !== null && acpCanonicalTarget(arg, state) === canonical) {
+            callArgById.set(call.id, canonical);
+          }
         }
-      }
-    } else if (
-      message.role === "toolResult" &&
-      message.toolName === "decompress" &&
-      message.isError !== true &&
-      !isAcpToolUnavailableDetails(message.details)
-    ) {
-      if (message.toolCallId && callArgById.get(message.toolCallId) === canonical) {
-        okResults.push({ toolCallId: message.toolCallId, entryId: entry.id });
+      } else if (
+        message.role === "toolResult" &&
+        message.toolName === "decompress" &&
+        message.isError !== true &&
+        !isAcpToolUnavailableDetails(message.details)
+      ) {
+        if (message.toolCallId && callArgById.get(message.toolCallId) === canonical) {
+          okResults.push({ toolCallId: message.toolCallId, entryId: slot.sourceEntry.id });
+        }
       }
     }
   }
@@ -203,7 +209,7 @@ export function acpFindVisibleInlineRestore(
   return visible ? { resultEntryId: visible.entryId } : null;
 }
 
-/** 块覆盖区的原始消息在会话日志条目里缺席时的补充来源（树导航/分支切换） */
+/** 块覆盖区的原始消息在当前宿主投影里缺席时的补充来源（树导航/分支切换） */
 export function acpFetchMissingEntries(
   missingBaseIds: readonly string[],
   ctx: { sessionManager?: { getEntry?: (id: string) => SessionEntry | undefined } },

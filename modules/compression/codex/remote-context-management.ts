@@ -1,4 +1,5 @@
 import { expandRemoteCompactionPayload, type JsonObject } from "./protocol.ts";
+import { providerTranscriptContext } from "./remote-shared.ts";
 import {
   ContextManagementProtocolError,
   COMPACTION_MAINTENANCE_MESSAGE,
@@ -114,14 +115,6 @@ async function collectSse(
   }
 }
 
-function providerContext(request: CodexRemoteCompactionRequest): unknown {
-  return {
-    ...(request.context.systemPrompt === undefined ? {} : { systemPrompt: request.context.systemPrompt }),
-    messages: request.context.messages,
-    ...(request.context.tools === undefined ? {} : { tools: request.context.tools }),
-  };
-}
-
 /**
  * 建立 Context Management adapter。工厂只返回这一条协议的实现，协调者
  * 在 mod.ts 之外注入 `{ "context-management": create...() }`，因此本实现
@@ -216,11 +209,11 @@ export function createContextManagementAdapter(): CodexRemoteCompactionAdapter {
           delete prepared.previous_response_id;
           return prepared;
         },
-        // Pi 0.85.x does not type this callback, but compatible providers may
-        // expose it. The fetch tee below is the fallback for providers that do not.
+        // Pi 1.3.0 的 StreamOptions 已类型化该回调；不支持它的 provider 适配器
+        // 不调用（下方 fetch tee 是同等观察的兼容路径）。
         onProviderStreamEvent,
-      } as never;
-      const stream = request.provider.stream(request.model, providerContext(request) as never, streamOptions);
+      };
+      const stream = request.provider.stream(request.model, providerTranscriptContext(request.context), streamOptions);
       streamResult = await Promise.race([stream.result(), aborted]);
     } catch (error) {
       streamError = error;

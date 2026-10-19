@@ -18,9 +18,11 @@
 // 按 prepare 阶段失败处置（onUnsupported 回退或严格错误；已有 checkpoint 时取消保留）。
 // 本文件只负责「远端响应的收集、校验与重试」，checkpoint 构造归 owner。
 //
-// 类型不从 pi-ai 直接导入（非本包直接依赖，package.json 不动）：provider / 流 /
-// usage 全部从 pi-coding-agent 公开导出结构推导（与 remote.ts 同款口径）。
+// 类型口径：pi-ai 已按宿主依赖规则登记为 peer/dev 依赖（Pi 1.3.0）；provider /
+// 流 / usage 形状继续从 pi-coding-agent 公开导出结构推导，provider 上下文经
+// remote-shared.ts 的官方 normalizeContext helper 折成 TranscriptContext。
 
+import { providerTranscriptContext } from "./remote-shared.ts";
 import {
   CodexCompactionProtocolError,
   expandRemoteCompactionPayload,
@@ -374,7 +376,7 @@ export function createResponsesCompactAdapter(defaultFetch?: typeof globalThis.f
       }
     };
 
-    const stream = request.provider.stream(request.model, request.context as never, {
+    const stream = request.provider.stream(request.model, providerTranscriptContext(request.context), {
       apiKey: request.apiKey,
       headers: request.headers,
       env: request.env,

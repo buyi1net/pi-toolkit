@@ -13,6 +13,46 @@ export const SPAWNING_TOOLS = [
 /** 成员间直信工具:仅 member spawn 注入白名单(注册在 subagent-done.ts)。 */
 export const TEAM_TOOLS = ["team_send"] as const;
 
+/**
+ * Pi 1.3.0 `--tools` 里声明 MCP 工具的条目前缀（`mcp__<server>__<tool>` 或
+ * `mcp__<server>__*`）。官方契约：只有条目以 mcp__ 开头时 `--tools` 才会
+ * 过滤 MCP 工具；普通名称白名单不会移除 MCP（codemode/tool_search 仍可
+ * 触达，见 pi-coding-agent docs/cli.md “MCP tools” 与 docs/mcp.md
+ * “Control tool exposure”）。
+ */
+export const MCP_TOOL_PREFIX = "mcp__";
+
+/**
+ * 工单 05：最终 allowlist 中显式声明的 MCP server/tool pattern（原序去重）。
+ * null（无 --tools）与未声明任何 mcp__ 条目时返回空数组——子代理没有
+ * 明确授予 MCP，能力门必须 fail closed。
+ */
+export function declaredMcpTools(toolAllowlist: string | null | undefined): string[] {
+  if (!toolAllowlist) return [];
+  const seen = new Set<string>();
+  const declared: string[] = [];
+  for (const raw of toolAllowlist.split(",")) {
+    const entry = raw.trim();
+    if (!entry.startsWith(MCP_TOOL_PREFIX) || seen.has(entry)) continue;
+    seen.add(entry);
+    declared.push(entry);
+  }
+  return declared;
+}
+
+/**
+ * 工单 05：MCP 能力门的可见权限说明（随 spawn 结果 details.mcp 展示）。
+ * 默认严格隔离时说明未授权 MCP 整体关闭；显式声明时列出声明的 pattern，
+ * 并说明未声明的 MCP 不可达。文案是面向操作者的权限口径，不是模型提示。
+ */
+export function describeMcpIsolation(toolAllowlist: string | null | undefined): string {
+  const declared = declaredMcpTools(toolAllowlist);
+  if (declared.length === 0) {
+    return "MCP: isolated (launched with --no-mcp; no MCP servers connect and no MCP tools are reachable)";
+  }
+  return `MCP: ${declared.join(", ")} (declared patterns only; undeclared MCP servers are unreachable)`;
+}
+
 export type SubagentSessionMode = AgentSessionMode;
 
 export function resolveSubagentPaths(

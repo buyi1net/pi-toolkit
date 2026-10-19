@@ -31,7 +31,8 @@ import type {
   ExtensionContext,
   SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
-import { buildSessionContext, convertToLlm } from "@earendil-works/pi-coding-agent";
+import { convertToLlm } from "@earendil-works/pi-coding-agent";
+import type { Tool } from "@earendil-works/pi-ai";
 import type { Translator } from "../../../i18n/index.ts";
 import type { ModuleConfigRecord } from "../../../kit/module.ts";
 import type { CodexProtocol, CodexUnsupportedPolicy, SessionCompressionOverride } from "../api.ts";
@@ -40,6 +41,7 @@ import type { CompressionFallbackLedger } from "../fallback.ts";
 import { codexProtocolLabel } from "../messages/index.ts";
 import { modelIdentityFromModel } from "../rules-editor.ts";
 import type { CompactHandlerResult, CompactOwnerModule } from "../scheduler.ts";
+import type { CompressionDisplayReporter } from "../display.ts";
 import { type CompressionStrategyResolution, resolveCompressionStrategy } from "../strategy.ts";
 import {
   ContextManagementProtocolError,
@@ -58,7 +60,7 @@ import type {
   PriorCheckpointPayload,
 } from "./remote.ts";
 
-/** context 接缝的返回形状（Pi 0.85.1 未导出 ContextEventResult，用结构形状） */
+/** context 接缝的返回形状（结构与官方 ContextEventResult 同形：{ messages? }） */
 type CodexContextEventResult = { messages?: CodexAgentMessage[] };
 import {
   buildReplacementHistory,
@@ -73,13 +75,15 @@ import {
   type CodexCheckpointDetails,
 } from "./checkpoint.ts";
 import { keptMessagesAfterCompaction, projectSessionCheckpointContext } from "./checkpoint-projection.ts";
+import {
+  CodexHostProjectionUnsupportedError,
+  hostSessionProjection,
+  type SessionProjectionFn,
+} from "./host-projection.ts";
 import { CodexOAuthRejectionError, CodexRoutePausedError } from "./compaction-failure.ts";
 import { readModelCodexCapability } from "./capability.ts";
 import { preflightCodexCompaction, resolveExpectedProfile, type CodexPreflightReason } from "./preflight.ts";
 import { hasCheckpointMarker, rewriteCheckpointMarker } from "./protocol.ts";
-
-/** owner 状态行 key（压缩进行中的提示；区别于调度器的取消常驻提示） */
-export const CODEX_OWNER_STATUS_KEY = "pi-toolkit.compression.codex";
 
 /** 规格的 owner 阶段（诊断用机读值） */
 export type CodexOwnerStage =
@@ -127,9 +131,10 @@ export interface CodexOwnerOptions {
   readonly fallback?: CompressionFallbackLedger;
   /** 协议适配器表（工单 05/06/07 接入；本构建为空 = 协议不可用，preflight 拦截） */
   readonly protocolAdapters: CodexProtocolAdapterMap;
-  /** 工具目录接缝（压缩请求的 tools 视图；测试与独立装载可缺席） */
+  /** 工具目录接缝（压缩请求的 tools 视图；测试与独立装载可缺席）。parameters 用
+   *  pi-ai Tool 的官方声明形（provider 侧 schema，与 normalizeContext 输入同源） */
   readonly pi?: {
-    readonly getAllTools: () => readonly { name: string; description: string; parameters: unknown }[];
+    readonly getAllTools: () => readonly { name: string; description: string; parameters: Tool["parameters"] }[];
     readonly getActiveTools: () => readonly string[];
   };
   /** 可注入 transport（真实协议适配器消费；fake 测试不需要） */
@@ -137,6 +142,17 @@ export interface CodexOwnerOptions {
   readonly requestTimeoutMs?: number;
   readonly maxRetries?: number;
   readonly replacementTokenBudget?: number;
+  /** 宿主投影接缝（工单 09）：canonical context messages / retained entries /
+   *  checkpoint 指纹 / 远程压缩请求消息共用同一份宿主实际投影（context_edit
+   *  先应用）。升级工单 02（单向升级）后默认接缝直接消费 Pi 1.3.0
+   *  buildSessionProjection，无旧版回退与运行期探测；宿主缺该 API 时报
+   *  宿主不支持并停止 Codex 压缩。测试注入替身验证 1.3.0 契约与不支持分支 */
+  readonly hostProjection?: SessionProjectionFn;
+  /**
+   * 展示上报接缝（工单 08）：owner 在压缩生命周期各阶段推进扩展消息状态。
+   * 返回 undefined = 无展示（独立装载 / 测试不需要 UI / native 展示）。
+   */
+  readonly display?: (ctx: ExtensionContext) => CompressionDisplayReporter | undefined;
 }
 
 function describeError(error: unknown): string {
@@ -159,12 +175,34 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 300_000;
 const DEFAULT_MAX_RETRIES = 2;
 
 /**
+ * 接缝可用性判定（升级工单 02）：用一次平凡调用（空 entries + null leaf）问接缝
+ * 本身。默认接缝在宿主缺 Pi 1.3.0 buildSessionProjection 时抛
+ * CodexHostProjectionUnsupportedError；注入替身以同一错误表达「宿主不支持」。
+ * 其它异常照常抛出（接缝坏了就硬失败，不伪装成不支持）。
+ */
+function seamSupportsProjection(seam: SessionProjectionFn): boolean {
+  try {
+    seam([], null);
+    return true;
+  } catch (error) {
+    if (error instanceof CodexHostProjectionUnsupportedError) return false;
+    throw error;
+  }
+}
+
+/**
  * 建 Codex owner。装配：mod.ts 传入宿主译者、配置读取、协议适配器表与
  * pi 工具接缝；调度器经 owners 注入接管 mode=codex 的 session_before_compact。
  */
 export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerModule {
   const t = options.t;
   const protocolAdapters = options.protocolAdapters;
+  // 工单 09：一次解析、全程贯穿（压缩与回放不得各取一套语义）；工单 02 后
+  // 默认接缝 = Pi 1.3.0 buildSessionProjection 直达（无旧版回退）
+  const hostProjection = options.hostProjection ?? hostSessionProjection;
+  // 单向升级：接缝不支持 = 明确报宿主不支持并停止 Codex 压缩（两处 handler
+  // 先查此标志，不再进入任何投影调用）
+  const hostProjectionSupported = seamSupportsProjection(hostProjection);
   const trail: CodexOwnerDiagnosis[] = [];
   let currentDiagnosis: CodexOwnerDiagnosis | undefined;
   /** 投影类通知的去重指纹（每次请求都会走 context，必须去重） */
@@ -178,9 +216,9 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
   const notify = (ctx: ExtensionContext, message: string, level: "info" | "warning" | "error"): void => {
     if (ctx.hasUI) ctx.ui.notify(message, level);
   };
-  const setStatus = (ctx: ExtensionContext, text: string | undefined): void => {
-    if (ctx.hasUI) ctx.ui.setStatus(CODEX_OWNER_STATUS_KEY, text);
-  };
+  // 工单 10：owner 不再写进行中状态行——压缩进行中的反馈只由扩展消息（custom
+  // 条目）承担，避免状态栏与消息区各复制一份进度（规格「状态更新不会在状态栏
+  // 和消息区域各复制一份」）；需要用户行动的取消 / 保护常驻提示归调度器状态行
 
   /** 会话模型 + 解析结果（投影接缝每次请求重解析；与调度器同源输入） */
   function codexScope(
@@ -219,6 +257,7 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
     headline: string,
     claim: boolean,
     policy: CodexUnsupportedPolicy,
+    display: CompressionDisplayReporter | undefined,
   ): CompactHandlerResult {
     if (claim) {
       record(stage, "cancelled", reason);
@@ -227,15 +266,20 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
         `${headline} ${t("module.compression.codex.checkpoint.claimProtected")}`,
         policy === "error" ? "error" : "warning",
       );
+      // 工单 08：受保护取消——扩展消息替换为需要用户理解的受保护状态
+      display?.protect("codex", reason);
       return { cancel: true };
     }
     if (policy === "error") {
       record(stage, "cancelled", reason);
       notify(ctx, `${headline} ${t("module.compression.codex.outcome.cancelledError")}`, "error");
+      display?.fail("codex", reason);
       return { cancel: true };
     }
     record(stage, "fell-back-native", reason);
     notify(ctx, `${headline} ${t("module.compression.codex.outcome.fellBackNative")}`, "warning");
+    // 回退 Pi 原生：进行中消息中性收束（互斥——展示权交回原生，非成功非失败）
+    display?.conclude("codex");
     return {};
   }
 
@@ -269,6 +313,8 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
     const claim = hasActiveCheckpointClaim(event.branchEntries);
     const policy: CodexUnsupportedPolicy = resolution.onUnsupported ?? "native";
     const protocol: CodexProtocol = resolution.protocol ?? "remote-v2";
+    /** 工单 08 展示上报接缝：owner 推进扩展消息状态；未注入（独立装载/测试）时无展示 */
+    const display = options.display?.(ctx);
     /** 摘要恢复（工单 11 接线）的原料：鉴权与 provider 就绪、投影完成、分支上
      * 有同身份可回放的 checkpoint 后才填充；远程压缩失败时据此尝试把 opaque
      * 历史翻成明文续接摘要（规格「兼容的恢复」路径，见 catch）。provider/鉴权
@@ -293,6 +339,7 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
         t("module.compression.codex.resolve.noModel"),
         claim,
         policy,
+        display,
       );
     }
     // 白名单防线：codex 只对显式规则命中、官方能力自动检测或当前会话覆盖生效
@@ -300,7 +347,25 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
     if (!codexOwnedSource(resolution.source)) {
       notifyNotWhitelistedOnce(ctx);
       record("resolve", "fell-back-native", "not-whitelisted");
+      // 工单 08：非白名单 codex 解析——展示权交回 Pi 原生（中性收束，无进行中条目时为空操作）
+      display?.conclude("codex");
       return {};
+    }
+
+    // 单向升级（升级工单 02）：宿主缺 Pi 1.3.0 buildSessionProjection = 宿主不支持。
+    // 确定性判定（无请求），在任何远程动作前拦截：明确报告并停止 Codex 压缩，
+    // 不旧版回退、不静默降级；分支上已有 checkpoint 声明时仍按保护处置（claim →
+    // 取消并保留，绝不让 native 覆盖 opaque 状态）
+    if (!hostProjectionSupported) {
+      return failBeforeCommit(
+        ctx,
+        "preflight",
+        "host-projection-unsupported",
+        t("module.compression.codex.hostProjectionUnsupported"),
+        claim,
+        policy,
+        display,
+      );
     }
 
     // ── preflight（工单 06 挂账一）：codex-auto 与会话覆盖的接管资格运行期复核。
@@ -325,6 +390,7 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
           }),
           claim,
           policy,
+          display,
         );
         if (result.cancel !== true) {
           options.fallback?.record({ from: "codex", reason: capability.reason });
@@ -348,12 +414,17 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
         unsupportedHeadline(preflight.reason, preflight.api, preflight.protocol),
         claim,
         policy,
+        display,
       );
     }
 
-    // ── prepare：在内存构造压缩请求与 checkpoint 载荷（仍无任何写入）
+    // ── prepare：在内存构造压缩请求与 checkpoint 载荷（仍无任何写入）。
+    // 工单 08：prepare 开始时就开启扩展进行中消息（压缩已接管、即将处理），这样
+    // prepare 阶段的受保护分支（checkpoint-invalid / identity-mismatch /
+    // projection-unverifiable）与远程失败都有进行中的扩展消息可替换；成功时收束。
     try {
       const branch = event.branchEntries;
+      display?.begin("codex");
       const prior = latestCheckpoint(branch);
       if (claim && !prior) {
         // 有 opaque 声明但不可解析：不能当明文 summary 二次压缩
@@ -363,6 +434,8 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
           `${t("module.compression.codex.checkpoint.invalid")} ${t("module.compression.codex.checkpoint.claimProtected")}`,
           policy === "error" ? "error" : "warning",
         );
+        // 工单 08：受保护取消——扩展消息替换为受保护状态
+        display?.protect("codex", "checkpoint-invalid");
         return { cancel: true };
       }
       if (prior) {
@@ -383,14 +456,18 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
             )}`,
             policy === "error" ? "error" : "warning",
           );
+          // 工单 08：受保护取消——扩展消息替换为受保护状态
+          display?.protect("codex", "identity-mismatch");
           return { cancel: true };
         }
       }
 
       const leafId = branch.at(-1)?.id ?? null;
-      let messages = buildSessionContext(branch, leafId).messages;
+      // 工单 09：请求消息同样取宿主实际投影（context_edit 已应用），与
+      // checkpoint 指纹 / opaque 历史查找共用同一份已投影序列
+      let messages = [...hostProjection(branch, leafId).messages];
       if (prior) {
-        const projected = projectSessionCheckpointContext(messages, branch, prior);
+        const projected = projectSessionCheckpointContext(hostProjection, messages, branch, prior);
         if (!projected) {
           // 保存的会话日志无法验证上一个 checkpoint 的投影：历史保留，取消
           record("prepare", "cancelled", "projection-unverifiable");
@@ -399,6 +476,8 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
             `${t("module.compression.codex.checkpoint.unverifiable")} ${t("module.compression.codex.checkpoint.claimProtected")}`,
             policy === "error" ? "error" : "warning",
           );
+          // 工单 08：受保护取消——扩展消息替换为受保护状态
+          display?.protect("codex", "projection-unverifiable");
           return { cancel: true };
         }
         messages = projected;
@@ -460,10 +539,6 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
         };
       }
 
-      setStatus(
-        ctx,
-        t("module.compression.codex.status.running", { protocol: codexProtocolLabel(protocol, t) }),
-      );
       const response = await preflight.adapter(
         buildRemoteRequest({
           provider,
@@ -482,6 +557,10 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
       );
       if (event.signal.aborted) {
         record("prepare", "cancelled", "aborted");
+        // 工单 10：中止也要收束展示生命周期——否则进行中的扩展消息悬空。
+        // 与 context-management 的中止分支同款处置（fail + 机读原因 aborted）；
+        // 取消提示由宿主自己承担（compaction_end aborted），这里不重复发通知
+        display?.fail("codex", "aborted");
         return { cancel: true };
       }
 
@@ -513,7 +592,7 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
           modelId: model.id,
           protocol,
           replacementHistory,
-          keptMessages: keptMessagesAfterCompaction(branch, event.preparation.firstKeptEntryId),
+          keptMessages: keptMessagesAfterCompaction(hostProjection, branch, event.preparation.firstKeptEntryId),
         });
         compaction = {
           summary: fallbackSummary(details.checkpointId),
@@ -529,20 +608,28 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
           t("module.compression.codex.commit.failed", { error: describeError(error) }),
           "error",
         );
+        // 工单 10：commit 载荷校验失败（checkpoint details 创建即校验不过，
+        // 即工单的 replacement history 提交失败腿）也要收束展示生命周期——
+        // commit 失败只能取消并报告（不回退 native、不启动第二套压缩），
+        // 进行中的扩展消息收束为可区分的失败状态（机读原因 commit-validation）
+        display?.fail("codex", "commit-validation");
         return { cancel: true };
       }
 
       // ── event result：把 compaction 交给调度器 → Pi（details 随 entry 原子落盘；
       // 该阶段的失败模式由调度器的异常兜底覆盖——owner 抛错时空结果交回 Pi 并进诊断）。
-      // ── finalize：成功路径无通知（状态行在 finally 清除），诊断记录最终态。
+      // ── finalize：成功路径无通知，诊断记录最终态。
       // 工单 06：Codex 压缩真正成功即清降级（幂等；无降级记录时不递增 revision）
       record("finalize", "succeeded", details.checkpointId);
       options.fallback?.clear();
+      // 工单 08：成功收束——进行中消息自然收束，不留 Pi 原生结果摘要
+      display?.succeed("codex");
       return { compaction };
     } catch (error) {
       if (protocol === "context-management" && (event.signal.aborted || (error instanceof DOMException && error.name === "AbortError"))) {
         record("prepare", "cancelled", "aborted");
         notify(ctx, t("module.compression.codex.contextManagement.cancelled"), "warning");
+        display?.fail("codex", "aborted");
         return { cancel: true };
       }
       if (protocol === "context-management" && error instanceof ContextManagementProtocolError) {
@@ -552,6 +639,7 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
           t("module.compression.codex.contextManagement.invalid", { error: describeError(error) }),
           "warning",
         );
+        display?.fail("codex", "context-management-invalid-response");
         return { cancel: true };
       }
       // ── checkpoint 摘要恢复（工单 11 接线）：远程压缩已就绪但失败，分支上有
@@ -568,17 +656,20 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
                 [...recoveryIngredients.messages],
                 // 上游同款：保留区间里的旧 compaction 条目被新压缩抑制，不参与
                 // 前缀对齐（projectedKeptMessages 的 compaction 过滤）
-                keptMessagesAfterCompaction(event.branchEntries, event.preparation.firstKeptEntryId).filter(
-                  (message) => message.role !== "compactionSummary",
-                ),
+                keptMessagesAfterCompaction(
+                  hostProjection,
+                  event.branchEntries,
+                  event.preparation.firstKeptEntryId,
+                ).filter((message) => message.role !== "compactionSummary"),
                 fingerprintMessage,
               ),
             ),
           );
-          setStatus(ctx, t("module.compression.codex.recovery.status"));
           const recovered = await recoverCheckpoint(request, event);
           record("prepare", "succeeded", `checkpoint-recovery:${recoveryIngredients.prior.checkpointId}`);
           notify(ctx, t("module.compression.codex.recovery.succeeded"), "warning");
+          // 工单 08：摘要恢复成功——扩展消息收束为成功（有损续接摘要已落盘）
+          display?.succeed("codex");
           return { compaction: recovered };
         } catch (recoveryError) {
           record("prepare", "cancelled", "recovery-failed");
@@ -587,6 +678,8 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
             t("module.compression.codex.recovery.failed", { error: describeError(recoveryError) }),
             "warning",
           );
+          // 工单 08：恢复失败——扩展消息替换为需要用户理解的失败状态
+          display?.fail("codex", "recovery-failed");
           return { cancel: true };
         }
       }
@@ -601,6 +694,7 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
           t("module.compression.codex.routePaused"),
           claim,
           policy,
+          display,
         );
       }
       if (error instanceof CodexOAuthRejectionError) {
@@ -611,6 +705,7 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
           t("module.compression.codex.oauthRejected", { error: describeError(error) }),
           claim,
           policy,
+          display,
         );
       }
       return failBeforeCommit(
@@ -620,9 +715,8 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
         t("module.compression.codex.prepare.failed", { error: describeError(error) }),
         claim,
         policy,
+        display,
       );
-    } finally {
-      setStatus(ctx, undefined);
     }
   }
 
@@ -634,6 +728,18 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
       const branch = ctx.sessionManager.getBranch();
       const checkpoint = latestCheckpoint(branch);
       if (!checkpoint) return undefined;
+      // 单向升级（升级工单 02）：宿主缺 Pi 1.3.0 buildSessionProjection = 无法回放
+      // 已存在的 checkpoint。降级保持宿主原视图，但必须让用户看见实际后果
+      // （opaque 历史不注入）
+      if (!hostProjectionSupported) {
+        const key = "host-projection-unsupported";
+        if (!projectionNotified.has(key)) {
+          projectionNotified.add(key);
+          notify(ctx, t("module.compression.codex.checkpoint.hostProjectionUnsupported"), "warning");
+        }
+        record("projection", "degraded", key);
+        return undefined;
+      }
       // 身份期望用当前模型与规则推导（不依赖适配器可用性——已存在的
       // checkpoint 回放不能因本构建未接协议而失效）
       const expectedProfile = resolveExpectedProfile(scope.model.api, scope.resolution.profile);
@@ -661,7 +767,7 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
         record("projection", "degraded", "identity-mismatch");
         return undefined;
       }
-      const projected = projectSessionCheckpointContext(event.messages, branch, checkpoint);
+      const projected = projectSessionCheckpointContext(hostProjection, event.messages, branch, checkpoint);
       if (!projected) {
         const key = "projection-failed";
         if (!projectionNotified.has(key)) {
@@ -724,7 +830,6 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
       projectionNotified = new Set<string>();
       currentDiagnosis = undefined;
       trail.length = 0;
-      setStatus(ctx, undefined);
     },
     get lastDiagnosis(): CodexOwnerDiagnosis | undefined {
       return currentDiagnosis;
