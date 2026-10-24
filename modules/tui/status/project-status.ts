@@ -16,7 +16,7 @@ import { formatLeadingIcon, type IconGlyphs, resolveGlyphs } from "../renderer/i
 import { durationStatusColor, formatElapsed } from "./status-segments.ts";
 
 const SEPARATOR = " · ";
-const NATIVE_FOOTER_SEPARATOR = " ";
+const NATIVE_FOOTER_SEPARATOR = " · ";
 const MIN_SEGMENT_WIDTH = 8;
 // git 段低于此宽度整段丢弃（工单 48 修正：短码优先于 git，git 先裁）
 const MIN_GIT_WIDTH = 8;
