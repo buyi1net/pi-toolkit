@@ -142,7 +142,7 @@ export interface CompressionSettingsRowsOptions {
   readonly codexOverrideAvailable?: boolean;
   /** 工单 02：Codex 模式管理入口行（排在模块专属行之前；关闭态整体不渲染） */
   readonly codexManagementRow?: SettingItem;
-  /** 模块专属行（ACP 管理入口 / 模型规则 / 当前模型策略诊断；关闭时整体收起不渲染） */
+  /** 模块专属行（ACP 管理入口 / 模型规则；关闭时整体收起不渲染） */
   readonly detailRows: readonly SettingItem[];
 }
 
@@ -195,7 +195,7 @@ export interface CompressionSettingsPanelOptions {
   /** 结构化配置写入事务（菜单层注入；补丁 → 落盘 → 重载 → 重生效 → 重绘） */
   readonly saveConfig: (patch: ModuleConfigRecord, hooks?: ConfigWriteHooks) => Promise<void>;
   readonly requestRender: () => void;
-  /** 模块专属行（模型规则 / ACP 高级设置 / 当前模型策略诊断） */
+  /** 模块专属行（模型规则 / ACP 高级设置） */
   readonly detailRows: () => readonly SettingItem[];
   /** 工单 02：Codex 模式管理入口行（每次重建重读，值位跟随配置） */
   readonly codexManagementRow: () => SettingItem;

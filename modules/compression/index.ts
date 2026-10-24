@@ -12,7 +12,7 @@
 //   会话覆盖与全局默认两值枚举；一级菜单只保留一行入口）；
 // - session-override.ts：当前会话覆盖的内存单例（只在当前会话内生效，不落盘）；
 // - status.ts：压缩状态服务（工单 04：`compression.status` 只读句柄、状态快照与标签）；
-// - menu.ts：一级唯一入口行与设置页里的模型规则、ACP 高级设置、当前模型策略诊断行；
+// - menu.ts：一级唯一入口行与设置页里的模型规则、ACP 高级设置行；
 // - scheduler.ts：统一压缩调度器（session_before_compact 的唯一 owner 入口；
 //   native 内建，codex/acp owner 经 owners 注入分发，含跨模式切换保护）；
 // - acp/config.ts：ACP 高级配置的运行时消费接缝（级联合并 → 内核 Config/提示词/pack）；
@@ -144,7 +144,6 @@ export {
 } from "./scheduler.ts";
 export {
   COMPRESSION_RULES_ROW_ID,
-  COMPRESSION_DIAGNOSIS_ROW_ID,
   buildCompressionMenuItems,
   buildCompressionTopItems,
   // 工单 03：ACP 管理入口行
@@ -302,7 +301,7 @@ export const compressionModule: ModuleDefinition = {
   // 用户才能从设置页把模块重新打开；关闭时的运行期旁路由 mod.ts 按实时配置自行处理
   alwaysAssemble: true,
   // 一级行（工单 01）：唯一入口行 compression.settings，值位只显示开 / 关；
-  // 全部配置项与诊断行收进它打开的设置页（settings-panel.ts）
+  // 全部配置项收进它打开的设置页（settings-panel.ts）
   topLevel: buildCompressionTopItems,
   register(context: ModuleContext): void {
     registerCompression(context);

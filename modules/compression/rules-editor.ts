@@ -85,7 +85,7 @@ export function discoverCompressionCandidates(
   return candidates;
 }
 
-/** 候选 → 策略解析的模型身份（当前模型诊断行同用这一入口） */
+/** 候选 → 策略解析的模型身份。 */
 export function candidateIdentity(candidate: {
   readonly provider: string;
   readonly modelId: string;
@@ -102,7 +102,7 @@ export function candidateIdentity(candidate: {
   };
 }
 
-/** Pi 的会话模型 → 模型身份（结构收敛在模块内，诊断行消费） */
+/** Pi 的会话模型 → 模型身份（结构收敛在模块内）。 */
 export function modelIdentityFromModel(model: {
   readonly provider: string;
   readonly id: string;

@@ -368,9 +368,11 @@ function renderNativeFooterProjectStatusLine(
 ): string {
 	return nativeFooterProjectStatusParts(snapshot, width, home, glyphs, segments)
 		.map((part) => {
-			const color = part.role === "path" || part.role === "separator"
+			const color = part.role === "path"
 				? "dim"
-				: part.role === "duration"
+				: part.role === "separator"
+					? ROLE_COLORS.separator
+					: part.role === "duration"
 					? durationStatusColor(snapshot.duration?.state ?? "idle")
 					: ROLE_COLORS[part.role];
 			return theme.fg(color, part.text);

@@ -73,11 +73,6 @@ const EN = {
   "module.compression.protocol.responses-compact": "responses/compact",
   "module.compression.protocol.context-management": "Context Management",
 
-  "module.compression.diagnosis.label": "Current model policy",
-  "module.compression.diagnosis.description": "Resolved compression strategy for the current session model",
-  "module.compression.diagnosis.noModel": "No session model",
-  "module.compression.diagnosis.title": "Compression policy diagnosis",
-
   "module.compression.diag.mode": "Mode: {value}",
   "module.compression.diag.source": "Source: {value}",
   "module.compression.diag.rule": "Matched rule: {value}",
@@ -102,7 +97,7 @@ const EN = {
   "module.compression.reason.overflow": "context overflow recovery",
 
   "module.compression.schedule.ownerUnimplemented":
-    "Current model resolved to {mode} ({source}), but that compression owner is not implemented yet; this compaction continues with Pi native. See the compression diagnosis in the /pi-toolkit menu.",
+    "Current model resolved to {mode} ({source}), but that compression owner is not implemented yet; this compaction continues with Pi native. Check the compression settings in the /pi-toolkit menu.",
   "module.compression.schedule.handlerError":
     "Compression scheduler error ({error}); this compaction falls back to Pi native",
 
@@ -116,7 +111,7 @@ const EN = {
   "module.compression.acp.hostProjectionUnsupported":
     "This host does not provide buildSessionProjection() (Pi 1.3.0+ required): ACP projection is stopped — no legacy projection is emulated and nothing falls back silently",
   "module.compression.acp.compactUnavailable":
-    "ACP state is unavailable (sidecar version incompatible or rebuild failed, {reason} trigger); compaction cancelled and nothing was faked — check the compression diagnosis or fix/remove the sidecar",
+    "ACP state is unavailable (sidecar version incompatible or rebuild failed, {reason} trigger); compaction cancelled and nothing was faked — check the compression settings or fix/remove the sidecar",
   "module.compression.acp.sidecarNewer":
     "ACP sidecar schema version {version} is newer than supported; the file is left untouched and ACP state is unavailable — upgrade pi-toolkit or remove the sidecar",
   "module.compression.acp.sidecarCorrupt":
@@ -134,9 +129,9 @@ const EN = {
   "module.compression.acp.projectionUnavailable":
     "ACP context projection is unavailable (state failed to load); this request is sent unprojected — fix the sidecar issue before compressing",
   "module.compression.acp.projectionFailed":
-    "ACP context projection failed ({error}); ACP state is kept and this request is sent unprojected — retry the request or check the diagnosis",
+    "ACP context projection failed ({error}); ACP state is kept and this request is sent unprojected — retry the request or check the compression settings",
   "module.compression.acp.stateUnavailable":
-    "ACP state could not be loaded for this session, so compress/decompress are unavailable (see the compression diagnosis)",
+    "ACP state could not be loaded for this session, so compress/decompress are unavailable (see the compression settings)",
   "module.compression.codex.notWhitelisted":
     "Current model resolved to codex mode without an explicit rule, official auto detection or a session override; codex compaction only applies to explicit provider/model rules, official OpenAI Responses / Codex OAuth links and the current session override, so this session keeps the existing policy (Pi native)",
   "module.compression.codex.resolve.noModel": "Codex compaction needs an active session model",
@@ -443,11 +438,6 @@ const ZH_CN: typeof EN = {
   "module.compression.protocol.responses-compact": "responses/compact",
   "module.compression.protocol.context-management": "Context Management",
 
-  "module.compression.diagnosis.label": "当前模型压缩策略",
-  "module.compression.diagnosis.description": "当前会话模型解析出的压缩策略与诊断",
-  "module.compression.diagnosis.noModel": "暂无会话模型",
-  "module.compression.diagnosis.title": "压缩策略诊断",
-
   "module.compression.diag.mode": "模式：{value}",
   "module.compression.diag.source": "来源：{value}",
   "module.compression.diag.rule": "命中规则：{value}",
@@ -471,7 +461,7 @@ const ZH_CN: typeof EN = {
   "module.compression.reason.overflow": "上下文溢出恢复",
 
   "module.compression.schedule.ownerUnimplemented":
-    "当前模型解析为 {mode} 模式（{source}），但该压缩 owner 尚未实现：本次压缩继续使用 Pi 原生实现。策略诊断见 /pi-toolkit 菜单。",
+    "当前模型解析为 {mode} 模式（{source}），但该压缩 owner 尚未实现：本次压缩继续使用 Pi 原生实现。请查看 /pi-toolkit 菜单中的压缩设置。",
   "module.compression.schedule.handlerError":
     "压缩调度器处理事件出错（{error}）：本次已交回 Pi 原生压缩",
 
@@ -485,7 +475,7 @@ const ZH_CN: typeof EN = {
   "module.compression.acp.hostProjectionUnsupported":
     "宿主未提供 buildSessionProjection()（需要 Pi 1.3.0+）：ACP 投影已停止，不模拟旧版投影，也不静默回退",
   "module.compression.acp.compactUnavailable":
-    "ACP 状态不可用（sidecar 版本不兼容或重建失败，{reason} 触发）：已取消压缩且不伪装成功——请查看压缩诊断或修复/删除 sidecar",
+    "ACP 状态不可用（sidecar 版本不兼容或重建失败，{reason} 触发）：已取消压缩且不伪装成功——请查看压缩设置或修复/删除 sidecar",
   "module.compression.acp.sidecarNewer":
     "ACP sidecar 的结构版本 {version} 高于当前支持：文件未被改动，ACP 状态不可用——请升级 pi-toolkit 或删除该 sidecar",
   "module.compression.acp.sidecarCorrupt":
@@ -503,9 +493,9 @@ const ZH_CN: typeof EN = {
   "module.compression.acp.projectionUnavailable":
     "ACP 上下文投影不可用（状态装载失败）：本次请求按原样发送——请先修复 sidecar 问题再压缩",
   "module.compression.acp.projectionFailed":
-    "ACP 上下文投影失败（{error}）：已保留 ACP 状态，本次请求按原样发送——可重试请求或查看诊断",
+    "ACP 上下文投影失败（{error}）：已保留 ACP 状态，本次请求按原样发送——可重试请求或查看压缩设置",
   "module.compression.acp.stateUnavailable":
-    "compress/decompress 不可用：本会话的 ACP 状态装载失败（见压缩诊断）",
+    "compress/decompress 不可用：本会话的 ACP 状态装载失败（见压缩设置）",
   "module.compression.codex.notWhitelisted":
     "当前模型解析为 codex 模式，但既没有显式规则、也没命中官方自动检测、也不是当前会话覆盖：codex 压缩只对显式 provider/model 规则、官方 OpenAI Responses / Codex OAuth 链路与当前会话覆盖生效，本会话继续沿用既有策略（Pi 原生）",
   "module.compression.codex.resolve.noModel": "Codex 压缩需要会话中存在活动模型",
@@ -804,11 +794,6 @@ const ZH_TW: typeof EN = {
   "module.compression.protocol.responses-compact": "responses/compact",
   "module.compression.protocol.context-management": "Context Management",
 
-  "module.compression.diagnosis.label": "目前模型壓縮策略",
-  "module.compression.diagnosis.description": "目前會話模型解析出的壓縮策略與診斷",
-  "module.compression.diagnosis.noModel": "暫無會話模型",
-  "module.compression.diagnosis.title": "壓縮策略診斷",
-
   "module.compression.diag.mode": "模式：{value}",
   "module.compression.diag.source": "來源：{value}",
   "module.compression.diag.rule": "命中規則：{value}",
@@ -832,7 +817,7 @@ const ZH_TW: typeof EN = {
   "module.compression.reason.overflow": "上下文溢出恢復",
 
   "module.compression.schedule.ownerUnimplemented":
-    "目前模型解析為 {mode} 模式（{source}），但該壓縮 owner 尚未實作：本次壓縮繼續使用 Pi 原生實作。策略診斷見 /pi-toolkit 選單。",
+    "目前模型解析為 {mode} 模式（{source}），但該壓縮 owner 尚未實作：本次壓縮繼續使用 Pi 原生實作。請查看 /pi-toolkit 選單中的壓縮設定。",
   "module.compression.schedule.handlerError":
     "壓縮排程器處理事件出錯（{error}）：本次已交回 Pi 原生壓縮",
 
@@ -846,7 +831,7 @@ const ZH_TW: typeof EN = {
   "module.compression.acp.hostProjectionUnsupported":
     "宿主未提供 buildSessionProjection()（需要 Pi 1.3.0+）：ACP 投影已停止，不模擬舊版投影，也不靜默回退",
   "module.compression.acp.compactUnavailable":
-    "ACP 狀態不可用（sidecar 版本不相容或重建失敗，{reason} 觸發）：已取消壓縮且不偽裝成功——請查看壓縮診斷或修復/刪除 sidecar",
+    "ACP 狀態不可用（sidecar 版本不相容或重建失敗，{reason} 觸發）：已取消壓縮且不偽裝成功——請查看壓縮設定或修復/刪除 sidecar",
   "module.compression.acp.sidecarNewer":
     "ACP sidecar 的結構版本 {version} 高於目前支援：檔案未被改動，ACP 狀態不可用——請升級 pi-toolkit 或刪除該 sidecar",
   "module.compression.acp.sidecarCorrupt":
@@ -864,9 +849,9 @@ const ZH_TW: typeof EN = {
   "module.compression.acp.projectionUnavailable":
     "ACP 上下文投影不可用（狀態裝載失敗）：本次請求按原樣傳送——請先修復 sidecar 問題再壓縮",
   "module.compression.acp.projectionFailed":
-    "ACP 上下文投影失敗（{error}）：已保留 ACP 狀態，本次請求按原樣傳送——可重試請求或查看診斷",
+    "ACP 上下文投影失敗（{error}）：已保留 ACP 狀態，本次請求按原樣傳送——可重試請求或查看壓縮設定",
   "module.compression.acp.stateUnavailable":
-    "compress/decompress 不可用：本會話的 ACP 狀態裝載失敗（見壓縮診斷）",
+    "compress/decompress 不可用：本會話的 ACP 狀態裝載失敗（見壓縮設定）",
   "module.compression.codex.notWhitelisted":
     "目前模型解析為 codex 模式，但既沒有明確規則、也沒命中官方自動檢測、也不是目前會話覆蓋：codex 壓縮只對明確 provider/model 規則、官方 OpenAI Responses / Codex OAuth 鏈路與目前會話覆蓋生效，本會話繼續沿用既有策略（Pi 原生）",
   "module.compression.codex.resolve.noModel": "Codex 壓縮需要會話中存在活動模型",
