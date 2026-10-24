@@ -4,7 +4,7 @@
 // - 总开关关闭 → disabled；没有会话模型 → unavailable；其余按策略解析器（与菜单
 //   诊断、调度器同一口径）得到 active 的 effectiveMode / triggerPolicy / source；
 // - 降级记录（工单 06 写入）存在 → fallback，effectiveMode 取降级后真正在工作的
-//   Pi 原生，并带上降级来源与原因；
+//   Pi 原生；降级来源与原因保留在状态快照中，Footer 只显示实际生效的 Cmp:* 标签；
 // - revision 在读快照时按内容比较维护（工单 18 的句柄惯例：内容变化才递增，读快照
 //   本身不制造变更）。因此装配层不必显式写快照：model_select / session_start 只把
 //   新模型交给派生口，配置事务落盘后内存副本已刷新，下一次读（tui 心跳或渲染）就
@@ -55,31 +55,24 @@ export interface CompressionStatusRuntime extends CompressionStatusService {
 /** 快照去掉 revision 的派生部分（字段固定的字面量对象，可直接做内容签名） */
 type CompressionStatusContent = Omit<CompressionStatusSnapshot, "revision">;
 
-/** 降级标记（规格示例 `(native:auto [fallback])`） */
-const FALLBACK_MARKER = " [fallback]";
-
 /**
  * 状态标签（规格「状态标签格式化输出」）：disabled / unavailable 不显示；
- * active 显示生效模式；fallback 显示降级后真实生效的模式并带 `[fallback]` 标记。
- * compact = 极窄终端的单字符形态 `(N:A)` / `(N:M)` / `(A)` / `(C)`。
+ * native 显示 Pi 原生压缩的触发策略，Codex / ACP 显示实际压缩 owner。
+ * 标签固定使用 `Cmp:*` 形式，宽窄屏保持同一语义，避免窄屏把模式压缩成用户无法
+ * 判断的单字符缩写。
  */
 export function formatCompressionStatusLabel(
   snapshot: CompressionStatusSnapshot,
-  compact = false,
+  _compact = false,
 ): string {
   if (snapshot.status === "disabled" || snapshot.status === "unavailable") return "";
-  const marker = snapshot.status === "fallback" ? FALLBACK_MARKER : "";
   switch (snapshot.effectiveMode) {
-    case "native": {
-      // 触发策略只在 native 模式有意义：解析器对 native 一定给出取值，缺失按 auto
-      const manual = snapshot.triggerPolicy === "manual";
-      const mode = compact ? `N:${manual ? "M" : "A"}` : `native:${manual ? "manual" : "auto"}`;
-      return `(${mode}${marker})`;
-    }
+    case "native":
+      return `Cmp:${snapshot.triggerPolicy === "manual" ? "manual" : "auto"}`;
     case "acp":
-      return compact ? `(A${marker})` : `(acp${marker})`;
+      return "Cmp:ACP";
     case "codex":
-      return compact ? `(C${marker})` : `(codex${marker})`;
+      return "Cmp:Codex";
     case "none":
       // 没有真实生效的模式（disabled / unavailable 之外的防御分支）：不显示标签
       return "";

@@ -44,14 +44,6 @@ export function turnStatusColor(turns: number): ThemeColor {
 	return "error";
 }
 
-export function compactionStatusColor(compactions: number): ThemeColor {
-	if (!Number.isFinite(compactions) || compactions <= 0) return "muted";
-	if (compactions === 1) return "success";
-	if (compactions === 2) return "accent";
-	if (compactions === 3) return "warning";
-	return "error";
-}
-
 export function durationStatusColor(state: TurnTimerState): ThemeColor {
 	if (state === "working") return "accent";
 	if (state === "done") return "success";

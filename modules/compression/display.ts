@@ -295,7 +295,9 @@ export interface CompressionDisplayReporter {
 /**
  * 展示呈现（渲染器 + 可见条目过滤）：宿主对每个带渲染器的 custom 条目都会调渲染器，
  * 所以按「可见条目 id」过滤——只有最新追加的展示条目被渲染，旧条目保留用于恢复
- * 与审计（不重放）。native owner 从不追加条目，故无任何扩展展示（互斥）。
+ * 与审计（不重放）。正常进行中 / 成功 / 恢复成功状态由宿主原生状态行表达，只有
+ * 失败、保护等需要用户处理的状态在消息区渲染。native owner 从不追加条目，故无
+ * 任何扩展展示（互斥）。
  */
 export interface DisplayPresentation {
   readonly controller: DisplayController;
@@ -330,6 +332,18 @@ export function createDisplayPresentation(): DisplayPresentation {
           if (entry.id !== undefined && entry.id !== visibleEntryId) return undefined;
           const data = entry.data;
           if (!data || !data.owner || !data.mode || !data.state) return undefined;
+          // 成功、进行中和恢复中的生命周期由宿主原生状态行表达；只有失败、保护等
+          // 需要用户处理的状态保留在消息区域，避免常规压缩产生重复对话消息。
+          if (
+            data.state === "in-progress" ||
+            data.state === "succeeded" ||
+            data.state === "expired" ||
+            data.state === "concluded" ||
+            data.state === "recovering" ||
+            data.state === "recovery-succeeded"
+          ) {
+            return undefined;
+          }
           const label = displayEntryLabel(data, t);
           if (!label) return undefined;
           return new Text(label, 1, 0);
