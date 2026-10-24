@@ -3,8 +3,8 @@
 // 装配职责：
 // - 解析本模块配置节，配置问题经会话启动提示逐项呈现（工单 01 口径不变）；
 // - 注册统一压缩调度器的 session_before_compact handler（工单 03 起模块内唯一的
-//   压缩 owner 入口）：压缩准备开始时按当前模型解析策略——native/auto 全部交回
-//   Pi，native/manual 只放行手动 /compact、取消 threshold/overflow 自动压缩；
+//   压缩 owner 入口）：压缩准备开始时按当前模型解析策略——native 全部交回
+//   Pi，Codex / ACP 由对应 owner 接管；
 // - 工单 04 起 Codex owner 注入调度器（owners）：白名单命中的模型由
 //   owner 按 resolve→preflight→prepare→commit→event result→projection→
 //   finalize 状态机处置；同时注册 owner 自己的投影接缝（context /
@@ -279,8 +279,6 @@ export function registerCompression(context: ModuleContext): void {
 
   context.pi.on("session_start", async (_event, ctx) => {
     // 新会话开始：清空上一会话的调度诊断去重与状态行残留；绑定 ACP 运行态。
-    // beginSession 内含生命周期边界的策略重新解析诊断（工单 11：resume / fork /
-    // 宿主重载都以 session_start 到达，noteworthy 的解析给一行 info）
     // 工单 05：会话切换与新会话也以 session_start 到达，会话覆盖在此复位
     sessionCompressionOverride.reset();
     // 工单 06：降级记录不跨会话（复位降级，不动下面已复位的会话覆盖语义）

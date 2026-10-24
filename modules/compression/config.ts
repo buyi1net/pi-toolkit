@@ -1,7 +1,7 @@
 // 压缩模块的配置节解析（工单 01 骨架 + 工单 02 规则扩展）。
 //
 // 配置落点：pi-toolkit.json 的 `modules.compression` 节，带独立 schemaVersion。
-// 菜单 schema 只放开关和有限枚举（enabled / defaultMode / nativeTrigger /
+// 菜单 schema 只放开关和有限枚举（enabled / defaultMode /
 // acpAutoDetect，经 kit 的 schema 规范化）；schemaVersion、modelRules、
 // acpAutoDetectThreshold 等结构化字段由本解析器校验。
 //
@@ -29,7 +29,6 @@ import {
   DEFAULT_COMPRESSION_MODES,
   DEFAULT_COMPRESSION_SETTINGS,
   EMPTY_ACP_ADVANCED_SETTINGS,
-  NATIVE_TRIGGER_POLICIES,
   type AcpAdvancedSettings,
   type AcpCompressField,
   type AcpCompressOverrides,
@@ -42,7 +41,6 @@ import {
   type CompressionModelRule,
   type CompressionSettings,
   type DefaultCompressionMode,
-  type NativeTriggerPolicy,
 } from "./api.ts";
 
 export interface LoadedCompressionSettings {
@@ -813,7 +811,7 @@ export function readDefaultCompressionMode(
  *
  * 版本闸在前：schemaVersion 缺省按当前版本解释；不是正整数、或高于当前支持的版本时，
  * 整节视为无法安全解释，报告问题并全量回退默认（用户写入的规则不会被半解释）。
- * 版本可解释时逐字段校验：defaultMode / nativeTrigger / acpAutoDetect /
+ * 版本可解释时逐字段校验：defaultMode / acpAutoDetect /
  * acpAutoDetectThreshold / acpPreset / acpPresetVersion 非法各自
  * 报告并回退默认（旧版合法的 `defaultMode: "codex"` 走专属迁移提示，见
  * readDefaultCompressionMode），modelRules 逐条校验剔除坏条目，acp 高级配置逐字段校验（非法字段
@@ -861,12 +859,6 @@ export function readCompressionSettings(
   }
 
   const defaultMode = readDefaultCompressionMode(section, problems);
-  const nativeTrigger = readEnumField<NativeTriggerPolicy>(
-    "nativeTrigger",
-    NATIVE_TRIGGER_POLICIES,
-    section,
-    problems,
-  );
   const acpAutoDetect = readBooleanField("acpAutoDetect", section, problems);
   const acpAutoDetectThreshold = readPositiveIntField("acpAutoDetectThreshold", section, problems);
   const acpPreset = parseAcpPreset(section, problems);
@@ -879,7 +871,6 @@ export function readCompressionSettings(
     settings: {
       schemaVersion: COMPRESSION_SCHEMA_VERSION,
       defaultMode,
-      nativeTrigger,
       acpAutoDetect,
       acpAutoDetectThreshold,
       modelRules,

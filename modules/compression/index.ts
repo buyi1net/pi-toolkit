@@ -4,13 +4,13 @@
 // - api.ts：对其它模块开放的静态导出面（类型 / 常量 / 纯函数）；
 // - config.ts：配置节（modules.compression，带独立 schemaVersion）的解析校验；
 //   含工单 10 的 ACP 高级配置（modules.compression.acp）逐字段校验与级联合并；
-// - strategy.ts：策略解析器（纯函数：会话覆盖 → 显式规则 → Codex 自动检测 → ACP 自动检测 → 默认策略）；
+// - strategy.ts：策略解析器（纯函数：当前会话覆盖 → 显式规则 → Codex 自动检测 → ACP 自动检测 → 默认策略）；
 // - rules-editor.ts：模型规则编辑器（从模型目录选完整身份，kit 事务落盘）；
 // - acp-editor.ts：ACP 高级设置编辑页（阈值/枚举/分组子页，kit 事务落盘）；
 // - codex-settings-panel.ts：Codex 模式管理页（官方订阅分组 + 手动添加分组 + 添加模型）；
 // - settings-panel.ts：二级设置页（工单 01：总开关 + 动态重建行集；工单 05：当前
 //   会话覆盖与全局默认两值枚举；一级菜单只保留一行入口）；
-// - session-override.ts：当前会话覆盖的内存单例（工单 05：不写盘，会话边界复位）；
+// - session-override.ts：当前会话覆盖的内存单例（只在当前会话内生效，不落盘）；
 // - status.ts：压缩状态服务（工单 04：`compression.status` 只读句柄、状态快照与标签）；
 // - menu.ts：一级唯一入口行与设置页里的模型规则、ACP 高级设置、当前模型策略诊断行；
 // - scheduler.ts：统一压缩调度器（session_before_compact 的唯一 owner 入口；
@@ -21,8 +21,8 @@
 // - messages/：本模块三语键表（自包含）；
 // - UPSTREAM.md：上游来源与许可证登记（codex / acp 实现的引入依据）。
 //
-// 本单验收：统一调度器成为唯一压缩 owner、native 两种触发策略的事件矩阵符合
-// Pi 1.3.0 契约、取消后不写错误 summary、native 模式零第三方上下文修改。
+// 本单验收：统一调度器成为唯一压缩 owner、未命中规则时 native 完全交给 Pi、取消后不写错误 summary、
+// native 模式零第三方上下文修改。
 
 import {
   enabledField,
@@ -40,7 +40,6 @@ import {
 
 import { buildCompressionTopItems } from "./menu.ts";
 import { registerCompression } from "./mod.ts";
-import { COMPRESSION_NATIVE_TRIGGER_FIELD } from "./settings-panel.ts";
 
 export {
   ACP_COMPRESS_FIELDS,
@@ -56,7 +55,6 @@ export {
   DEFAULT_ACP_CONTEXT_WINDOW_THRESHOLD,
   DEFAULT_CODEX_PROTOCOL,
   EMPTY_ACP_ADVANCED_SETTINGS,
-  NATIVE_TRIGGER_POLICIES,
   // 工单 03：ACP 推荐预设
   ACP_PRESETS,
   ACP_PRESET_VERSION,
@@ -78,7 +76,6 @@ export type {
   CompressionModelRule,
   CompressionSettings,
   ModelIdentity,
-  NativeTriggerPolicy,
   // 工单 03：ACP 推荐预设
   AcpPreset,
 } from "./api.ts";
@@ -265,11 +262,7 @@ export {
 } from "./api.ts";
 export type { DefaultCompressionMode, SessionCompressionOverride } from "./api.ts";
 export { isSessionCompressionOverride, sessionCompressionOverride } from "./session-override.ts";
-export {
-  ROW_DEFAULT_MODE,
-  ROW_NATIVE_TRIGGER,
-  ROW_SESSION_OVERRIDE,
-} from "./settings-panel.ts";
+export { ROW_DEFAULT_MODE, ROW_SESSION_OVERRIDE } from "./settings-panel.ts";
 // ── 工单 06：降级记账与 fallback 清除总线 ──
 export { createCompressionFallbackLedger } from "./fallback.ts";
 export type { CompressionFallbackLedger } from "./fallback.ts";
@@ -289,8 +282,7 @@ const COMPRESSION_CONFIG_SCHEMA: ModuleConfigSchema = {
   // 不声明后该键原值透传给本模块的解析器（readDefaultCompressionMode：两值枚举 +
   // 旧值迁移提示），菜单/设置页仍由 settings-panel.ts 的 COMPRESSION_DEFAULT_MODE_FIELD
   // 给出两值与文案。
-  // nativeTrigger 没有遗留取值问题，继续按 schema 规范化。
-  nativeTrigger: COMPRESSION_NATIVE_TRIGGER_FIELD,
+  // 旧配置中的 nativeTrigger 由解析器忽略，native 触发权归 Pi 原生设置。
   acpAutoDetect: {
     default: DEFAULT_ACP_AUTO_DETECT_ENABLED,
     labelKey: "module.compression.acpAutoDetect.label",

@@ -4,13 +4,8 @@
 // 职责（规格「压缩所有权与现有接缝」「所有者生命周期与失败回退」）：
 // - 每次压缩准备开始（session_before_compact）时，用当前会话模型身份 + 配置节
 //   经 resolveCompressionStrategy 解析策略，按解析结果决定单一 owner 与事件行为；
-//   resume / fork / 宿主重载都以 session_start 到达：beginSession 用当前模型重新
-//   解析一次并给 noteworthy 解析一行诊断；会话内解析结果变化（模型切换/配置
-//   实时变更）在事件边界检测并一次性提示（工单 11）；
-// - native 是内建实现：auto 触发策略下 manual / threshold / overflow 三种
-//   reason 全部空结果交回 Pi；manual 触发策略下 manual 交回 Pi、threshold 与
-//   overflow 返回取消（取消后不写入任何 summary，诊断告知需手动 /compact 或新建
-//   会话，不是故障）；
+//   会话内解析结果变化（模型切换/配置实时变更）在事件边界检测并一次性提示（工单 11）；
+// - native 是内建实现：Pi 的 native 设置负责自动压缩与手动 /compact，调度器只旁路；
 // - 模块关闭（enabled=false，工单 01）：调度整体旁路——无私态的会话放行 Pi
 //   原生压缩；探测到活动私态时只取消本次压缩并警告（工单 06 把两条探测的
 //   措辞与去重收口在本文件）；
@@ -36,7 +31,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Translator } from "../../i18n/index.ts";
 import { ENABLED_FIELD, type ModuleConfigRecord } from "../../kit/module.ts";
-import type { CompressionMode, NativeTriggerPolicy, SessionCompressionOverride } from "./api.ts";
+import type { CompressionMode, SessionCompressionOverride } from "./api.ts";
 import { readCompressionSettings } from "./config.ts";
 import {
   foreignCheckpointIdentity,
@@ -47,7 +42,6 @@ import {
 import {
   compressionModeLabel,
   compressionSourceLabel,
-  formatResolutionDiagnosis,
 } from "./messages/index.ts";
 import { modelIdentityFromModel } from "./rules-editor.ts";
 import { resolveCompressionStrategy, type CompressionStrategyResolution } from "./strategy.ts";
@@ -84,10 +78,8 @@ export interface CompactSchedulingDecision {
   readonly ownerStatus: CompactOwnerStatus;
   /** 事件处置 */
   readonly outcome: CompactEventOutcome;
-  /** 生效触发策略（ownerMode=native 时携带；codex/acp 固定 auto） */
-  readonly triggerPolicy?: NativeTriggerPolicy;
-  /** 取消的机读原因（outcome=cancel 时携带） */
-  readonly cancelledBecause?: "manual-policy";
+  /** Pi native 与 Codex/ACP owner 的实际处置，native 默认完全放行给 Pi。 */
+  readonly triggerPolicy?: "auto";
 }
 
 /**
@@ -114,14 +106,12 @@ const BUILTIN_OWNER_MODES: readonly CompressionMode[] = ["native"];
  * 单一 owner 判定 + 事件处置决策（纯函数，测试与调度器共用）：
  * - 无解析结果（无会话模型）→ native / unresolved / pass-through；
  * - codex / acp 且无对应 owner 实现单元 → unimplemented / pass-through；
- * - native + auto 触发策略 → 三种 reason 全部 pass-through（保留 Pi 原生阈值、
- *   溢出恢复与手动 /compact）；
- * - native + manual 触发策略 → manual 事件 pass-through（继续 Pi 原生压缩），
- *   threshold / overflow 事件 cancel（自动压缩按策略取消）。
+ * - native 是内建实现：三种 reason 全部空结果交回 Pi，保留 Pi 原生的自动阈值、
+ *   溢出恢复与手动 /compact；
  */
 export function decideCompactHandling(
   resolution: CompressionStrategyResolution | undefined,
-  reason: CompactEventReason,
+  _reason: CompactEventReason,
   owners: ReadonlyMap<CompressionMode, CompactOwnerModule> = new Map(),
 ): CompactSchedulingDecision {
   if (resolution === undefined) {
@@ -133,20 +123,11 @@ export function decideCompactHandling(
     return { ownerMode: resolution.mode, ownerStatus: "unimplemented", outcome: "pass-through" };
   }
   if (resolution.mode === "native") {
-    if (resolution.triggerPolicy === "manual" && reason !== "manual") {
-      return {
-        ownerMode: "native",
-        ownerStatus: "implemented",
-        outcome: "cancel",
-        triggerPolicy: resolution.triggerPolicy,
-        cancelledBecause: "manual-policy",
-      };
-    }
     return {
       ownerMode: "native",
       ownerStatus: "implemented",
       outcome: "pass-through",
-      triggerPolicy: resolution.triggerPolicy,
+      triggerPolicy: "auto",
     };
   }
   // codex / acp owner 已注入（工单 04/08 后）：处置交 owner 决定，调度器先行放行
@@ -155,11 +136,6 @@ export function decideCompactHandling(
 
 /** 压缩模块在状态行的 key（取消自动压缩后的常驻提示，手动 /compact 后清除） */
 export const COMPRESSION_STATUS_KEY = "pi-toolkit.compression";
-
-/** 解析结果是否值得在会话边界提示（默认 native 且无回退原因的会话保持安静） */
-function resolutionNoteworthy(resolution: CompressionStrategyResolution): boolean {
-  return resolution.mode !== "native" || resolution.source !== "default" || resolution.fallbackReason !== undefined;
-}
 
 export interface CompressionSchedulerOptions {
   /** 宿主实时译者（模块键表收窄在 messages/） */
@@ -207,8 +183,6 @@ export function createCompressionScheduler(
   }
   const t = options.t;
   let notifiedSignature: string | undefined;
-  /** 工单 08：重解析诊断改为内部诊断隔离（trackResolutionChange 为空接缝），
-   *  会话内不再跟踪上一次解析结果；session_start 的边界诊断不依赖它 */
 
   const notify = (ctx: ExtensionContext, message: string, level: "info" | "warning" | "error"): void => {
     if (ctx.hasUI) ctx.ui.notify(message, level);
@@ -216,17 +190,6 @@ export function createCompressionScheduler(
   const setStatus = (ctx: ExtensionContext, text: string | undefined): void => {
     if (ctx.hasUI) ctx.ui.setStatus(COMPRESSION_STATUS_KEY, text);
   };
-
-  /** 当前模型 × 配置的实时解析（压缩事件与会话边界共用同一接缝） */
-  function resolveCurrent(ctx: ExtensionContext): CompressionStrategyResolution | undefined {
-    if (!ctx.model) return undefined;
-    const { settings } = readCompressionSettings(options.getConfig());
-    return resolveCompressionStrategy(
-      modelIdentityFromModel(ctx.model),
-      settings,
-      options.readSessionOverride?.(),
-    );
-  }
 
   /** 模块总开关（实时读配置：设置页可在会话中途打开/关闭） */
   function compressionEnabled(): boolean {
@@ -355,17 +318,6 @@ export function createCompressionScheduler(
     return resolution ? `${resolution.mode}|${resolution.source}` : "native|unresolved";
   }
 
-  function decisionSignature(decision: CompactSchedulingDecision, reason: CompactEventReason): string {
-    return JSON.stringify([
-      decision.ownerMode,
-      decision.ownerStatus,
-      decision.outcome,
-      decision.triggerPolicy ?? null,
-      decision.cancelledBecause ?? null,
-      reason,
-    ]);
-  }
-
   /**
    * 关闭态的压缩事件处置接缝（工单 01）：模块关闭后压缩调度整体旁路——没有活动
    * 私态（Codex checkpoint / ACP sidecar / 外部扩展声明）的会话直接放行 Pi 原生
@@ -422,26 +374,7 @@ export function createCompressionScheduler(
       // 生命周期边界（工单 11）：重新解析结果变化不再发对话消息（工单 08 内部诊断隔离）
       trackResolutionChange(ctx, resolution);
 
-      if (decision.outcome === "cancel") {
-        // 取消自动压缩：不写入任何 summary（Pi 契约下宿主只发 aborted 事件），
-        // 诊断要让用户知道需要手动 /compact 或新建会话——这不是故障
-        const signature = decisionSignature(decision, event.reason);
-        if (signature !== notifiedSignature) {
-          notifiedSignature = signature;
-          notify(
-            ctx,
-            t("module.compression.schedule.cancelled", {
-              reason: t(`module.compression.reason.${event.reason}`),
-              diagnosis: resolution ? formatResolutionDiagnosis(resolution, t) : "",
-            }),
-            "info",
-          );
-        }
-        setStatus(ctx, t("module.compression.schedule.status"));
-        return { cancel: true };
-      }
-
-      // 空结果交回 Pi（含 owner 未实现与无模型的防御路径）：清掉取消提示残留
+      // 空结果交回 Pi（含 owner 未实现与无模型的防御路径）：清掉保护提示残留
       setStatus(ctx, undefined);
 
       if (decision.ownerStatus === "implemented" && decision.ownerMode === "native") {
@@ -514,28 +447,6 @@ export function createCompressionScheduler(
     beginSession(ctx: ExtensionContext): void {
       notifiedSignature = undefined;
       setStatus(ctx, undefined);
-      // 关闭态：不做策略解析诊断（模块已整体旁路，由设置页展示开关状态）
-      if (!compressionEnabled()) return;
-      // 生命周期边界的重新解析诊断（工单 11）：resume / fork / 宿主重载都以
-      // session_start 到达——用当前模型实时解析一次策略， noteworthy 的解析
-      // 给一行 info（默认 native 会话保持安静）。工单 08 只隔离事件边界的
-      // trackResolutionChange 重解析诊断；会话启动的模式通告不属于工单 08
-      // 列举的「命中规则、接口、上下文窗口、协议」内部诊断范畴，保留不变。
-      // 解析失败不击穿会话启动（配置问题由配置节诊断另行呈现）
-      try {
-        const resolution = resolveCurrent(ctx);
-        if (resolution && resolutionNoteworthy(resolution)) {
-          notify(
-            ctx,
-            t("module.compression.lifecycle.sessionStart", {
-              diagnosis: formatResolutionDiagnosis(resolution, t),
-            }),
-            "info",
-          );
-        }
-      } catch {
-        // 解析失败不击穿会话启动（工单 08：不再跟踪 lastResolution）
-      }
     },
   };
 }

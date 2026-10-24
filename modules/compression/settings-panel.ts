@@ -2,16 +2,14 @@
 // 唯一入口行打开的设置页。
 //
 // 设计口径（规格「二级面板状态机与动态重构机制」）：
-// - 行集合每次重建：`enabled === false` 时只剩总开关一行，用户一眼看出「已彻底
-//   退回 Pi 原生」；`enabled === true` 时按规格最终行序渲染——总开关 → 当前会话
-//   覆盖 → 全局默认模式 →（仅默认模式为 native 时）native 触发策略 → Codex 模式
-//   管理入口 → ACP 管理入口 → 工具行（模型规则入口 / 当前模型诊断，由 menu.ts 提供）；
-// - 磁盘配置写盘时序（enabled / defaultMode / nativeTrigger）：先 await saveConfig，
+// - 行集合每次重建：`enabled === false` 时只剩总开关一行；`enabled === true` 时按规格
+//   最终行序渲染——总开关 → 当前会话覆盖 → 全局默认模式 → Codex 模式管理入口 →
+//   ACP 管理入口 → 工具行；
+// - 磁盘配置写盘时序（enabled / defaultMode）：先 await saveConfig，
 //   成功才重建行集 + 请求重绘；失败提示错误、把行显示回滚成保存前的值，面板结构
 //   保持原样（不重建）；
 // - 当前会话覆盖是纯内存状态（session-override.ts）：切换只重建行集 + 重绘，不写盘、
-//   不进配置事务；选 codex 时先校验当前模型的 Responses 资格，不满足则拒绝变更、
-//   恢复前值并提示原因。
+//   不进配置事务；当前模型不具备 Codex 资格时隐藏 Codex 档位，运行期复核失败时静默摘掉该档位。
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SettingItem, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
@@ -32,10 +30,8 @@ import {
 import {
   DEFAULT_COMPRESSION_MODES,
   DEFAULT_SESSION_COMPRESSION_OVERRIDE,
-  NATIVE_TRIGGER_POLICIES,
   SESSION_COMPRESSION_OVERRIDES,
   type DefaultCompressionMode,
-  type NativeTriggerPolicy,
   type SessionCompressionOverride,
 } from "./api.ts";
 import {
@@ -43,7 +39,6 @@ import {
   readModelCodexCapability,
   type CodexCapability,
 } from "./codex/capability.ts";
-import { codexCapabilityLabel } from "./codex-settings-panel.ts";
 import { isSessionCompressionOverride } from "./session-override.ts";
 
 /** 一级菜单唯一入口行 id（topLevel 钩子返回这一行） */
@@ -56,8 +51,6 @@ export const ROW_ENABLED = "compression.enabled";
 export const ROW_SESSION_OVERRIDE = "compression.sessionOverride";
 /** 全局默认压缩模式行 id（工单 05）：两值枚举的就地切换行 */
 export const ROW_DEFAULT_MODE = "compression.defaultMode";
-/** native 触发策略行 id（工单 05）：只在全局默认模式为 native 时插入 */
-export const ROW_NATIVE_TRIGGER = "compression.nativeTrigger";
 
 /** 模块总开关字段（与 schema 同源：面板行与落盘校验共用同一份定义） */
 const COMPRESSION_ENABLED_FIELD: ConfigField = enabledField(
@@ -77,18 +70,6 @@ export const COMPRESSION_DEFAULT_MODE_FIELD: ConfigField = {
   valueLabelKeys: {
     native: "module.compression.defaultMode.value.native",
     acp: "module.compression.defaultMode.value.acp",
-  },
-};
-
-/** native 触发策略字段（工单 05 落进设置页；schema 与设置页共用同一份定义） */
-export const COMPRESSION_NATIVE_TRIGGER_FIELD: ConfigField = {
-  default: "manual",
-  values: [...NATIVE_TRIGGER_POLICIES],
-  labelKey: "module.compression.nativeTrigger.label",
-  descriptionKey: "module.compression.nativeTrigger.description",
-  valueLabelKeys: {
-    auto: "module.compression.nativeTrigger.value.auto",
-    manual: "module.compression.nativeTrigger.value.manual",
   },
 };
 
@@ -132,9 +113,8 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 全局默认模式与 native 触发策略在配置节里的字段名（落盘补丁与读取共用一个常量） */
+/** 全局默认模式在配置节里的字段名。 */
 const DEFAULT_MODE_FIELD = "defaultMode";
-const NATIVE_TRIGGER_FIELD = "nativeTrigger";
 
 /** 模块总开关的当前取值（非法/缺省按默认 true 处理，与装配器的解析口径一致） */
 export function compressionEnabledValue(section: ModuleConfigRecord): boolean {
@@ -145,12 +125,6 @@ export function compressionEnabledValue(section: ModuleConfigRecord): boolean {
 function compressionDefaultModeValue(section: ModuleConfigRecord): DefaultCompressionMode {
   const normalized = normalizeConfigValue(COMPRESSION_DEFAULT_MODE_FIELD, section[DEFAULT_MODE_FIELD]);
   return normalized === "acp" ? "acp" : "native";
-}
-
-/** native 触发策略当前值（非法或缺失按 schema 默认 manual） */
-function compressionNativeTriggerValue(section: ModuleConfigRecord): NativeTriggerPolicy {
-  const normalized = normalizeConfigValue(COMPRESSION_NATIVE_TRIGGER_FIELD, section[NATIVE_TRIGGER_FIELD]);
-  return normalized === "auto" ? "auto" : "manual";
 }
 
 /** 一级入口行的值位文案：只有 开 / 关 两态（规格：一级不堆模式与诊断文本） */
@@ -176,7 +150,7 @@ export interface CompressionSettingsRowsOptions {
  * 面板行集合（纯函数：面板与测试共用同一份结构定义）。
  * 总开关永远是第一行；关闭时到此为止——下方所有配置项一律隐藏。
  * 启用态按规格最终行序：总开关 → 当前会话覆盖 → 全局默认模式 →
- * （仅 native 时的）native 触发策略 → Codex 模式管理 → ACP 管理入口 → 工具行。
+ * Codex 模式管理 → ACP 管理入口 → 工具行。
  */
 export function buildCompressionSettingsRows(options: CompressionSettingsRowsOptions): SettingItem[] {
   const { t, section } = options;
@@ -203,17 +177,6 @@ export function buildCompressionSettingsRows(options: CompressionSettingsRowsOpt
       current: section[DEFAULT_MODE_FIELD],
     }),
   );
-  // 原生触发策略只对 native 有意义：默认模式选 acp 时剔除整行（规格动态联动）
-  if (compressionDefaultModeValue(section) === "native") {
-    rows.push(
-      schemaFieldRow({
-        t,
-        id: ROW_NATIVE_TRIGGER,
-        field: COMPRESSION_NATIVE_TRIGGER_FIELD,
-        current: section[NATIVE_TRIGGER_FIELD],
-      }),
-    );
-  }
   // 工单 02 的 Codex 模式管理入口；工单 03 的 ACP 管理页与工单 07 的工具行随 detailRows
   // （detailRows 自带 ACP 管理入口，恰好接在 Codex 入口之后）
   if (options.codexManagementRow) rows.push(options.codexManagementRow);
@@ -236,6 +199,8 @@ export interface CompressionSettingsPanelOptions {
   readonly detailRows: () => readonly SettingItem[];
   /** 工单 02：Codex 模式管理入口行（每次重建重读，值位跟随配置） */
   readonly codexManagementRow: () => SettingItem;
+  /** 当前模型的 Codex 档位是否可用；缺省保持纯行构造的兼容行为 */
+  readonly codexOverrideAvailable?: boolean;
   /** 工单 05：当前会话覆盖读口（内存态） */
   readonly readSessionOverride: () => SessionCompressionOverride;
   /** 工单 05：当前会话覆盖写口（只改内存，不经过配置事务） */
@@ -253,7 +218,7 @@ export class CompressionSettingsPanel {
   private readonly options: CompressionSettingsPanelOptions;
   private list: I18nSettingsList | undefined;
   private items: readonly SettingItem[] = [];
-  /** 本次面板里 Codex 档位已被拒：从枚举里摘掉，避免取值循环卡在它前面 */
+  /** 本次面板里 Codex 资格复核失败：从枚举里摘掉，避免用户再次选到无效档位 */
   private codexOverrideRejected = false;
 
   constructor(options: CompressionSettingsPanelOptions) {
@@ -296,14 +261,19 @@ export class CompressionSettingsPanel {
 
   /** 行集合重建：配置或会话覆盖变了就整份换掉（关闭时只剩总开关一行） */
   rebuildItems(selectId?: string): void {
-    const sessionOverride = this.options.readSessionOverride();
+    let sessionOverride = this.options.readSessionOverride();
+    if (sessionOverride === "codex" && this.options.codexOverrideAvailable === false) {
+      // 模型切到不具备 Codex 资格的会话时，清掉已经失效的会话覆盖，避免显示一个不存在的档位。
+      this.options.writeSessionOverride(DEFAULT_SESSION_COMPRESSION_OVERRIDE);
+      sessionOverride = DEFAULT_SESSION_COMPRESSION_OVERRIDE;
+    }
+    const codexOverrideAvailable =
+      this.options.codexOverrideAvailable !== false && !this.codexOverrideRejected;
     this.items = buildCompressionSettingsRows({
       t: this.options.t,
       section: this.options.getSection(),
       sessionOverride,
-      // 已被拒时不提供 Codex（否则前进式换档永远转不出 acp）；当前值已是 Codex
-      // 时要保留它，值位才能显示文案，而且它的下一档就是跟随全局
-      codexOverrideAvailable: sessionOverride === "codex" || !this.codexOverrideRejected,
+      codexOverrideAvailable,
       codexManagementRow: this.options.codexManagementRow(),
       detailRows: this.options.detailRows(),
     });
@@ -326,7 +296,7 @@ export class CompressionSettingsPanel {
   }
 
   /**
-   * 改动分发：会话覆盖只改内存；三个磁盘行（总开关 / 默认模式 / native 触发策略）
+   * 改动分发：会话覆盖只改内存；两个磁盘行（总开关 / 默认模式）
    * 走「先 await saveConfig，成功才重建结构」的同一份时序。没列出的行会被静默
    * return，而原生列表已乐观更新显示——表现为「改了没保存」，新增行必须补分支。
    */
@@ -341,16 +311,6 @@ export class CompressionSettingsPanel {
         DEFAULT_MODE_FIELD,
         COMPRESSION_DEFAULT_MODE_FIELD,
         compressionDefaultModeValue(this.options.getSection()),
-        value,
-      );
-      return;
-    }
-    if (id === ROW_NATIVE_TRIGGER) {
-      await this.saveDiskRow(
-        id,
-        NATIVE_TRIGGER_FIELD,
-        COMPRESSION_NATIVE_TRIGGER_FIELD,
-        compressionNativeTriggerValue(this.options.getSection()),
         value,
       );
       return;
@@ -391,9 +351,8 @@ export class CompressionSettingsPanel {
 
   /**
    * 当前会话覆盖的就地切换（规格「会话级覆盖」）：不写盘、不进配置事务，改完只
-   * 重建行集与重绘。选 codex 时先校验当前模型的 Responses 资格：不满足则拒绝变更、
-   * 把行显示恢复前值并给原因（资格口径见 codex/capability.ts）。拒绝后同一次面板里
-   * 不再提供 Codex 档位——枚举行只能向前换档，一个永远被拒的档位会把循环卡在它前面。
+   * 重建行集与重绘。选 codex 时先做当前模型资格复核；不满足则静默摘掉 Codex 档位，
+   * 不改变当前覆盖值，不向用户弹出重复的拒绝提示。
    */
   private async applySessionOverride(value: string): Promise<void> {
     const t = this.options.t;
@@ -404,11 +363,10 @@ export class CompressionSettingsPanel {
       return;
     }
     if (next === "codex") {
-      const rejection = await this.codexOverrideRejection(previous);
-      if (rejection !== undefined) {
+      const available = await this.codexOverrideAvailableForCurrentModel();
+      if (!available) {
         this.codexOverrideRejected = true;
-        this.options.context.ui.notify(rejection, "warning");
-        // 重建而不是就地回滚：行要重新从内存值渲染，同时把不可用的 Codex 档位摘掉
+        // 重建而不是就地回滚：当前覆盖值保持不变，Codex 档位从循环中摘掉
         this.rebuildItems(ROW_SESSION_OVERRIDE);
         this.options.requestRender();
         return;
@@ -419,23 +377,15 @@ export class CompressionSettingsPanel {
     this.options.requestRender();
   }
 
-  /** Codex 覆盖的资格校验：不满足时返回拒绝原因文案（已带上前值与具体原因） */
-  private async codexOverrideRejection(previous: string): Promise<string | undefined> {
-    const t = this.options.t;
+  /** 当前模型的 Codex 资格复核：不具备资格时只影响菜单枚举，不产生用户提示 */
+  private async codexOverrideAvailableForCurrentModel(): Promise<boolean> {
     const model = this.options.context.model;
-    if (!model) {
-      return t("module.compression.sessionOverride.noModel", { previous });
-    }
+    if (!model) return false;
     const capability = await this.readCodexCapability(model);
-    if (capability.capable) return undefined;
-    return t("module.compression.sessionOverride.codexUnavailable", {
-      reason: codexCapabilityLabel(capability, t),
-      previous,
-    });
+    return capability.capable;
   }
 
-  /**
-   * 资格探测：有模型注册表时走带鉴权的完整探测（与 Codex 管理页同口径）；宿主没提供
+  /** 资格探测：有模型注册表时走带鉴权的完整探测（与 Codex 管理页同口径）；宿主没提供
    * 注册表时退回纯地址判定（不取 auth，不抛错）。口径按官方链路（codex/capability.ts）：
    * 中转站即便声明 openai-responses 也不放行——服务端 checkpoint 只有官方链路可靠；
    * 这类模型要 Codex 请走显式规则（Codex 管理页添加），那条路径属 `explicit` 来源。

@@ -2,7 +2,7 @@
 //
 // 快照是派生结果（除 revision 与工单 06 的降级记录外不单独记账）：
 // - 总开关关闭 → disabled；没有会话模型 → unavailable；其余按策略解析器（与菜单
-//   诊断、调度器同一口径）得到 active 的 effectiveMode / triggerPolicy / source；
+//   诊断、调度器同一口径）得到 active 的 effectiveMode / source；
 // - 降级记录（工单 06 写入）存在 → fallback，effectiveMode 取降级后真正在工作的
 //   Pi 原生；降级来源与原因保留在状态快照中，Footer 只显示实际生效的 Cmp:* 标签；
 // - revision 在读快照时按内容比较维护（工单 18 的句柄惯例：内容变化才递增，读快照
@@ -57,7 +57,8 @@ type CompressionStatusContent = Omit<CompressionStatusSnapshot, "revision">;
 
 /**
  * 状态标签（规格「状态标签格式化输出」）：disabled / unavailable 不显示；
- * native 显示 Pi 原生压缩的触发策略，Codex / ACP 显示实际压缩 owner。
+ * native 显示 `Cmp:auto`，因为自动/手动触发由 Pi 原生设置控制；Codex / ACP 显示
+ * 实际压缩 owner。
  * 标签固定使用 `Cmp:*` 形式，宽窄屏保持同一语义，避免窄屏把模式压缩成用户无法
  * 判断的单字符缩写。
  */
@@ -68,7 +69,7 @@ export function formatCompressionStatusLabel(
   if (snapshot.status === "disabled" || snapshot.status === "unavailable") return "";
   switch (snapshot.effectiveMode) {
     case "native":
-      return `Cmp:${snapshot.triggerPolicy === "manual" ? "manual" : "auto"}`;
+      return "Cmp:auto";
     case "acp":
       return "Cmp:ACP";
     case "codex":
@@ -94,7 +95,7 @@ function deriveContent(options: CompressionStatusServiceOptions): CompressionSta
       effectiveMode: "native",
       fallbackFrom: fallback.from,
       fallbackReason: fallback.reason,
-      triggerPolicy: settings.nativeTrigger,
+      triggerPolicy: "auto",
       source: resolution.source,
     };
   }

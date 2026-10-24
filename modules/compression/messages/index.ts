@@ -24,7 +24,7 @@ import type {
 const EN = {
   "module.compression.label": "Model compression",
   "module.compression.description":
-    "Own model compression policy for pi-toolkit: master switch, default mode, native trigger policy and Codex/ACP model rules",
+    "Own model compression policy for pi-toolkit: master switch, default mode and Codex/ACP model rules",
   "module.compression.enabled.label": "Enable compression module",
   "module.compression.enabled.description":
     "When off, the module bypasses scheduling, context projection and request rewriting: sessions without active Codex/ACP private state keep Pi-native compaction",
@@ -34,12 +34,6 @@ const EN = {
     "Global fallback used when no explicit model rule matches: Pi native or ACP compression. Codex is never a global default — official models enter Codex automatically; relays and custom models can be added in Codex mode",
   "module.compression.defaultMode.value.native": "Pi native",
   "module.compression.defaultMode.value.acp": "ACP",
-
-  "module.compression.nativeTrigger.label": "Native trigger policy",
-  "module.compression.nativeTrigger.description":
-    "Applies to native mode: auto keeps Pi threshold compaction and overflow recovery, manual only reacts to /compact",
-  "module.compression.nativeTrigger.value.auto": "Auto",
-  "module.compression.nativeTrigger.value.manual": "Manual only",
 
   "module.compression.mode.native": "Pi native",
   "module.compression.mode.codex": "Codex",
@@ -107,9 +101,6 @@ const EN = {
   "module.compression.reason.threshold": "context threshold",
   "module.compression.reason.overflow": "context overflow recovery",
 
-  "module.compression.schedule.cancelled":
-    "Automatic compaction cancelled ({reason} trigger) by the manual-only policy: run /compact yourself or start a new session when needed — the policy is working, not a failure. Current policy: {diagnosis}",
-  "module.compression.schedule.status": "Auto compaction off (manual-only): /compact or new session when needed",
   "module.compression.schedule.ownerUnimplemented":
     "Current model resolved to {mode} ({source}), but that compression owner is not implemented yet; this compaction continues with Pi native. See the compression diagnosis in the /pi-toolkit menu.",
   "module.compression.schedule.handlerError":
@@ -309,8 +300,6 @@ const EN = {
     "Compression config problem: {field} value {value} is not an array of strings; the field was dropped",
 
   // ── 跨模式生命周期与切换保护（工单 11）：独立分组的运行期诊断键 ──
-  "module.compression.lifecycle.sessionStart":
-    "Context compression is active for this session: {diagnosis}",
   "module.compression.lifecycle.reparsed":
     "The session model changed; the compression strategy was re-resolved: {previous} → {diagnosis}",
   "module.compression.lifecycle.protected":
@@ -392,10 +381,6 @@ const EN = {
   "module.compression.sessionOverride.value.native": "Pi native (default)",
   "module.compression.sessionOverride.value.acp": "ACP compression",
   "module.compression.sessionOverride.value.codex": "Codex mode",
-  "module.compression.sessionOverride.codexUnavailable":
-    "This model has no Codex Responses capability ({reason}): the session mode stays {previous}",
-  "module.compression.sessionOverride.noModel":
-    "No model is bound to this session yet, so Codex capability cannot be checked: the session mode stays {previous}",
 
   // ── 工单 06：跨模式保护与 fallback 清除总线 ──
   "module.compression.codex.capabilityRecheck":
@@ -409,7 +394,7 @@ const EN = {
 const ZH_CN: typeof EN = {
   "module.compression.label": "模型压缩",
   "module.compression.description":
-    "pi-toolkit 自己的模型压缩策略：总开关、默认模式、native 触发策略与 Codex/ACP 模型规则",
+    "pi-toolkit 自己的模型压缩策略：总开关、默认模式与 Codex/ACP 模型规则",
   "module.compression.enabled.label": "启用模型压缩模块",
   "module.compression.enabled.description":
     "关闭后模块旁路压缩调度、context 投影与请求改写：没有活动 Codex/ACP 私态的会话继续使用 Pi 原生压缩",
@@ -419,12 +404,6 @@ const ZH_CN: typeof EN = {
     "未命中显式模型规则时使用的全局兜底：系统默认（Pi 原生）或 ACP 压缩。Codex 不能设为全局默认，官方模型自动进入 Codex，中转站与自定义模型可在「Codex 模式」里添加",
   "module.compression.defaultMode.value.native": "Pi 原生",
   "module.compression.defaultMode.value.acp": "ACP",
-
-  "module.compression.nativeTrigger.label": "native 触发策略",
-  "module.compression.nativeTrigger.description":
-    "作用于 native 模式：auto 保留 Pi 的阈值压缩与溢出恢复，manual 只响应手动 /compact",
-  "module.compression.nativeTrigger.value.auto": "自动",
-  "module.compression.nativeTrigger.value.manual": "仅手动",
 
   "module.compression.mode.native": "Pi 原生",
   "module.compression.mode.codex": "Codex",
@@ -491,9 +470,6 @@ const ZH_CN: typeof EN = {
   "module.compression.reason.threshold": "上下文阈值",
   "module.compression.reason.overflow": "上下文溢出恢复",
 
-  "module.compression.schedule.cancelled":
-    "已按「仅手动」策略取消本次自动压缩（{reason} 触发）：需要时请手动执行 /compact 或新建会话——这是策略生效，不是故障。当前策略：{diagnosis}",
-  "module.compression.schedule.status": "自动压缩已按「仅手动」取消：需要时手动 /compact 或新建会话",
   "module.compression.schedule.ownerUnimplemented":
     "当前模型解析为 {mode} 模式（{source}），但该压缩 owner 尚未实现：本次压缩继续使用 Pi 原生实现。策略诊断见 /pi-toolkit 菜单。",
   "module.compression.schedule.handlerError":
@@ -693,8 +669,6 @@ const ZH_CN: typeof EN = {
     "压缩配置问题：{field} 的取值 {value} 不是字符串数组，该字段已剔除",
 
   // ── 跨模式生命周期与切换保护（工单 11）：独立分组的运行期诊断键 ──
-  "module.compression.lifecycle.sessionStart":
-    "上下文压缩已启用（本会话）：{diagnosis}",
   "module.compression.lifecycle.reparsed":
     "会话模型已变化，压缩策略已重新解析：{previous} → {diagnosis}",
   "module.compression.lifecycle.protected":
@@ -768,10 +742,6 @@ const ZH_CN: typeof EN = {
   "module.compression.sessionOverride.value.native": "系统默认 (Pi 原生)",
   "module.compression.sessionOverride.value.acp": "ACP 压缩",
   "module.compression.sessionOverride.value.codex": "Codex 模式",
-  "module.compression.sessionOverride.codexUnavailable":
-    "当前模型不具备 Codex Responses 资格（{reason}）：会话模式保持 {previous}",
-  "module.compression.sessionOverride.noModel":
-    "当前会话还没有绑定模型，无法校验 Codex 资格：会话模式保持 {previous}",
 
   // ── 工单 06：跨模式保护与 fallback 清除总线 ──
   "module.compression.codex.capabilityRecheck":
@@ -785,7 +755,7 @@ const ZH_CN: typeof EN = {
 const ZH_TW: typeof EN = {
   "module.compression.label": "模型壓縮",
   "module.compression.description":
-    "pi-toolkit 自己的模型壓縮策略：總開關、預設模式、native 觸發策略與 Codex/ACP 模型規則",
+    "pi-toolkit 自己的模型壓縮策略：總開關、預設模式與 Codex/ACP 模型規則",
   "module.compression.enabled.label": "啟用模型壓縮模組",
   "module.compression.enabled.description":
     "關閉後模組旁路壓縮排程、context 投影與請求改寫：沒有活動 Codex/ACP 私態的會話繼續使用 Pi 原生壓縮",
@@ -795,12 +765,6 @@ const ZH_TW: typeof EN = {
     "未命中明確模型規則時使用的全域兜底：系統預設（Pi 原生）或 ACP 壓縮。Codex 不能設為全域預設，官方模型自動進入 Codex，中轉站與自訂模型可在「Codex 模式」裡加入",
   "module.compression.defaultMode.value.native": "Pi 原生",
   "module.compression.defaultMode.value.acp": "ACP",
-
-  "module.compression.nativeTrigger.label": "native 觸發策略",
-  "module.compression.nativeTrigger.description":
-    "作用於 native 模式：auto 保留 Pi 的閾值壓縮與溢出恢復，manual 只回應手動 /compact",
-  "module.compression.nativeTrigger.value.auto": "自動",
-  "module.compression.nativeTrigger.value.manual": "僅手動",
 
   "module.compression.mode.native": "Pi 原生",
   "module.compression.mode.codex": "Codex",
@@ -867,9 +831,6 @@ const ZH_TW: typeof EN = {
   "module.compression.reason.threshold": "上下文閾值",
   "module.compression.reason.overflow": "上下文溢出恢復",
 
-  "module.compression.schedule.cancelled":
-    "已按「僅手動」策略取消本次自動壓縮（{reason} 觸發）：需要時請手動執行 /compact 或新建會話——這是策略生效，不是故障。目前策略：{diagnosis}",
-  "module.compression.schedule.status": "自動壓縮已按「僅手動」取消：需要時手動 /compact 或新建會話",
   "module.compression.schedule.ownerUnimplemented":
     "目前模型解析為 {mode} 模式（{source}），但該壓縮 owner 尚未實作：本次壓縮繼續使用 Pi 原生實作。策略診斷見 /pi-toolkit 選單。",
   "module.compression.schedule.handlerError":
@@ -1069,8 +1030,6 @@ const ZH_TW: typeof EN = {
     "壓縮設定問題：{field} 的取值 {value} 不是字串陣列，該欄位已剔除",
 
   // ── 跨模式生命周期與切換保護（工單 11）：獨立分組的運行期診斷鍵 ──
-  "module.compression.lifecycle.sessionStart":
-    "上下文壓縮已啟用（本會話）：{diagnosis}",
   "module.compression.lifecycle.reparsed":
     "會話模型已變化，壓縮策略已重新解析：{previous} → {diagnosis}",
   "module.compression.lifecycle.protected":
@@ -1144,10 +1103,6 @@ const ZH_TW: typeof EN = {
   "module.compression.sessionOverride.value.native": "系統預設 (Pi 原生)",
   "module.compression.sessionOverride.value.acp": "ACP 壓縮",
   "module.compression.sessionOverride.value.codex": "Codex 模式",
-  "module.compression.sessionOverride.codexUnavailable":
-    "當前模型不具備 Codex Responses 資格（{reason}）：會話模式保持 {previous}",
-  "module.compression.sessionOverride.noModel":
-    "當前會話還沒有綁定模型，無法校驗 Codex 資格：會話模式保持 {previous}",
 
   // ── 工单 06：跨模式保护与 fallback 清除总线 ──
   "module.compression.codex.capabilityRecheck":

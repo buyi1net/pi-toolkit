@@ -32,7 +32,6 @@ import {
   type CompressionModelRule,
   type CompressionSettings,
   type ModelIdentity,
-  type NativeTriggerPolicy,
   type SessionCompressionOverride,
 } from "./api.ts";
 import { detectCodexCapability } from "./codex/capability.ts";
@@ -113,8 +112,8 @@ export interface CompressionStrategyResolution {
   readonly profile?: string;
   /** 生效的 Codex 失败策略（mode=codex 时：规则值或 native） */
   readonly onUnsupported?: CodexUnsupportedPolicy;
-  /** 触发策略：native 用配置的 nativeTrigger；codex/acp 接管自动与手动两种压缩事件，固定 auto */
-  readonly triggerPolicy: NativeTriggerPolicy;
+  /** native / Codex / ACP 的触发权由 Pi 原生或接管 owner 决定；策略结果保留统一字段便于诊断。 */
+  readonly triggerPolicy: "auto";
   /** 身份里可用的 contextWindow（已校验；缺失或无效时缺席） */
   readonly contextWindow?: number;
   /** 回退原因（conflict / context-window-missing / invalid-identity）；正常路径缺席 */
@@ -284,7 +283,7 @@ function defaultResolution(
     mode,
     source: "default",
     ...(codex ? { protocol: DEFAULT_CODEX_PROTOCOL, onUnsupported: "native" as const } : {}),
-    triggerPolicy: mode === "native" ? settings.nativeTrigger : "auto",
+    triggerPolicy: "auto",
     ...(contextWindow === undefined ? {} : { contextWindow }),
     ...(fallbackReason === undefined ? {} : { fallbackReason }),
     conflicts: [...conflicts],
@@ -321,7 +320,7 @@ function sessionOverrideResolution(
   return {
     mode: sessionOverride,
     source: "session-override",
-    triggerPolicy: sessionOverride === "native" ? settings.nativeTrigger : "auto",
+    triggerPolicy: "auto",
     ...contextWindow,
     conflicts: [],
   };
@@ -381,7 +380,7 @@ export function resolveCompressionStrategy(
             onUnsupported: params.onUnsupported,
           }
         : {}),
-      triggerPolicy: winner.rule.mode === "native" ? settings.nativeTrigger : "auto",
+      triggerPolicy: "auto",
       ...(normalized.contextWindow === undefined ? {} : { contextWindow: normalized.contextWindow }),
       conflicts: [],
     };

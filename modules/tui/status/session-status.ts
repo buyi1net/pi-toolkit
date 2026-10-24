@@ -62,6 +62,19 @@ function formatCacheHitPercent(percent: number | undefined): string {
 	return safePercent.toFixed(1).replace(/\.0$/, "");
 }
 
+function compressionLabelWithCount(
+	label: CompressionLabelText,
+	compactions: number,
+): CompressionLabelText {
+	const count = Math.floor(safeAmount(compactions));
+	if (!label.text || count <= 0) return label;
+	const suffix = `(${count})`;
+	return {
+		text: `${label.text}${suffix}`,
+		compactText: label.compactText ? `${label.compactText}${suffix}` : "",
+	};
+}
+
 export function buildEditorUsageSegments(
 	snapshot: SessionStatusSnapshot,
 	contextUsage: ContextUsage | undefined,
@@ -141,14 +154,15 @@ export function buildEditorUsageSegments(
 			: theme.fg(turnStatusColor(snapshot.turns), `${glyphs.turns} T${snapshot.turns}`),
 		priority: 6,
 	};
+	const displayedCompressionLabel = compressionLabelWithCount(compressionLabel, snapshot.compactions);
 	const compressionStatus: StatusSegment = {
 		id: "compression",
 		text: nativeFooter
-			? compressionLabel.text
-			: theme.fg(turnStatusColor(snapshot.turns), compressionLabel.text),
+			? displayedCompressionLabel.text
+			: theme.fg(turnStatusColor(snapshot.turns), displayedCompressionLabel.text),
 		compactText: nativeFooter
-			? compressionLabel.compactText
-			: theme.fg(turnStatusColor(snapshot.turns), compressionLabel.compactText),
+			? displayedCompressionLabel.compactText
+			: theme.fg(turnStatusColor(snapshot.turns), displayedCompressionLabel.compactText),
 		priority: 7,
 		required: true,
 	};

@@ -24,10 +24,6 @@ export const COMPRESSION_SCHEMA_VERSION = 1;
 export const COMPRESSION_MODES = ["native", "codex", "acp"] as const;
 export type CompressionMode = (typeof COMPRESSION_MODES)[number];
 
-/** native 模式的触发策略：auto 保留 Pi 自动阈值压缩，manual 只响应手动 /compact */
-export const NATIVE_TRIGGER_POLICIES = ["auto", "manual"] as const;
-export type NativeTriggerPolicy = (typeof NATIVE_TRIGGER_POLICIES)[number];
-
 /**
  * Codex 压缩协议（规格「Codex 契约」的三条上游协议路径）：
  * remote-v2 = Remote V2；responses-compact = responses/compact；
@@ -221,8 +217,6 @@ export interface CompressionSettings {
   readonly schemaVersion: number;
   /** 默认压缩模式；未命中显式规则且未命中自动 ACP 时使用 */
   readonly defaultMode: CompressionMode;
-  /** native 模式触发策略；默认 manual（面向大上下文模型，保留原始上下文） */
-  readonly nativeTrigger: NativeTriggerPolicy;
   /** ACP 自动检测开关（规格场景 10 的关闭选项） */
   readonly acpAutoDetect: boolean;
   /** ACP 自动检测的 contextWindow 阈值（tokens，含） */
@@ -240,7 +234,6 @@ export interface CompressionSettings {
 export const DEFAULT_COMPRESSION_SETTINGS: CompressionSettings = {
   schemaVersion: COMPRESSION_SCHEMA_VERSION,
   defaultMode: "native",
-  nativeTrigger: "manual",
   acpAutoDetect: DEFAULT_ACP_AUTO_DETECT_ENABLED,
   acpAutoDetectThreshold: DEFAULT_ACP_CONTEXT_WINDOW_THRESHOLD,
   modelRules: [],
@@ -351,8 +344,8 @@ export interface CompressionStatusSnapshot {
   readonly fallbackFrom?: "codex" | "acp";
   /** 降级原因（机读键；标签只按 fallbackFrom 是否存在决定是否标降级） */
   readonly fallbackReason?: string;
-  /** 触发策略（native 模式有意义；codex/acp 恒为 auto） */
-  readonly triggerPolicy?: "auto" | "manual";
+  /** 触发策略；native 由 Pi 原生设置控制，Codex / ACP 由对应 owner 控制。 */
+  readonly triggerPolicy?: "auto";
   /** 策略来源：当前会话覆盖 / 显式规则 / Codex 自动检测 / ACP 自动检测 / 默认策略 */
   readonly source?: CompressionSource;
   readonly revision: number;

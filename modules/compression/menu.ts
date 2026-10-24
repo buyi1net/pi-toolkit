@@ -20,6 +20,7 @@ import type { Translator } from "../../i18n/index.ts";
 import type { MenuTheme } from "../../kit/menu/theme.ts";
 import type { ModuleMenuContext } from "../../kit/module.ts";
 import { AcpSettingsPanel, acpManagementRowValue } from "./acp-editor.ts";
+import { detectCodexCapability } from "./codex/capability.ts";
 import { buildCodexManagementRow } from "./codex-settings-panel.ts";
 import { readCompressionSettings } from "./config.ts";
 import {
@@ -41,6 +42,17 @@ import {
 } from "./settings-panel.ts";
 import { sessionCompressionOverride } from "./session-override.ts";
 import { resolveCompressionStrategy } from "./strategy.ts";
+
+/** 当前会话是否具备直接选择 Codex 覆盖的模型资格。 */
+function codexOverrideAvailable(context: ModuleMenuContext): boolean {
+  const model = context.context.model;
+  if (!model) return false;
+  return detectCodexCapability({
+    provider: model.provider,
+    api: model.api,
+    modelBaseUrl: model.baseUrl,
+  }).capable;
+}
 
 export const COMPRESSION_RULES_ROW_ID = "compression.rules";
 export const COMPRESSION_DIAGNOSIS_ROW_ID = "compression.diagnosis";
@@ -69,6 +81,7 @@ export function buildCompressionTopItems(context: ModuleMenuContext): readonly S
           requestRender: () => context.requestRender(),
           codexManagementRow: () => buildCodexManagementRow(context),
           detailRows: () => buildCompressionMenuItems(context),
+          codexOverrideAvailable: codexOverrideAvailable(context),
           // 工单 05：会话覆盖是内存单例，面板读写的都是它（不经过配置事务）
           readSessionOverride: () => sessionCompressionOverride.get(),
           writeSessionOverride: (next) => sessionCompressionOverride.set(next),
