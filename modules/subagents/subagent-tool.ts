@@ -39,7 +39,7 @@ import {
   type DependencyException,
   type DependencyOutcome,
 } from "./dependencies.ts";
-import { SubagentParams } from "./params.ts";
+import { SubagentParams, validateSpawnText } from "./params.ts";
 import { describeMcpIsolation } from "./launch-config.ts";
 import { cleanupSubagentArtifacts, resolveRetentionDecision } from "./retention.ts";
 import type { RuntimeRegistry } from "./registry.ts";
@@ -562,6 +562,10 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
     name: "subagent",
     label: "Subagent",
     description:
+      "CALLING CONTRACT: `agent` and a non-empty `task` are required. The task must state the concrete work and expected output. " +
+      "Prefer `tier` so the configured model pool selects a valid route. If using `model`, copy the exact provider/model route " +
+      "from the host model catalog (for example `my-llm/glm-5.3`); never infer a provider from a model brand name. " +
+      "A unique bare model id is normalized when the catalog can identify it, and known-invalid routes are rejected with exact candidates. " +
       "Spawn a sub-agent as an independent process. " +
       "AUTONOMOUS SUBAGENTS (agents defined with auto-exit, the default for workers): by default they run HEADLESS — an independent background pi process with NO pane/tab — and the call BLOCKS until the sub-agent reaches a terminal state; its real result is returned directly as this tool's result, never a placeholder. " +
       "Multiple subagent calls in the SAME assistant message run in PARALLEL, and the turn continues only after all of them have settled, so batch them freely and end your turn after spawning. " +
@@ -581,10 +585,17 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       "PANE SAFETY: you may freely create panes and read from or send keys to panes when the task requires it; but NEVER close or kill a pane you did not create yourself — before terminating any pane, verify it is yours (spawned by you in this session) or ask the user. Panes you did not create may belong to the user or other agents and may hold running work. " +
       "After spawning, either end your turn immediately, or work on other independent tasks (including spawning more subagents in parallel). The harness handles delivery for you.",
     promptSnippet:
-      "Spawn a sub-agent. Autonomous subagents (auto-exit, the default) run headless in the background (no pane) and block this call until terminal state, returning their real result as the tool result; sibling calls in one message run in parallel and all settle before the turn continues. Demo subagents (interactive) run in a visible pane, return immediately, and deliver their result later as a steer message. Do not poll; do not fabricate results.",
+      "Call with both required fields: agent=<available agent> and task=<non-empty concrete work request>. Prefer tier for model-pool routing; if model is supplied, use the exact provider/model route from the catalog and do not infer a provider from the brand. " +
+      "Autonomous subagents run headless and return their real result; demo subagents run in a pane and deliver results later. Do not poll or fabricate results.",
     parameters: SubagentParams,
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      if (!params || typeof params !== "object") {
+        return {
+          content: [{ type: "text", text: "Invalid subagent parameters: provide an agent and a non-empty task." }],
+          details: { error: "invalid parameters" },
+        };
+      }
       const currentAgent = process.env.PI_SUBAGENT_AGENT;
       if (params.agent && currentAgent && params.agent === currentAgent) {
         return {
@@ -621,6 +632,14 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
               `Available agents: ${permittedList}.`,
           }],
           details: { error: deps.allowlist ? "agent not in allowlist" : "unknown agent" },
+        };
+      }
+
+      const taskError = validateSpawnText("task", params.task);
+      if (taskError) {
+        return {
+          content: [{ type: "text", text: taskError }],
+          details: { error: "task required" },
         };
       }
 

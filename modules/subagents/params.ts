@@ -24,13 +24,24 @@ export function validateCohortId(value: unknown): string | null {
   return null;
 }
 
+export function validateSpawnText(field: "agent" | "task", value: unknown): string | null {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return `Invalid ${field}: must be a non-empty string.`;
+  }
+  return null;
+}
+
 export const SubagentParams = Type.Object({
   agent: Type.String({
+    minLength: 1,
     description:
       "Which agent to spawn (e.g. 'worker', 'plan', 'researcher'). This loads the agent's " +
       "fixed profile — its model, tool loadout, and system prompt. Must be one of the available agents.",
   }),
-  task: Type.String({ description: "Task/prompt for the sub-agent" }),
+  task: Type.String({
+    minLength: 1,
+    description: "Required non-empty task/prompt for the sub-agent. State the concrete work and expected output.",
+  }),
   name: Type.Optional(
     Type.String({
       description:
@@ -48,7 +59,14 @@ export const SubagentParams = Type.Object({
         "It has no scheduling, dependency, ownership, retention, or cleanup semantics; resume keeps the original label.",
     }),
   ),
-  model: Type.Optional(Type.String({ description: "Model override (overrides agent default and takes precedence over `tier`). Supports 'provider/id' and optional ':<thinking>' suffix" })),
+  model: Type.Optional(Type.String({
+    minLength: 1,
+    description:
+      "Optional explicit model override. Prefer `tier` so the configured model pool can select a valid route. " +
+      "When supplied, use the exact provider/model route from the host model catalog (for example `my-llm/glm-5.3`) " +
+      "with an optional `:<thinking>` suffix; never infer the provider from a model brand name. Unique bare model ids " +
+      "are normalized when the catalog can identify them, while ambiguous or known-invalid routes are rejected.",
+  })),
   tier: Type.Optional(
     Type.String({
       description:

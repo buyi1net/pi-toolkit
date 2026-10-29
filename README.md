@@ -26,7 +26,7 @@ npm 上的 `@buyi1net/pi-toolkit` 只有旧版本，不含本版内容，暂不�
 
 **模型与用量**：统计子代理候选池模型的用量，按当前、今日、本周、历史聚合，附候选模型的余额与健康状态；每次运行保留模型来源标签（按池选中、继承父会话、指定模型）。入口在「余额查询」二级页。
 
-**电脑控制（pi-computer）**：让 Agent 看屏幕、认控件、动键鼠，把只在图形界面里能办的事办完。当前落地 Windows 语义后端：列出窗口、菜单、对话框与弹层，读取无障碍（UIA）语义树，按引用点按控件、读写文本、切换焦点与激活窗口，共九个工具（`computer_status`、`computer_roots`、`computer_observe`、`computer_search`、`computer_inspect`、`computer_act`、`computer_read`、`computer_wait`、`computer_run`）。Windows 的 helper 二进制约 780 KB，随包分发，不需要额外工具链；macOS 与 Linux 后端在后续版本加入。
+**电脑控制（pi-computer）**：让 Agent 看屏幕、认控件、动键鼠，把只在图形界面里能办的事办完。当前已接入的平台 helper 会随发布快照分发，模块按环境选择可用后端；缺少对应 helper 时如实报告不可用，不要求额外工具链，也不会阻断其它模块使用。macOS 与 Linux 后端持续完善中。
 
 **会话发现与通讯**：扫描本机各项目的会话文件，并维护活实例的注册与心跳。`peers_list` 列出其他会话，`peers_send` 按会话短码、名字、会话 id（或唯一前缀）或实例 id 把消息投递给对方会话，对端以外部来源卡片显示，并标明这不是用户指令。正文超过阈值自动转文件传输并做哈希校验，入站有体积与速率上限。
 

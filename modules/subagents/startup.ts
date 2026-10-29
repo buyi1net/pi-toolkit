@@ -80,6 +80,7 @@ import {
   selectModelCandidate,
   supportedThinkingLevels,
   resolveModelThinkingSupport,
+  resolveKnownModelReference,
   modelMissingCapabilities,
   MODEL_CAPABILITIES,
   type ModelCandidateRejection,
@@ -97,7 +98,7 @@ export { supportedThinkingLevels, resolveModelThinkingSupport };
 import { getSubagentActivityFile, isTerminalDoneActivity, readSubagentActivityFile } from "./activity.ts";
 import { createStatusState } from "./status.ts";
 import { normalizeSubagentName, sanitizeSubagentFileName } from "./names.ts";
-import { normalizeCohortId, SubagentParams, validateCohortId } from "./params.ts";
+import { normalizeCohortId, SubagentParams, validateCohortId, validateSpawnText } from "./params.ts";
 import { buildTeamRoundPrompt, findRosterMember, rosterPath, upsertRosterMember } from "./team.ts";
 import type { RuntimeRecord, RuntimeRegistry } from "./registry.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
@@ -498,6 +499,28 @@ export function validateResumeTarget(
 }
 
 export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartup {
+  function modelReferenceError(
+    problem: {
+      model: string;
+      candidates: readonly string[];
+      reason: string;
+      message: string;
+    },
+    field: "model" | "candidate",
+  ): PlanOutcome<SpawnPlan> {
+    return {
+      kind: "error",
+      error: problem.message,
+      details: {
+        error: "invalid model reference",
+        field,
+        model: problem.model,
+        reason: problem.reason,
+        candidates: [...problem.candidates],
+      },
+    };
+  }
+
   /** 按运行类别选择 watcher：成员轮 / 其余（watchSubagent 内部再分 pane/headless）。
    *  pi 传入时同段启动状态刷新（工具路径；recover 在循环后统一启动）。 */
   function startWatcher(running: RunningSubagent, pi?: ExtensionAPI): StartedRun {
@@ -516,6 +539,10 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     ctx: SpawnContext,
     planOptions?: SpawnPlanOptions,
   ): PlanOutcome<SpawnPlan> {
+    const agentError = validateSpawnText("agent", params?.agent);
+    if (agentError) return { kind: "error", error: agentError, details: { error: "agent required" } };
+    const taskError = validateSpawnText("task", params?.task);
+    if (taskError) return { kind: "error", error: taskError, details: { error: "task required" } };
     const cohortError = validateCohortId(params.cohortId);
     if (cohortError) return { kind: "error", error: cohortError };
     const cohortId = normalizeCohortId(params.cohortId);
@@ -577,6 +604,25 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     );
     const targetCwdForSession = effectiveCwd ?? ctx.cwd;
 
+    // 显式模型先对齐宿主目录：唯一裸 id 规范成 provider/id，已知 provider
+    // 下的错误模型或把品牌名写成 provider 直接拒绝；目录完全不认识的自定义
+    // provider 保留原样，仍交给宿主的扩展解析。
+    if (params.model !== undefined) {
+      if (typeof params.model !== "string" || params.model.trim() === "") {
+        return {
+          kind: "error",
+          error: "Invalid model: must be a non-empty string when provided.",
+          details: { error: "invalid model reference", field: "model", model: params.model ?? null },
+        };
+      }
+      params.model = params.model.trim();
+      if (ctx.modelRegistry) {
+        const checked = resolveKnownModelReference(params.model, ctx.modelRegistry);
+        if (checked && "problem" in checked) return modelReferenceError(checked.problem, "model");
+        if (checked && "resolution" in checked) params.model = checked.resolution.model;
+      }
+    }
+
     // tier 解析先于 loadout 写入:显式 params.model 优先 tier——且接管先于
     // tier 校验(工单 02)：model 在场时拼错的 tier 不再报 Invalid tier，tier
     // 只作记录；无显式 model 时 tier 无法归一化或缺映射才拒绝启动,绝不静默
@@ -601,6 +647,16 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
       },
     );
     if ("error" in tierPool) return { kind: "error", error: tierPool.error };
+
+    if (tierPool.pool && ctx.modelRegistry) {
+      const normalizedPool: string[] = [];
+      for (const candidate of tierPool.pool) {
+        const checked = resolveKnownModelReference(candidate, ctx.modelRegistry);
+        if (checked && "problem" in checked) return modelReferenceError(checked.problem, "candidate");
+        normalizedPool.push(checked && "resolution" in checked ? checked.resolution.model : candidate);
+      }
+      tierPool.pool = normalizedPool;
+    }
 
     // ── 候选选择器（工单 24 + 工单 25 运行状态边界 + 工单 26 降级重试）──
     // tier 候选池按用户配置顺序逐个过能力标签与思考等级兼容性过滤，再排除
@@ -691,7 +747,12 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         details: { error: "parent model unavailable", tier: tierPool.tier, reason: fallbackReason },
       };
     }
-    const effectiveModel = params.model ?? tierSelection?.model ?? agentDefs?.model ?? inheritedModel;
+    let effectiveModel = params.model ?? tierSelection?.model ?? agentDefs?.model ?? inheritedModel;
+    if (effectiveModel && ctx.modelRegistry) {
+      const checked = resolveKnownModelReference(effectiveModel, ctx.modelRegistry);
+      if (checked && "problem" in checked) return modelReferenceError(checked.problem, "model");
+      if (checked && "resolution" in checked) effectiveModel = checked.resolution.model;
+    }
     // 思考等级覆盖链（工单 23，规格 §4）：任务显式值 > 代理 frontmatter 默认 >
     // 档位默认。档位默认只在 tier 真正解析出模型时参与（显式 model 胜出时
     // tier 仅作记录，不把档位思考等级带到另一个模型上）。上层值已在进

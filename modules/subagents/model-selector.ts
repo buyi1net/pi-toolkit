@@ -88,6 +88,103 @@ export function supportedThinkingLevels(
   });
 }
 
+export interface ModelReferenceResolution {
+  readonly model: string;
+  readonly entry: CatalogModel;
+}
+
+export interface ModelReferenceProblem {
+  readonly model: string;
+  readonly candidates: readonly string[];
+  readonly reason: "ambiguous" | "wrong-provider" | "unknown-model";
+  readonly message: string;
+}
+
+function catalogReference(entry: CatalogModel, thinking: string | null): string {
+  return `${entry.provider}/${entry.id}${thinking ? `:${thinking}` : ""}`;
+}
+
+/**
+ * 把模型调用方给出的引用对齐到宿主目录中的完整 provider/model 路由。
+ *
+ * 目录里能唯一确认时返回规范引用；裸 id 跨供应商歧义、已知 provider 下
+ * 的错误模型名、或把模型品牌写成 provider 时返回可操作的问题。provider
+ * 与 model id 都不在当前目录中的自定义路由保留原样，由子进程继续按宿主
+ * 扩展解析；若自定义 provider 复用了目录中已有的 model id，则仍提示使用
+ * 精确路由，避免把品牌名误当 provider。
+ */
+export function resolveKnownModelReference(
+  modelRef: string,
+  catalog: ModelCatalog,
+): { resolution: ModelReferenceResolution } | { problem: ModelReferenceProblem } | null {
+  const raw = modelRef.trim();
+  const own = modelOwnThinkingSuffix(raw);
+  const base = own ? raw.slice(0, raw.length - own.length - 1) : raw;
+  const suffix = own ? own : null;
+  const all = catalog.getAll();
+  const exact = all.find((entry) => `${entry.provider}/${entry.id}` === base);
+  if (exact) return { resolution: { model: catalogReference(exact, suffix), entry: exact } };
+
+  const slash = base.indexOf("/");
+  if (slash <= 0 || slash === base.length - 1) {
+    const byId = all.filter((entry) => entry.id === base);
+    if (byId.length === 1) {
+      return { resolution: { model: catalogReference(byId[0], suffix), entry: byId[0] } };
+    }
+    if (byId.length > 1) {
+      const candidates = byId.map((entry) => catalogReference(entry, suffix));
+      return {
+        problem: {
+          model: raw,
+          candidates,
+          reason: "ambiguous",
+          message:
+            `Model reference "${raw}" is ambiguous across providers. Use one exact route: ` +
+            `${candidates.join(", ")}. Do not infer a provider from the model brand name.`,
+        },
+      };
+    }
+    return null;
+  }
+
+  const provider = base.slice(0, slash);
+  const id = base.slice(slash + 1);
+  const sameId = all.filter((entry) => entry.id === id);
+  if (sameId.length > 0) {
+    const candidates = sameId.map((entry) => catalogReference(entry, suffix));
+    return {
+      problem: {
+        model: raw,
+        candidates,
+        reason: "wrong-provider",
+        message:
+          `Model reference "${raw}" does not match the host model catalog. ` +
+          `The model id "${id}" is available as: ${candidates.join(", ")}. ` +
+          "Use the exact provider/model route; do not use a provider brand as a guess.",
+      },
+    };
+  }
+
+  const sameProvider = all.filter((entry) => entry.provider === provider);
+  if (sameProvider.length > 0) {
+    const candidates = sameProvider.map((entry) => catalogReference(entry, suffix));
+    return {
+      problem: {
+        model: raw,
+        candidates,
+        reason: "unknown-model",
+        message:
+          `Model "${raw}" is not available in provider "${provider}". ` +
+          `Available routes for that provider: ${candidates.join(", ")}.`,
+      },
+    };
+  }
+
+  // 目录没有这个 provider，可能是用户安装的自定义 provider；不要凭目录
+  // 不完整就阻断它。
+  return null;
+}
+
 /**
  * 按引用（"provider/id"、裸 id，可带 ":level" 思考等级后缀）在目录里查
  * 模型。找不到或裸 id 跨供应商歧义时返回 null（无法核验），调用方跳过
