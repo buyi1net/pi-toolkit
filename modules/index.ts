@@ -1,5 +1,5 @@
 // 内置模块清单：三个源插件 + 从 tui 拆出的 providers 与 status + 工单 28 的 usage + 工单 07 接入的
-// computer + 工单 33 的 peers + 压缩工单 01 的 compression，共九个模块。
+// computer + 工单 33 的 peers + 压缩工单 01 的 compression + skill 工具，共十个模块。
 // 顺序 = 装配与事件钩子注册顺序。tui 放最后，避免它的钩子抢在 vision/subagents/providers/status/usage/computer/peers/compression
 // 的 session_start 之前注册（联调用例按注册顺序取第一个 session_start 处理器）；
 // usage 在 subagents 与 providers 之后、tui 之前：快照句柄的依赖（模型池 / 供应商观测）
@@ -29,6 +29,8 @@ import { peersModule } from "./peers/index.ts";
 import { PEERS_MESSAGES } from "./peers/messages/index.ts";
 import { compressionModule } from "./compression/index.ts";
 import { COMPRESSION_MESSAGES } from "./compression/messages/index.ts";
+import { skillsModule } from "./skills/index.ts";
+import { SKILLS_MESSAGES } from "./skills/messages/index.ts";
 import { subagentsModule } from "./subagents/index.ts";
 import { SUBAGENTS_MESSAGES } from "./subagents/messages/index.ts";
 import { tuiModule } from "./tui/index.ts";
@@ -47,6 +49,7 @@ export const MODULE_MESSAGE_TABLES: Readonly<Record<string, MessageTables>> = {
   computer: COMPUTER_MESSAGES,
   peers: PEERS_MESSAGES,
   compression: COMPRESSION_MESSAGES,
+  skills: SKILLS_MESSAGES,
   tui: TUI_MESSAGES,
 };
 
@@ -63,5 +66,6 @@ export const BUILT_IN_MODULES: readonly ModuleDefinition[] = [
   computerModule,
   peersModule,
   compressionModule,
+  skillsModule,
   tuiModule,
 ];
