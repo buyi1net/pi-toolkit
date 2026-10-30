@@ -3,12 +3,25 @@ import { isAbsolute, join } from "node:path";
 import type { AgentDefaults, AgentSessionMode } from "./agents.ts";
 import type { SubagentParams } from "./params.ts";
 
-export const SPAWNING_TOOLS = [
-  "subagent",
-  "subagent_message",
-  "subagents_list",
-  "subagent_inspect",
+import type { SubagentProtocol } from "./protocol.ts";
+
+export const CODEX_V2_SPAWNING_TOOLS = [
+  "spawn_agent",
+  "send_message",
+  "followup_task",
+  "wait_agent",
+  "interrupt_agent",
+  "list_agents",
+  "subagent_models",
 ] as const;
+
+/** 模型可见的子代理繁衍工具白名单。 */
+export const SPAWNING_TOOLS = CODEX_V2_SPAWNING_TOOLS;
+
+/** 子代理进程继承的工具白名单固定使用 Codex v2 工具面。 */
+export function spawningToolsForProtocol(_protocol: SubagentProtocol): readonly string[] {
+  return SPAWNING_TOOLS;
+}
 
 /** 成员间直信工具:仅 member spawn 注入白名单(注册在 subagent-done.ts)。 */
 export const TEAM_TOOLS = ["team_send"] as const;
@@ -182,7 +195,7 @@ export function resolveSurfaceChoice(
 
 export function buildSubagentToolAllowlist(
   effectiveTools: string | undefined,
-  opts?: { grantSpawning?: boolean; grantTeamSend?: boolean },
+  opts?: { grantSpawning?: boolean; grantTeamSend?: boolean; protocol?: SubagentProtocol },
 ): string | null {
   const requested = (effectiveTools ?? "")
     .split(",")
@@ -191,7 +204,8 @@ export function buildSubagentToolAllowlist(
   const grantSpawning = opts?.grantSpawning ?? false;
   const grantTeamSend = opts?.grantTeamSend ?? false;
   const hasExplicitTools = effectiveTools !== undefined;
-  const spawningNames = new Set<string>(SPAWNING_TOOLS);
+  const protocol = opts?.protocol ?? "codex-v2";
+  const spawningNames = new Set<string>(spawningToolsForProtocol(protocol));
   const teamNames = new Set<string>(TEAM_TOOLS);
 
   // A profile cannot opt itself into delegation merely by putting a spawning
@@ -204,7 +218,7 @@ export function buildSubagentToolAllowlist(
     ),
   );
   if (grantSpawning) {
-    for (const tool of SPAWNING_TOOLS) allow.add(tool);
+    for (const tool of spawningNames) allow.add(tool);
   }
   if (grantTeamSend) {
     for (const tool of TEAM_TOOLS) allow.add(tool);

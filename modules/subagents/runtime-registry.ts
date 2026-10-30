@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { debugLog } from "./diagnostics.ts";
+import type { SubagentLaunchPlanMetadata, SubagentProtocol } from "./protocol.ts";
 import type { SubagentWaitMode, SubagentWaitRelease } from "./types.ts";
 
 export interface RuntimeRecord {
@@ -8,9 +9,12 @@ export interface RuntimeRecord {
   id: string;
   name: string;
   task: string;
-  /** 仅用于展示和结果聚合的并行分组标签。 */
   cohortId?: string;
+  /** 新旧工具协议接缝；缺省表示旧记录。 */
+  protocol?: SubagentProtocol;
+  launchPlan?: SubagentLaunchPlanMetadata;
   agent?: string;
+  modelIdentity?: { provider: string; id: string; api: string; baseUrl: string } | null;
   surface: string;
   startTime: number;
   sessionFile: string;
@@ -27,6 +31,8 @@ export interface RuntimeRecord {
   /** headless 运行的子进程 PID,用于 /reload 后探测存活性。 */
   pid?: number;
   /** 直接父子代理 run id;顶层子代理为 null。 */
+  canonicalTaskName?: string;
+  parentCanonicalTaskName?: string | null;
   parentId?: string | null;
   /** 本次硬屏障等待上限(毫秒)。 */
   timeoutMs?: number;
@@ -57,7 +63,10 @@ export function createRuntimeRecord(source: RuntimeSource): RuntimeRecord {
     name: source.name,
     task: source.task,
     ...(source.cohortId ? { cohortId: source.cohortId } : {}),
+    ...(source.protocol ? { protocol: source.protocol } : {}),
+    ...(source.launchPlan ? { launchPlan: source.launchPlan } : {}),
     ...(source.agent ? { agent: source.agent } : {}),
+    ...(source.modelIdentity ? { modelIdentity: source.modelIdentity } : {}),
     surface: source.surface,
     startTime: source.startTime,
     sessionFile: source.sessionFile,
@@ -69,6 +78,8 @@ export function createRuntimeRecord(source: RuntimeSource): RuntimeRecord {
     // parentId 则用 null 表达「顶层子代理」，两者语义不同。）
     ...(source.kind ? { kind: source.kind } : {}),
     ...(source.pid != null ? { pid: source.pid } : {}),
+    ...(source.canonicalTaskName ? { canonicalTaskName: source.canonicalTaskName } : {}),
+    ...(source.parentCanonicalTaskName !== undefined ? { parentCanonicalTaskName: source.parentCanonicalTaskName } : {}),
     ...(source.parentId !== undefined ? { parentId: source.parentId } : {}),
     ...(source.timeoutMs != null ? { timeoutMs: source.timeoutMs } : {}),
     ...(source.waitMode ? { waitMode: source.waitMode } : {}),
@@ -93,6 +104,10 @@ export function readRuntimeRecords(path: string): RuntimeRecord[] {
       typeof record.name === "string" &&
       typeof record.task === "string" &&
       (record.cohortId == null || typeof record.cohortId === "string") &&
+      ((record.protocol as string | null | undefined) == null ||
+        (record.protocol as string) === "legacy-v1" ||
+        (record.protocol as string) === "codex-v2") &&
+      (record.launchPlan == null || typeof record.launchPlan === "object") &&
       typeof record.surface === "string" &&
       typeof record.sessionFile === "string" &&
       typeof record.sentinelToken === "string" &&
@@ -104,6 +119,8 @@ export function readRuntimeRecords(path: string): RuntimeRecord[] {
       (record.activityFile == null || typeof record.activityFile === "string") &&
       (record.member == null || typeof record.member === "boolean") &&
       (record.pid == null || (typeof record.pid === "number" && Number.isInteger(record.pid) && record.pid > 0)) &&
+      (record.canonicalTaskName == null || typeof record.canonicalTaskName === "string") &&
+      (record.parentCanonicalTaskName == null || typeof record.parentCanonicalTaskName === "string") &&
       (record.parentId == null || typeof record.parentId === "string") &&
       (record.timeoutMs == null || (typeof record.timeoutMs === "number" && Number.isFinite(record.timeoutMs) && record.timeoutMs >= 1000)) &&
       (record.waitMode == null ||

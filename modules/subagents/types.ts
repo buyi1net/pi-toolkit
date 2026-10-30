@@ -3,12 +3,15 @@ import type { SubagentStatusState } from "./status.ts";
 import type { SessionStats } from "./session.ts";
 import type { LoadoutRoutingSnapshot } from "./routing-snapshot.ts";
 import type { HeadlessChild } from "./headless.ts";
+import type { SubagentLaunchPlanMetadata, SubagentProtocol } from "./protocol.ts";
 
 export interface SubagentResult {
   name: string;
   task: string;
-  /** 仅用于展示和结果聚合的并行分组标签,不改变生命周期语义。 */
   cohortId?: string;
+  /** 协议接缝元数据；旧记录缺省为 legacy-v1。 */
+  protocol?: SubagentProtocol;
+  launchPlan?: SubagentLaunchPlanMetadata;
   summary: string;
   sessionFile?: string;
   sessionId?: string;
@@ -22,6 +25,8 @@ export interface SubagentResult {
    * route_exception),依赖注册表按 cancelled settle。
    */
   userClosed?: boolean;
+  /** 当前轮次被 interrupt_agent 结束；不是终态，不能回注或结算依赖。 */
+  interruptedRound?: boolean;
   /**
    * 显式停止(subagent_stop)兑出的取消终态:与意外失败区分,迟到回注
    * 与依赖 settle 都按 cancelled 语义呈现,不报 failed。
@@ -45,14 +50,18 @@ export interface RunningSubagent {
   id: string;
   name: string;
   task: string;
-  /** 仅用于展示和结果聚合的并行分组标签。 */
   cohortId?: string;
+  /** 协议接缝元数据；旧运行态缺省为 legacy-v1。 */
+  protocol?: SubagentProtocol;
+  launchPlan?: SubagentLaunchPlanMetadata;
   agent?: string;
   /**
    * 解析后的模型 id(含 ":thinking" 后缀;来自显式 params、tier 解析或 agent
    * frontmatter)。route_exception 的 provider/model 拆分来源;旧记录/mock 可缺省。
    */
   model?: string | null;
+  /** 完整宿主执行身份，供运行记录与 resume 保留 api/baseUrl。 */
+  modelIdentity?: { provider: string; id: string; api: string; baseUrl: string } | null;
   /**
    * 本次运行实际生效的思考等级（工单 27）：覆盖链解析结果——任务显式值 >
    * 代理 frontmatter > 档位默认 > 模型自带 ":level" 后缀；无等级为 null。
@@ -76,6 +85,9 @@ export interface RunningSubagent {
    */
   modelRouting?: LoadoutRoutingSnapshot | null;
   /** 直接父子代理 run id;顶层子代理为 null。 */
+  canonicalTaskName?: string;
+  parentCanonicalTaskName?: string | null;
+  publicStatus?: "starting" | "running" | "waiting" | "completed" | "failed" | "interrupted" | "handed_off";
   parentId?: string | null;
   /** 本次硬屏障等待上限;未配置时缺省。 */
   timeoutMs?: number;
@@ -146,6 +158,8 @@ export interface RunningSubagent {
   roundEntryBaseline?: number;
   /** 父会话 team roster 文件路径(成员状态转换的单一真源,父进程独写)。 */
   rosterFile?: string;
+  /** 当前轮次已由 interrupt_agent 中断；运行记录保留，followup 可恢复。 */
+  interruptRequested?: boolean;
   /**
    * watcher 的终态 promise(subagent_stop 等待停止落定用)。由启动 watcher
    * 的工具路径(spawn/resume)写入;resolve 单次,promise 可被多消费。

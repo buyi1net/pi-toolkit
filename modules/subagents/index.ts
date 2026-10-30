@@ -8,8 +8,8 @@
 // 发现路径）已同步修正；`-e` 装载路径与 trustedRoots containment 语义不变。
 //
 // 这里只做装配：
-//   - 6 个模型侧工具（subagent / subagent_message / subagents_list /
-//     subagent_inspect / subagent_stop / team_dispatch）+ 4 个消息渲染器 +
+//   - 7 个模型侧工具（subagent_models / spawn_agent / send_message /
+//     followup_task / wait_agent / interrupt_agent / list_agents）+ 4 个消息渲染器 +
 //     状态 widget + 2 个事件钩子（session_start / session_shutdown）按
 //     ModuleDefinition 注册；enabled=false 时装配器根本不调用 register
 //   - 旧 `/subagent` 命令不再注册（合并决策 5）
@@ -98,7 +98,6 @@ function registerSubagents(context: ModuleContext): void {
   // source 统一走 subagentsSectionPath（工单 05）：编辑器用它判定哪几档生效值
   // 来自本节，两侧必须是同一拼法。
   subagentsExtension(context.pi, {
-    registerCommand: false,
     readHostSection: (): SubagentsHostSection => ({
       source: subagentsSectionPath(),
       section: context.getConfig(),

@@ -23,6 +23,7 @@ import { debugLog } from "./diagnostics.ts";
 // 经由 closeSurface → assertOwned 这道闸,防止误关用户或其它 agent 的
 // pane(事故预防:曾发生过把外部 pane 当测试残留误关的事故)。
 const ownedSurfaces = new Set<string>();
+let activeSurfaceKind: SurfaceKind | null = null;
 
 /**
  * 读取并消费 `.exit` sidecar(原子性由写入方 tmp+rename 保证)。
@@ -72,16 +73,79 @@ export function assertOwned(surface: string): void {
 }
 
 export type SurfaceKind = "herdr" | "tmux";
+export type DisplayContext = "terminal" | "nested" | SurfaceKind;
+export type DisplayMode = "auto" | SurfaceKind;
+export type ResolvedDisplaySurface = SurfaceKind | "background";
 export type ShellSyntax = "powershell" | "posix";
 
-/** 当前应使用的表面;无可用表面时返回 null。 */
-export function detectSurface(): SurfaceKind | null {
-  if (process.env.HERDR_ENV === "1") return "herdr";
-  if (process.env.TMUX) return "tmux";
-  return null;
+/**
+ * 把高层显示模式解析为一次启动使用的表面。auto 只选择当前环境确实
+ * 可用的表面；没有表面时返回内部后台实现，不把后台实现暴露为模式。
+ */
+export function resolveDisplaySurface(
+  requested: DisplayMode,
+  availability: readonly DisplayModeAvailability[],
+): ResolvedDisplaySurface {
+  const context = detectDisplayContext();
+  if (requested === "auto") return "background";
+  const selected = availability.find((entry) => entry.mode === requested);
+  const contextMatches = context === requested || (context === "nested" && selected?.available === true);
+  if (!contextMatches || !selected?.available) return "background";
+  return requested;
 }
 
-/** 当前表面内 shell 的语法族。无表面时按宿主平台推断(供纯函数测试等场景)。 */
+/** 只检测宿主上下文，不探测 CLI；HERDR_ENV=1 优先于 TMUX。 */
+export function detectDisplayContext(): DisplayContext {
+  if (process.env.HERDR_ENV === "1" && (process.env.TMUX || process.env.TMUX_PANE)) return "nested";
+  if (process.env.HERDR_ENV === "1") return "herdr";
+  if (process.env.TMUX || process.env.TMUX_PANE) return "tmux";
+  return "terminal";
+}
+
+/** 当前上下文使用的表面；terminal 没有外部表面。 */
+export function detectSurface(): SurfaceKind | null {
+  const context = detectDisplayContext();
+  return context === "herdr" || context === "tmux" ? context : null;
+}
+
+export interface DisplayModeAvailability {
+  readonly mode: DisplayMode;
+  readonly available: boolean;
+  readonly reason: string | null;
+}
+
+/** 分开返回上下文与 CLI 能力，允许普通 terminal 显示 tmux CLI 的可用性。 */
+export function detectDisplayModeAvailability(): readonly DisplayModeAvailability[] {
+  const herdrCli = herdrSurface.isCliAvailable();
+  const tmuxCli = tmuxSurface.isCliAvailable();
+  return [
+    { mode: "auto", available: true, reason: null },
+    { mode: "herdr", available: herdrCli && process.env.HERDR_ENV === "1", reason: herdrCli ? (process.env.HERDR_ENV === "1" ? null : "HERDR_ENV is not set") : "herdr CLI is unavailable" },
+    { mode: "tmux", available: tmuxCli && !!(process.env.TMUX || process.env.TMUX_PANE), reason: tmuxCli ? ((process.env.TMUX || process.env.TMUX_PANE) ? null : "TMUX is not set") : "tmux CLI is unavailable" },
+  ];
+}
+
+export interface DisplayContextSnapshot {
+  readonly context: DisplayContext;
+  readonly herdrEnv: boolean;
+  readonly tmuxEnv: boolean;
+  readonly herdrCli: boolean;
+  readonly tmuxCli: boolean;
+}
+
+export function detectDisplayContextSnapshot(): DisplayContextSnapshot {
+  const herdrEnv = process.env.HERDR_ENV === "1";
+  const tmuxEnv = !!(process.env.TMUX || process.env.TMUX_PANE);
+  return {
+    context: detectDisplayContext(),
+    herdrEnv,
+    tmuxEnv,
+    herdrCli: herdrSurface.isCliAvailable(),
+    tmuxCli: tmuxSurface.isCliAvailable(),
+  };
+}
+
+/** 当前上下文内 shell 的语法族。 */
 export function shellSyntax(): ShellSyntax {
   switch (detectSurface()) {
     case "herdr":
@@ -95,13 +159,13 @@ export function shellSyntax(): ShellSyntax {
 
 /** 表面可用性(环境检测 + CLI 二进制存在)。 */
 export function isMuxAvailable(): boolean {
-  switch (detectSurface()) {
+  switch (activeSurfaceKind ?? detectSurface()) {
     case "herdr":
       return herdrSurface.isAvailable();
     case "tmux":
       return tmuxSurface.isAvailable();
     default:
-      return false;
+      return herdrSurface.isAvailable() || tmuxSurface.isAvailable();
   }
 }
 
@@ -152,6 +216,24 @@ export function createSurface(
   return id;
 }
 
+/** 为指定表面创建 pane；调用方必须先完成该表面的可用性校验。 */
+export function createSurfaceFor(
+  kind: SurfaceKind,
+  name: string,
+  opts?: { cwd?: string; env?: Record<string, string> },
+): string {
+  const surface = kind === "herdr"
+    ? herdrSurface.createSurface(name, opts)
+    : tmuxSurface.createSurface(name, opts);
+  activeSurfaceKind = kind;
+  ownedSurfaces.add(surface);
+  try {
+    (kind === "herdr" ? herdrSurface : tmuxSurface).labelSurface?.(surface, `[pi-sub] ${name}`);
+  } catch (error) {
+    debugLog(`Could not label pane ${surface}`, error);
+  }
+  return surface;
+}
 /** 向 pane 发送一行文本并回车(子代理启动命令 / steer 消息)。 */
 export function sendCommand(surface: string, text: string): void {
   requireSurface().sendCommand(surface, text);
@@ -192,7 +274,7 @@ export function adoptSurface(surface: string): boolean {
  * null，调用方不得把未知状态当成已退出。
  */
 export function probeSurface(surface: string): boolean | null {
-  if (!surface.trim() || !detectSurface()) return null;
+  if (!surface.trim() || !(activeSurfaceKind ?? detectSurface())) return null;
   try {
     const check = requireSurface().surfaceExists;
     return check ? check(surface) : null;
@@ -203,7 +285,7 @@ export function probeSurface(surface: string): boolean | null {
 }
 
 function requireSurface(): SurfaceModule {
-  const kind = detectSurface();
+  const kind = activeSurfaceKind ?? detectSurface();
   if (kind === "herdr") return herdrSurface;
   if (kind === "tmux") return tmuxSurface;
   throw new Error(`No terminal multiplexer detected. ${muxSetupHint()}`);

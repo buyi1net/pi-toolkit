@@ -5,18 +5,8 @@
 // 菜单读写都落这一节；
 // 原 pi-subagents 包内 config.json 的 status.enabled 只作兜底默认。
 //
-// tier 解析保留六级覆盖链（外部显式配置优先，包内文件兜底），工单 00 起为
-// 逐档合并而非首个文件终局（每一档的候选池与思考等级各自独立取最高优先
-// 级的合法声明层，非法声明记入问题清单后落低层）：
-//   1. env PI_SUBAGENTS_CONFIG（硬错误 + 整份锁定，不与低层合并）
-//   2. 项目 <cwd>/.pi/agent/pi-subagents.json
-//   3. 全局 <agentDir>/pi-subagents.json
-//   4. pi-toolkit.json 的 modules.subagents 节（本文件负责读写；声明了
-//      models 或 thinking 任一键即参与，非法取值落低层并入问题清单）
-//   5. 模块目录 config.json
-//   6. 模块目录 config.json.example
-// 候选链的逐档拼接在 routing.ts，本文件只负责本节的读写与校验；菜单读
-// 生效值也经 loadEffectiveTierConfig 走同一读口。
+// 逐档合并保留候选池配置；新菜单与新工具不再读取或写入 thinking.* 默认值。
+// 旧启动实现仍通过 routing.ts 兼容读取历史字段。
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { getToolkitConfigPath } from "../../kit/config.ts";
@@ -36,9 +26,62 @@ import {
   type TierConfigLoadResult,
 } from "./routing.ts";
 import { getAgentConfigDir, resolveHostTierSources } from "./mod.ts";
+import type { DisplayContext, DisplayMode } from "./surface.ts";
 
 /** 模块 id：同时是配置节名与菜单项 id 前缀 */
 export const SUBAGENTS_MODULE_ID = "subagents";
+
+export type { DisplayContext, DisplayMode };
+
+export interface DisplayModeConfig {
+  readonly displayMode: DisplayMode;
+  readonly displayModeByContext: Readonly<Partial<Record<DisplayContext, DisplayMode>>>;
+}
+
+const DISPLAY_MODES: readonly DisplayMode[] = ["auto", "herdr", "tmux"];
+const DISPLAY_CONTEXTS: readonly DisplayContext[] = ["terminal", "herdr", "tmux"];
+
+export function isDisplayMode(value: unknown): value is DisplayMode {
+  return typeof value === "string" && DISPLAY_MODES.includes(value as DisplayMode);
+}
+
+export function isDisplayContext(value: unknown): value is DisplayContext {
+  return typeof value === "string" && DISPLAY_CONTEXTS.includes(value as DisplayContext);
+}
+
+/** 读取显示配置；非法项逐项回退，读取过程不修改输入对象。 */
+export function readDisplayModeConfig(section: Record<string, unknown>): DisplayModeConfig {
+  const displayMode = isDisplayMode(section.displayMode) ? section.displayMode : "auto";
+  const raw = section.displayModeByContext;
+  const displayModeByContext: Partial<Record<DisplayContext, DisplayMode>> = {};
+  if (isPlainObject(raw)) {
+    for (const context of DISPLAY_CONTEXTS) {
+      if (isDisplayMode(raw[context])) displayModeByContext[context] = raw[context];
+    }
+  }
+  return { displayMode, displayModeByContext };
+}
+
+/** 单次请求 > 当前上下文覆盖 > 全局 > auto；只返回本次解析结果。 */
+export function resolveDisplayMode(options: {
+  readonly requested?: unknown;
+  readonly context: DisplayContext;
+  readonly config?: Record<string, unknown> | DisplayModeConfig;
+}): DisplayMode {
+  const config = options.config && "displayMode" in options.config
+    ? options.config as DisplayModeConfig
+    : readDisplayModeConfig((options.config ?? {}) as Record<string, unknown>);
+  if (isDisplayMode(options.requested)) return options.requested;
+  return config.displayModeByContext[options.context] ?? config.displayMode ?? "auto";
+}
+
+export function displayModePatch(mode: DisplayMode, context?: DisplayContext): ModuleConfigRecord {
+  if (context === undefined) return { displayMode: mode };
+  return { displayModeByContext: { [context]: mode } };
+}
+
+export const DISPLAY_MODE_VALUES = DISPLAY_MODES;
+export const DISPLAY_CONTEXT_VALUES = DISPLAY_CONTEXTS;
 
 export { MODEL_TIERS, THINKING_LEVELS, effectiveTierMapping, normalizeTier };
 export type { EffectiveTierRouteConfig, ModelTier, ThinkingLevel, TierConfigLoadResult };
@@ -76,9 +119,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * spawn 路径（loadEffectiveTierConfig）仍从严，不静默降级。
  */
 export function readSubagentsSection(section: Record<string, unknown>): SubagentsSectionView {
-  const lenient = parseTierConfigLenient(section, SECTION_LABEL);
+  const lenient = parseTierConfigLenient({ models: section.models }, SECTION_LABEL);
   const tier: TierMapping = { ...lenient.models };
-  const tierThinking: TierThinkingMapping = { ...lenient.thinking };
+  // thinking.* 仅由旧启动实现兼容读取；新菜单和新工具不再把它当作配置输入。
+  const tierThinking: TierThinkingMapping = {};
   const tierProblems: readonly string[] = [...lenient.problems];
   const problems: string[] = [...tierProblems];
 

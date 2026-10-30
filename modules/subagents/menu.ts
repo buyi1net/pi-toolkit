@@ -1,9 +1,6 @@
-// 子代理菜单（工单 46 一级化 + 工单 47 候选池编辑器）：一级三行——模块开关
-// （subagents.enabled，走统一改动入口）、运行状态显示（modules.subagents.status.enabled，
-// 一级直接开关）与「模型与候选池」入口；入口行打开候选池编辑器（pool-editor.ts
-// 的 SubagentsPanel，工单 47 方案 C）：每档一个分区，头行显示档位名与该档默认
-// 思考等级（←→ 调整），下面是候选模型行（Enter 换模型、Shift+↑↓ 排序、Ctrl+D
-// 待删 → Enter 确认删除）与「＋ 添加模型」行（Enter 追加候选）。
+// 子代理菜单（工单 46 一级化 + 工单 47 候选池编辑器）：一级三行——模块开关、
+// 运行状态显示与「模型与候选池」入口；入口行打开候选池编辑器。模型池只维护
+// 候选模型与分组，不保存档位默认思考等级。
 //
 // 档位显示名与固定排序（工单 22）：设置界面按 旗舰模型 → 均衡模型 → 快速模型
 // 从高到低显示；内部键 flagship/balanced/fast 不改名（与配置、工具参数和报错
@@ -24,7 +21,7 @@ import type { SettingItem } from "@earendil-works/pi-tui";
 import type { Translator } from "../../i18n/index.ts";
 import type { ConfigWriteHooks } from "../../kit/config-transaction.ts";
 import { schemaFieldRow } from "../../kit/menu/items.ts";
-import { SettingsPanel } from "../../kit/menu/panels.ts";
+import { ChoicePicker, SettingsPanel } from "../../kit/menu/panels.ts";
 import type { MenuTheme } from "../../kit/menu/theme.ts";
 import {
   enabledField,
@@ -33,6 +30,14 @@ import {
   type ModuleMenuContext,
   type RowChangeEntry,
 } from "../../kit/module.ts";
+import {
+  displayModePatch,
+  readDisplayModeConfig,
+  resolveDisplayMode,
+  type DisplayContext,
+  type DisplayMode,
+} from "./config.ts";
+import { detectDisplayContext, detectDisplayModeAvailability } from "./surface.ts";
 import {
   effectiveTierMapping,
   loadEffectiveTierConfig,
@@ -62,21 +67,16 @@ import {
   configuredCountValue,
   discoverTierCandidates,
   effectiveMappingFromView,
-  effectiveThinkingMapping,
   poolAfterMove,
   poolEditorRowId,
   poolEditorRowIds,
-  nextThinkingLevel,
   readPanelState,
   saveTierPool,
-  saveTierTakeover,
-  saveTierThinking,
   tierCandidateValue,
   tierDisplayName,
   tierForeignEffective,
   tierNameKey,
   tierPoolEditable,
-  tierThinkingRowValue,
 } from "./pool-editor.ts";
 
 // 编辑器与面板纯逻辑在 pool-editor.ts（组件自绘，工单 47）；这里 re-export 维持
@@ -98,21 +98,16 @@ export {
   configuredCountValue,
   discoverTierCandidates,
   effectiveMappingFromView,
-  effectiveThinkingMapping,
   poolAfterMove,
   poolEditorRowId,
   poolEditorRowIds,
-  nextThinkingLevel,
   readPanelState,
   saveTierPool,
-  saveTierTakeover,
-  saveTierThinking,
   tierCandidateValue,
   tierDisplayName,
   tierForeignEffective,
   tierNameKey,
   tierPoolEditable,
-  tierThinkingRowValue,
 } from "./pool-editor.ts";
 
 /**
@@ -127,7 +122,34 @@ export function readPackageStatusEnabled(): boolean {
   }
 }
 
-/** 一级「模型编排」入口行 id（打开模块开关 / 运行状态显示 / 候选池的设置页） */
+export const SUBAGENTS_DISPLAY_MODE_ROW_ID = "subagents.displayMode";
+
+export interface DisplayModeMenuState {
+  readonly context: DisplayContext;
+  readonly current: DisplayMode;
+  readonly options: readonly {
+    readonly mode: DisplayMode;
+    readonly available: boolean;
+    readonly reason: string | null;
+  }[];
+}
+
+/** 菜单读口：始终返回三种模式，缺环境/CLI 的项保留并标为不可用。 */
+export function displayModeMenuState(section: Record<string, unknown>): DisplayModeMenuState {
+  const context = detectDisplayContext();
+  const config = readDisplayModeConfig(section);
+  return {
+    context,
+    current: resolveDisplayMode({ context, config }),
+    options: detectDisplayModeAvailability(),
+  };
+}
+
+/** 不可用模式不隐藏；调用方在保存前拒绝，避免菜单选择静默回退。 */
+export function isDisplayModeSelectable(state: DisplayModeMenuState, mode: DisplayMode): boolean {
+  return state.options.find((option) => option.mode === mode)?.available === true;
+}
+
 export const SUBAGENTS_MENU_ITEM_ID = "subagents.settings";
 
 /** 页内「模型与候选池」入口行 id（打开候选池编辑器） */
@@ -253,8 +275,42 @@ function subagentsStatusRow(options: {
   };
 }
 
+export function displayModeRow(options: {
+  readonly t: Translator;
+  readonly theme: MenuTheme;
+  readonly context: ModuleMenuContext;
+}): SettingItem {
+  const state = displayModeMenuState(options.context.getConfig());
+  return {
+    id: SUBAGENTS_DISPLAY_MODE_ROW_ID,
+    label: "Display mode",
+    description: `${state.context}: ${state.options.map((item) => `${item.mode}${item.available ? "" : " (unavailable)"}`).join(", ")}`,
+    currentValue: state.current,
+    submenu: (_currentValue, done) => new ChoicePicker({
+      title: "Display mode",
+      theme: options.theme,
+      t: options.t,
+      options: state.options.map((item) => ({
+        value: item.mode,
+        label: item.available ? item.mode : `${item.mode} (unavailable)`,
+        description: item.reason ?? undefined,
+      })),
+      onSelect: (value) => {
+        const mode = value as DisplayMode;
+        if (!isDisplayModeSelectable(state, mode)) {
+          options.context.context.ui.notify(`Display mode ${mode} is unavailable`, "warning");
+          return;
+        }
+        void options.context.saveConfig(displayModePatch(mode, state.context), { reapply: () => undefined })
+          .then(() => done(mode))
+          .catch((error) => options.context.context.ui.notify(String(error), "error"));
+      },
+      onCancel: () => done(state.current),
+    }),
+  };
+}
 /**
- * 「模型编排」页内三行：模块开关、运行状态显示、模型与候选池入口。
+ * 「模型编排」页内四行：模块开关、显示模式、运行状态显示、模型与候选池入口。
  * 单独导出供测试与二级页装配直取（与视觉模块 buildVisionMenuItems 同口径）。
  */
 export function buildSubagentsPageItems(context: ModuleMenuContext): readonly SettingItem[] {
@@ -282,6 +338,7 @@ export function buildSubagentsPageItems(context: ModuleMenuContext): readonly Se
       field: SUBAGENTS_ENABLED_FIELD,
       current: section["enabled"],
     }),
+    displayModeRow({ t, theme: context.theme, context }),
     subagentsStatusRow({
       t,
       context: context.context,

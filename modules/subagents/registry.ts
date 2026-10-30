@@ -15,6 +15,7 @@
 //
 // 进程管理不在这里：本模块只管登记与记录，watcher/startup 仍归 mod.ts。
 
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { debugLog } from "./diagnostics.ts";
 import { normalizeSubagentName } from "./names.ts";
@@ -31,15 +32,33 @@ import type { RunningSubagent, SubagentWaitRelease } from "./types.ts";
 
 export type { RuntimeRecord } from "./runtime-registry.ts";
 
+export type PublicAgentStatus =
+  | "starting" | "running" | "waiting" | "completed" | "failed" | "interrupted" | "handed_off";
+
+export interface PublicAgentRecord {
+  agent_id: string;
+  task_name: string;
+  canonical_task_name: string;
+  status: PublicAgentStatus;
+  parent_agent_id: string | null;
+  parent_canonical_task_name: string | null;
+  summary: string;
+  updated_at: number;
+}
+
 /**
  * 登记表接口：内存运行态与保留名 + 磁盘运行记录的增删查。
  * 所有运行态读写都必须经这里；调用方拿到的是同一个登记表实例（mod.ts
  * 持有进程级单例，工具与 watcher 经依赖注入拿到同一个）。
  */
 export interface RuntimeRegistry {
-  // ── 内存运行态 ──
+  // ── 公开状态投影 ──
+  publicPathFor(artifactDir: string): string;
+  listPublic(path: string): PublicAgentRecord[];
+  updatePublic(path: string, record: PublicAgentRecord): void;
+  updatePublicStatus(path: string, id: string, status: PublicAgentStatus, summary?: string): void;
 
-  /** 加入运行态：内存登记 + 落磁盘记录；磁盘失败只记调试日志，不撤销运行态。 */
+  // ── 内存运行态 ──
   add(running: RunningSubagent): void;
   /** 仅内存接管（恢复/reload 重连：磁盘记录已存在，不重写）。 */
   track(running: RunningSubagent): void;
@@ -96,19 +115,84 @@ export interface RuntimeRegistry {
 export function createRuntimeRegistry(): RuntimeRegistry {
   const running = new Map<string, RunningSubagent>();
   const reserved = new Set<string>();
+  const publicPathFor = (artifactDir: string): string => resolve(artifactDir, "subagent-public.json");
+  const readPublic = (path: string): PublicAgentRecord[] => {
+    try {
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((record): record is PublicAgentRecord => {
+        const value = record as any;
+        return value && typeof value.agent_id === "string" && typeof value.task_name === "string" &&
+          typeof value.canonical_task_name === "string" &&
+          ["starting", "running", "waiting", "completed", "failed", "interrupted", "handed_off"].includes(value.status) &&
+          (value.parent_agent_id == null || typeof value.parent_agent_id === "string") &&
+          (value.parent_canonical_task_name == null || typeof value.parent_canonical_task_name === "string") &&
+          typeof value.summary === "string" && typeof value.updated_at === "number";
+      });
+    } catch { return []; }
+  };
+  const writePublic = (path: string, records: PublicAgentRecord[]): void => {
+    mkdirSync(resolve(path, ".."), { recursive: true });
+    const temp = `${path}.${process.pid}.tmp`;
+    writeFileSync(temp, JSON.stringify(records), { encoding: "utf8", mode: 0o600 });
+    renameSync(temp, path);
+  };
+  const persistPublic = (path: string, record: PublicAgentRecord): void => {
+    try {
+      writePublic(path, [...readPublic(path).filter((item) => item.agent_id !== record.agent_id), record]);
+    } catch (error) {
+      debugLog(`Could not persist public agent record for ${record.task_name}`, error);
+    }
+  };
 
   return {
+    publicPathFor,
+    listPublic(path) {
+      return readPublic(path).map((record) => ({ ...record }));
+    },
+    updatePublic(path, record) {
+      persistPublic(path, { ...record });
+    },
+    updatePublicStatus(path, id, status, summary) {
+      const records = readPublic(path);
+      const index = records.findIndex((record) => record.agent_id === id);
+      if (index < 0) return;
+      const current = records[index]!;
+      persistPublic(path, {
+        ...current,
+        status,
+        ...(summary !== undefined ? { summary } : {}),
+        updated_at: Date.now(),
+      });
+    },
     add(candidate) {
       running.set(candidate.id, candidate);
       try {
         upsertRuntimeRecord(candidate.runtimeFile, createRuntimeRecord(candidate));
       } catch (error) {
-        // 运行态记录失败不撤销已启动的子代理；watcher 仍负责当前进程。
         debugLog(`Could not persist runtime record for ${candidate.name}`, error);
       }
+      if (typeof candidate.runtimeFile !== "string") return;
+      const publicPath = publicPathFor(resolve(candidate.runtimeFile, ".."));
+      const canonical = candidate.canonicalTaskName ?? `${process.env.PI_SUBAGENT_TASK_PATH?.trim() || "/root"}/${candidate.name}`;
+      persistPublic(publicPath, {
+        agent_id: candidate.id,
+        task_name: candidate.name,
+        canonical_task_name: canonical,
+        status: "running",
+        parent_agent_id: candidate.parentId ?? null,
+        parent_canonical_task_name: candidate.parentCanonicalTaskName ?? null,
+        summary: candidate.task.replace(/\s+/g, " ").trim().slice(0, 120),
+        updated_at: Date.now(),
+      });
     },
     track(candidate) {
       running.set(candidate.id, candidate);
+      if (typeof candidate.runtimeFile !== "string") return;
+      const path = publicPathFor(resolve(candidate.runtimeFile, ".."));
+      const records = readPublic(path);
+      const current = records.find((record) => record.agent_id === candidate.id);
+      if (current) persistPublic(path, { ...current, status: "running", updated_at: Date.now() });
     },
     remove(id, options) {
       const recordPath = options?.recordPath ?? running.get(id)?.runtimeFile;

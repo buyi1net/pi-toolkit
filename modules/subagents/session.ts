@@ -18,6 +18,7 @@ import { basename, dirname, join } from "node:path";
 import { debugLog } from "./diagnostics.ts";
 import { type ModelTier } from "./routing.ts";
 import { resolveAppliedThinking, type LoadoutRoutingSnapshot } from "./routing-snapshot.ts";
+import type { SubagentProtocol } from "./protocol.ts";
 
 export interface SessionEntry {
   type: string;
@@ -104,12 +105,16 @@ export function seedSubagentSessionFile(params: {
 export interface SubagentLoadout {
   /** 新 spawn 写入的版本标记;旧快照缺少该字段,保留 legacy resume 兼容。 */
   snapshotVersion?: number;
+  /** 新旧协议接缝；旧快照缺省为 legacy-v1。 */
+  protocol?: SubagentProtocol;
   /** Agent profile name (for PI_SUBAGENT_AGENT); null for agentless spawns. */
   agent: string | null;
   /** The `--tools` allowlist string, or null when the spawn was unrestricted. */
   toolAllowlist: string | null;
   /** Model id (without thinking suffix), or null to use the session default. */
   model: string | null;
+  /** 完整宿主执行身份；公开协议只暴露 modelKey。 */
+  modelIdentity?: { provider: string; id: string; api: string; baseUrl: string } | null;
   /** Thinking level appended to the model as `model:level`, or null. */
   thinking: string | null;
   /** Spawn 显式指定的思考等级,优先于 frontmatter thinking 与 model 自带后缀。 */
@@ -258,9 +263,11 @@ export function readAnchoredLoadout(
  */
 const LOADOUT_SECURITY_FIELDS = [
   "snapshotVersion",
+  "protocol",
   "agent",
   "toolAllowlist",
   "model",
+  "modelIdentity",
   "thinking",
   "thinkingOverride",
   "tierThinking",
@@ -277,6 +284,28 @@ const LOADOUT_SECURITY_FIELDS = [
   "member",
 ] as const;
 
+function loadoutValuesEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    const unmatched = [...b];
+    for (const value of a) {
+      const index = unmatched.findIndex((candidate) => loadoutValuesEqual(value, candidate));
+      if (index < 0) return false;
+      unmatched.splice(index, 1);
+    }
+    return unmatched.length === 0;
+  }
+  if (a && b && typeof a === "object" && typeof b === "object") {
+    const aRecord = a as Record<string, unknown>;
+    const bRecord = b as Record<string, unknown>;
+    const aKeys = Object.keys(aRecord).sort();
+    const bKeys = Object.keys(bRecord).sort();
+    return aKeys.length === bKeys.length && aKeys.every((key, index) => key === bKeys[index] && loadoutValuesEqual(aRecord[key], bRecord[key]));
+  }
+  return false;
+}
+
 export function diffSubagentLoadouts(
   anchored: AnchoredSubagentLoadout,
   onDisk: SubagentLoadout,
@@ -285,9 +314,7 @@ export function diffSubagentLoadouts(
   for (const field of LOADOUT_SECURITY_FIELDS) {
     const a = (anchored as unknown as Record<string, unknown>)[field];
     const b = (onDisk as unknown as Record<string, unknown>)[field];
-    const same = Array.isArray(a) && Array.isArray(b)
-      ? a.length === b.length && [...a].sort().every((value, index) => value === [...b].sort()[index])
-      : a === b;
+    const same = loadoutValuesEqual(a, b);
     if (!same) diffs.push(field);
   }
   return diffs;

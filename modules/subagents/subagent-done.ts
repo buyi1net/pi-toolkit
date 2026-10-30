@@ -218,7 +218,16 @@ export default function (pi: ExtensionAPI) {
   let awaitingAnswer = false;
 
   // Show widget + status bar on session start
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
+    const provider = process.env.PI_SUBAGENT_MODEL_PROVIDER;
+    const modelId = process.env.PI_SUBAGENT_MODEL_ID;
+    const api = process.env.PI_SUBAGENT_MODEL_API ?? "";
+    const baseUrl = process.env.PI_SUBAGENT_MODEL_BASE_URL ?? "";
+    if (provider && modelId) {
+      const models = (ctx as any).modelRegistry?.getAll?.() as Array<Record<string, unknown>> | undefined;
+      const selected = models?.find((model) => model.provider === provider && model.id === modelId && (model.api ?? "") === api && (model.baseUrl ?? "") === baseUrl);
+      if (selected) await pi.setModel(selected as any);
+    }
     recorder.sessionStart();
     const tools = pi.getAllTools();
     toolNames = tools.map((t) => t.name).sort();

@@ -1,22 +1,13 @@
-// 子代理候选池编辑器（工单 47 方案 C）：每档一个分区——头行显示档位名与该档
-// 默认思考等级（←→ 循环调整），下面是候选模型行与「＋ 添加模型」行。原生
-// SettingsList / SelectList 不支持左右键、排序键、Ctrl+D 待删态，也没有「当前
-// 选中行」的读取口，所以这里自绘专用组件（渲染与按键风格照 pi 原生 SettingsList：
-// 主题上色、cursor 前缀、(n/m) 滚动提示、i18n 提示行）。
+// 子代理候选池编辑器：每档一个分区，显示候选模型行与「＋ 添加模型」行。原生
+// SettingsList / SelectList 不支持排序键、Ctrl+D 待删态，也没有「当前选中行」的
+// 读取口，所以这里自绘专用组件。模型候选的思考等级后缀仍由模型选择器按宿主
+// 能力提供；档位本身不再保存默认思考等级。
 //
-// 键位（工单 47 的表）：↑↓ 全行可达（头行也算行）、←→ 调当前行所属档位的思考
-// 等级（模型默认 + off…max 循环）、Enter 模型行换模型 / 添加行追加候选（都开
-// ChoicePicker；工单 09 起为两级：模型列表默认只列已配凭据的模型，未认证的
-// 折叠进末尾显式入口，落选后进思考等级选择，写出裸引用或 ":level" 后缀）、
-// Shift+↑↓ 当前候选上移/下移（与全局键表无冲突：pi-tui 只绑了
-// ctrl+up/ctrl+shift+up 的跳转）、Ctrl+D 进入待删态 → Enter 确认删除（Esc 或
-// 移动光标撤销）、Esc 退出面板（有待删态时只撤销待删）。
+// 键位：↑↓ 全行可达、Enter 模型行换模型 / 添加行追加候选、Shift+↑↓ 当前候选
+// 上移/下移、Ctrl+D 进入待删态、Esc 退出面板。
 //
-// 写盘语义：每次改动立即落盘——整池替换走 tierPoolPatch（写前校验，空池/非法
-// 候选直接抛错，不产生写盘），思考等级走 saveTierThinking；失败只提示，内存
-// 取值回读配置节（读侧永远是盘上真相）。档内最后一个候选不可删除（候选池不
-// 允许写空，清空档位需直接编辑配置文件）。思考等级属于档位（配置结构是
-// thinking.{tier}），显示在头行；模型行只显示模型名。
+// 写盘语义：每次改动立即落盘——整池替换走 tierPoolPatch；失败只提示，内存
+// 取值回读配置节（读侧永远是盘上真相）。档内最后一个候选不可删除。
 //
 // 生效值读侧（工单 05）：面板显示的候选池与思考等级改读工单 00 的单一读口
 // （loadEffectiveTierConfig，与 spawn 同一份），不再只看本节——菜单显示的
@@ -187,15 +178,14 @@ export function buildEffectivePanelView(input: {
     const poolSource = route?.poolSource ?? null;
     const ownership: TierPoolOwnership =
       poolSource === null ? "unconfigured" : poolSource === input.localSource ? "local" : "foreign";
-    const thinkingSource = route?.thinkingSource ?? null;
     tiers[tier] = {
       pool,
       ownership,
       poolSource,
-      thinking: route?.thinking,
-      thinkingSource,
-      thinkingEditable:
-        !envLocked && (thinkingSource === null || thinkingSource === input.localSource),
+      // 旧配置中的 thinking.* 不再进入模型池编辑器。
+      thinking: undefined,
+      thinkingSource: null,
+      thinkingEditable: true,
     };
   }
   return {
@@ -216,7 +206,7 @@ export function tierPoolEditable(view: EffectivePanelView, tier: ModelTier): boo
  * 接管行的判定其用这一个口径。
  */
 export function tierForeignEffective(view: EffectivePanelView, tier: ModelTier): boolean {
-  return view.tiers[tier].ownership === "foreign" || !view.tiers[tier].thinkingEditable;
+  return view.tiers[tier].ownership === "foreign";
 }
 
 /** 从视图提取生效池映射（退出回执计数等 TierMapping 消费方用） */
@@ -496,10 +486,6 @@ export class SubagentsPanel implements Component {
       this.moveSelection(-1);
     } else if (kb.matches(data, "tui.select.down")) {
       this.moveSelection(1);
-    } else if (matchesKey(data, "left")) {
-      void this.adjustThinking(-1);
-    } else if (matchesKey(data, "right")) {
-      void this.adjustThinking(1);
     } else if (kb.matches(data, "tui.select.confirm") || data === " ") {
       this.activate();
     } else if (matchesKey(data, "ctrl+d")) {
@@ -619,28 +605,7 @@ export class SubagentsPanel implements Component {
     return true;
   }
 
-  /** ←→：调整当前行所属档位的默认思考等级（循环）并立即写盘；思考等级来源在更高层时被挡 */
-  private async adjustThinking(step: 1 | -1): Promise<void> {
-    const row = this.currentRow();
-    if (!row) return;
-    if (!this.view.tiers[row.tier].thinkingEditable) {
-      this.notify(this.options.t("module.subagents.pool.foreignBlocked"));
-      return;
-    }
-    const current = this.view.tiers[row.tier].thinking ?? null;
-    const level = nextThinkingLevel(current, step);
-    const outcome = await saveTierThinking(this.options, row.tier, level);
-    this.reportSave(outcome);
-    if (outcome.ok) this.refresh(poolEditorRowId(row));
-  }
-
-  /**
-   * Enter/空格/点击：待删行确认删除；模型行开选择器换模型；添加行开选择器
-   * 追加候选；接管行把生效值写进本节（工单 05）；头行无激活行为（等级调整
-   * 走 ←→）。外层生效档的模型行只提示不写盘。选择器是两级（工单 09）：先选
-   * 模型（默认只列已认证，未认证折叠进显式入口）再选思考等级，写出裸引用
-   * 或 ":level" 后缀。
-   */
+  /** Enter/空格/点击：待删行确认删除；模型行开选择器换模型；添加行追加候选。 */
   private activate(): void {
     const row = this.currentRow();
     if (!row) return;
@@ -721,27 +686,18 @@ export class SubagentsPanel implements Component {
     }
   }
 
-  /**
-   * 显式接管（工单 05）：把该档当前生效的候选池与思考等级写进本节（池未生效
-   * 声明时只接思考等级）。写后仍有生效值被更高优先级层遮蔽时提示（来源层的
-   * 本档声明清掉后本节自动生效）。
-   */
+  /** 显式接管只写候选池；旧 thinking.* 配置不再写回本节。 */
   private async takeTierOver(tier: ModelTier): Promise<void> {
     const tierView = this.view.tiers[tier];
-    const thinking = tierView.thinkingSource !== null ? (tierView.thinking ?? null) : undefined;
-    if (tierView.pool.length === 0 && thinking === undefined) return;
-    const outcome =
-      tierView.pool.length > 0
-        ? await saveTierTakeover(this.options, tier, tierView.pool, thinking)
-        : await saveTierThinking(this.options, tier, thinking ?? null);
+    if (tierView.pool.length === 0) return;
+    const outcome = await saveTierPool(this.options, tier, tierView.pool);
     this.reportSave(outcome);
     if (!outcome.ok) return;
     this.refresh(`subagents.pool.${tier}.takeover`);
-    const after = this.view.tiers[tier];
-    if (after.ownership === "foreign" || !after.thinkingEditable) {
+    if (this.view.tiers[tier].ownership === "foreign") {
       this.notify(
         this.options.t("module.subagents.pool.takeoverShadowNote", {
-          path: after.poolSource ?? after.thinkingSource ?? "",
+          path: this.view.tiers[tier].poolSource ?? "",
         }),
       );
     }
@@ -974,18 +930,6 @@ export class SubagentsPanel implements Component {
         );
       }
       if (tierView.pool.length === 0) parts.push(t("module.subagents.tier.unmapped"));
-      parts.push(
-        t("module.subagents.pool.thinking", {
-          level: tierThinkingRowValue(row.tier, effectiveThinkingMapping(this.view), t),
-        }),
-      );
-      if (!tierView.thinkingEditable) {
-        parts.push(
-          t("module.subagents.pool.thinkingSource", {
-            source: this.shortenSource(tierView.thinkingSource ?? ""),
-          }),
-        );
-      }
       const value = theme.settings.value(parts.join(" · "), selected);
       const pad = Math.max(1, width - visibleWidth(prefix) - visibleWidth(label) - visibleWidth(value));
       return truncateToWidth(prefix + label + " ".repeat(pad) + value, width);

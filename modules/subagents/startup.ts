@@ -30,10 +30,14 @@ import { randomUUID } from "node:crypto";
 import {
   closeSurface,
   createSurface,
+  createSurfaceFor,
   readExitSidecar,
   sentinelSuffix,
   sendCommand,
   shellEscape,
+  resolveDisplaySurface,
+  type DisplayMode,
+  type SurfaceKind,
 } from "./surface.ts";
 import {
   createSubagentLaunchEnv,
@@ -104,6 +108,11 @@ import type { RuntimeRecord, RuntimeRegistry } from "./registry.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
 import type { AgentDefaults } from "./agents.ts";
 import { debugLog } from "./diagnostics.ts";
+import {
+  CODEX_V2_SUBAGENT_PROTOCOL,
+  createCodexV2LaunchPlanMetadata,
+  type SubagentLaunchPlanMetadata,
+} from "./protocol.ts";
 
 /** timeoutMs 参数校验(信任边界:模型传参);返回错误文案或 null。 */
 export function validateTimeoutMs(timeoutMs: unknown): string | null {
@@ -163,6 +172,10 @@ export interface SpawnPlanOptions {
    * 顺序不回绕。非 tier 路径不受影响。
    */
   excludeModels?: ReadonlySet<string>;
+  /** Codex v2 caller owns model/role selection and receives a non-blocking ack. */
+  protocol?: typeof CODEX_V2_SUBAGENT_PROTOCOL;
+  /** Codex v2 fork_turns selection, kept at the startup seam. */
+  forkTurns?: "all" | "none";
 }
 
 /**
@@ -222,16 +235,21 @@ export interface SpawnPlan {
    * 非空清单附进结果 details——spawn 用低层配置时明确报，不静默。
    */
   tierConfigProblems: readonly string[] | null;
-  effectiveAutoExit: boolean;
   /** 运行类别（启动与 watcher 选择的唯一依据）。 */
   interactive: boolean;
   member: boolean;
+  /** 生命周期配置与后台/表面路径。 */
+  effectiveAutoExit: boolean;
+  /** Codex v2 请求解析后的外部表面；后台回退仍由 useHeadless 表示。 */
+  resolvedDisplayMode: DisplayMode;
   useHeadless: boolean;
   sessionFile: string;
   sessionId: string;
   artifactDir: string;
   sessionDir: string;
   launchBehavior: ReturnType<typeof resolveLaunchBehavior>;
+  /** 版本化的新旧协议运行计划接缝。 */
+  launchPlan: SubagentLaunchPlanMetadata;
 }
 
 /** resume 的第一阶段产物：会话、授权与批次基线已校验。 */
@@ -320,6 +338,8 @@ export interface SubagentStartupDeps {
   spawnHeadlessPi: typeof spawnHeadlessPi;
   /** 表面层替身（测试注入内存实现）。 */
   createSurface: typeof createSurface;
+  /** 指定 Herdr/tmux 表面的创建接缝；旧注入层缺席时回退 createSurface。 */
+  createSurfaceFor?: typeof createSurfaceFor;
   sendCommand: typeof sendCommand;
   closeSurface: typeof closeSurface;
   /** 登记后的刷新与按运行类别选择的 watcher。 */
@@ -476,6 +496,12 @@ export function validateResumeTarget(
   if (loadout.model !== undefined && loadout.model !== null && typeof loadout.model !== "string") {
     return "loadout model must be a string or null";
   }
+  if (loadout.modelIdentity != null) {
+    const identity = loadout.modelIdentity;
+    if (typeof identity !== "object" || typeof identity.provider !== "string" || typeof identity.id !== "string" || typeof identity.api !== "string" || typeof identity.baseUrl !== "string") {
+      return "loadout modelIdentity must carry provider, id, api and baseUrl strings";
+    }
+  }
   if (loadout.tier != null && (typeof loadout.tier !== "string" || normalizeTier(loadout.tier) === null)) {
     return `loadout tier invalid: ${loadout.tier}`;
   }
@@ -530,7 +556,10 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     if (pi) deps.startStatusRefresh(pi);
     const watch = running.member
       ? Promise.resolve(deps.watchMemberRound(running, watcherAbort.signal))
-      : deps.watchSubagent(running, watcherAbort.signal);
+      : deps.watchSubagent(running, watcherAbort.signal).then((result) => ({
+          ...result,
+          ...(running.protocol === "codex-v2" ? { protocol: running.protocol, launchPlan: running.launchPlan } : {}),
+        }));
     return { running, signal: watcherAbort.signal, watch };
   }
 
@@ -881,12 +910,21 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
       }
     }
 
-    // 表面选择:pane(现有 herdr/tmux 路径)或 headless(独立后台 pi 进程)。
-    // interactive 请求 background 在此直接报错,不静默建 pane。
-    const surfaceChoice = resolveSurfaceChoice(
-      memberMode ? "background" : params.surface,
-      memberMode ? false : effectiveInteractive,
-    );
+    const requestedDisplayMode = (params as any).display_mode as DisplayMode | undefined;
+    const resolvedDisplayMode: DisplayMode = requestedDisplayMode ?? "auto";
+    const resolvedSurface = requestedDisplayMode !== undefined
+      ? resolveDisplaySurface(resolvedDisplayMode, [
+          { mode: "auto", available: true, reason: null },
+          { mode: "herdr", available: process.env.HERDR_ENV === "1", reason: null },
+          { mode: "tmux", available: !!process.env.TMUX, reason: null },
+        ])
+      : "background";
+    const surfaceChoice = requestedDisplayMode !== undefined
+      ? (resolvedSurface === "background" ? { choice: "headless" as const } : { choice: "pane" as const })
+      : resolveSurfaceChoice(
+          memberMode ? "background" : params.surface,
+          memberMode ? false : effectiveInteractive,
+        );
     if ("error" in surfaceChoice) return { kind: "error", error: surfaceChoice.error };
     const useHeadless = surfaceChoice.choice === "headless";
     // 仅 pane 需要复用器；headless 在无 herdr/tmux 的环境也能运行。拒绝理由由
@@ -914,8 +952,15 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     // 泄漏 pane 或进程)。fork 的任务文本直传 argv,在 Windows pane 的
     // PowerShell 引号规则下无法安全转义,pane 表面不支持;standalone/
     // lineage-only 的任务走 @artifact 文件,不受影响。
-    const launchBehavior = resolveLaunchBehavior(params, agentDefs);
-    if (launchBehavior.inheritsConversationContext) {
+    const launchBehavior = planOptions?.forkTurns === "all"
+      ? {
+          sessionMode: "fork" as const,
+          seededSessionMode: "fork" as const,
+          inheritsConversationContext: true,
+          taskDelivery: "direct" as const,
+        }
+      : resolveLaunchBehavior(params, agentDefs);
+    if (launchBehavior.inheritsConversationContext && planOptions?.protocol !== CODEX_V2_SUBAGENT_PROTOCOL) {
       return {
         kind: "error",
         error: 'session-mode: fork is not supported by this extension. Use "standalone" or "lineage-only".',
@@ -962,12 +1007,14 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         effectiveAutoExit,
         interactive: effectiveInteractive,
         member: memberMode,
+        resolvedDisplayMode,
         useHeadless,
         sessionFile,
         sessionId,
         artifactDir,
         sessionDir,
         launchBehavior,
+        launchPlan: createCodexV2LaunchPlanMetadata(`codex-v2-${randomUUID()}`),
       },
     };
   }
@@ -992,10 +1039,12 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
       effectiveAutoExit,
       interactive: effectiveInteractive,
       member: memberMode,
+      resolvedDisplayMode,
       useHeadless,
       artifactDir,
       sessionDir,
       launchBehavior,
+      launchPlan,
     } = plan;
     const startTime = Date.now();
     const id = Math.random().toString(16).slice(2, 10);
@@ -1035,6 +1084,13 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     // herdr 版:环境变量在 split 时注入(pane split --env),因此 splitEnv 的构造
     // 必须在 createSurface 之前;pane id 相关变量不再注入(子进程自带 HERDR_PANE_ID)。
     const splitEnv: Record<string, string> = createSubagentLaunchEnv();
+    const selectedIdentity = (params as any).modelIdentity as { provider?: string; id?: string; api?: string; baseUrl?: string } | undefined;
+    if (selectedIdentity) {
+      if (selectedIdentity.provider) splitEnv.PI_SUBAGENT_MODEL_PROVIDER = selectedIdentity.provider;
+      if (selectedIdentity.id) splitEnv.PI_SUBAGENT_MODEL_ID = selectedIdentity.id;
+      if (selectedIdentity.api) splitEnv.PI_SUBAGENT_MODEL_API = selectedIdentity.api;
+      if (selectedIdentity.baseUrl) splitEnv.PI_SUBAGENT_MODEL_BASE_URL = selectedIdentity.baseUrl;
+    }
     if (resolvedAgentDir) {
       splitEnv.PI_CODING_AGENT_DIR = resolvedAgentDir;
     }
@@ -1042,6 +1098,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
       splitEnv.PI_SUBAGENT_ALLOWED = agentDefs.subagentAgents.join(",");
     }
     splitEnv.PI_SUBAGENT_NAME = surfaceName;
+    splitEnv.PI_SUBAGENT_TASK_PATH = `${process.env.PI_SUBAGENT_TASK_PATH ?? "/root"}/${surfaceName}`;
     if (params.agent) {
       splitEnv.PI_SUBAGENT_AGENT = params.agent;
     }
@@ -1137,9 +1194,11 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     // model, identity, and spawn permissions.
     const loadout: SubagentLoadout = {
       snapshotVersion: SUBAGENT_LOADOUT_VERSION,
+      protocol: plan.launchPlan.protocol,
       agent: params.agent ?? null,
       toolAllowlist,
       model: effectiveModel,
+      modelIdentity: (params as any).modelIdentity ?? null,
       thinking: agentDefs?.thinking ?? null,
       thinkingOverride: params.thinking ?? null,
       // 档位默认思考等级（工单 23）：与 frontmatter/显式值分开快照，resume
@@ -1288,7 +1347,9 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         throw err;
       }
     } else {
-      surface = options?.surface ?? deps.createSurface(surfaceName, { cwd: effectiveCwd ?? undefined, env: splitEnv });
+      surface = options?.surface ?? (plan.resolvedDisplayMode !== "auto" && deps.createSurfaceFor
+        ? deps.createSurfaceFor(plan.resolvedDisplayMode as SurfaceKind, surfaceName, { cwd: effectiveCwd ?? undefined, env: splitEnv })
+        : deps.createSurface(surfaceName, { cwd: effectiveCwd ?? undefined, env: splitEnv }));
       if (!surfacePreCreated) {
         await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, deps.getShellReadyDelayMs()));
       }
@@ -1323,13 +1384,18 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         ...(cohortId ? { cohortId } : {}),
         agent: params.agent,
         model: effectiveModel,
+        ...(loadout.modelIdentity ? { modelIdentity: loadout.modelIdentity } : {}),
         thinking: appliedThinking,
+        protocol: launchPlan.protocol,
+        launchPlan,
         // 工单 28：用量快照的降级口径（启动时快照，不随配置漂移）
         ...(plan.tier != null ? { tier: plan.tier } : {}),
         ...(plan.tierPool != null ? { modelPool: plan.tierPool } : {}),
         // 工单 06：路由快照随运行态登记，展示面（结果、list/inspect、用量）
         // 从这一份读路由事实。
         modelRouting: routingSnapshot,
+        canonicalTaskName: `${process.env.PI_SUBAGENT_TASK_PATH ?? "/root"}/${surfaceName}`,
+        parentCanonicalTaskName: process.env.PI_SUBAGENT_TASK_PATH ?? "/root",
         parentId: process.env.PI_SUBAGENT_ID ?? null,
         ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
         waitMode: memberMode ? "member-round" : effectiveInteractive ? "interactive" : "hard-barrier",
@@ -1466,11 +1532,18 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     const { autoExit, interactive } = deps.resolveResumeLaunchBehavior();
     const startTime = Date.now();
     const id = Math.random().toString(16).slice(2, 10);
+    const launchPlan = createCodexV2LaunchPlanMetadata(`codex-v2-resume-${randomUUID()}`);
     const sentinelToken = `__PI_SUBAGENT_DONE_${randomUUID()}__`;
     const activityFile = getSubagentActivityFile(artifactDir, id);
     mkdirSync(dirname(activityFile), { recursive: true });
 
     const resumeEnv: Record<string, string> = createSubagentLaunchEnv();
+    if (effectiveLoadout.modelIdentity) {
+      resumeEnv.PI_SUBAGENT_MODEL_PROVIDER = effectiveLoadout.modelIdentity.provider;
+      resumeEnv.PI_SUBAGENT_MODEL_ID = effectiveLoadout.modelIdentity.id;
+      resumeEnv.PI_SUBAGENT_MODEL_API = effectiveLoadout.modelIdentity.api;
+      resumeEnv.PI_SUBAGENT_MODEL_BASE_URL = effectiveLoadout.modelIdentity.baseUrl;
+    }
     const resumeAgentDir = effectiveLoadout.agentDir ?? process.env.PI_CODING_AGENT_DIR ?? null;
     if (resumeAgentDir) resumeEnv.PI_CODING_AGENT_DIR = resumeAgentDir;
     if (effectiveLoadout.spawnable && effectiveLoadout.spawnable.length > 0) {
@@ -1578,7 +1651,10 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         // resume 使用 loadout 里的具体 model(tier 已在首次 launch 时解析),
         // 不重新读配置,不随配置改变漂移。思考等级同一口径（工单 27）。
         model: effectiveLoadout.model ?? null,
+        ...(effectiveLoadout.modelIdentity ? { modelIdentity: effectiveLoadout.modelIdentity } : {}),
         thinking: appliedLoadoutThinking(effectiveLoadout),
+        protocol: launchPlan.protocol,
+        launchPlan,
         // 工单 06/28：档位、候选池与路由快照都随 loadout 重放（旧快照缺省
         // 按现状降级，无池时降级口径保持未知）——resume 后的展示面能区分
         // 「按池选中」与「继承父模型」，不随配置漂移。
@@ -1587,6 +1663,8 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
           ? { modelPool: [...effectiveLoadout.routing.pool] }
           : {}),
         modelRouting: effectiveLoadout.routing ?? null,
+        canonicalTaskName: `${process.env.PI_SUBAGENT_TASK_PATH ?? "/root"}/${name}`,
+        parentCanonicalTaskName: process.env.PI_SUBAGENT_TASK_PATH ?? "/root",
         parentId: process.env.PI_SUBAGENT_ID ?? null,
         ...(plan.timeoutMs != null ? { timeoutMs: plan.timeoutMs } : {}),
         waitMode: "hard-barrier",
@@ -1716,6 +1794,8 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
               ? { modelPool: [...recoveredLoadout.routing.pool] }
               : {}),
             modelRouting: recoveredLoadout?.routing ?? null,
+            canonicalTaskName: record.canonicalTaskName ?? `${record.parentCanonicalTaskName ?? "/root"}/${record.name}`,
+            parentCanonicalTaskName: record.parentCanonicalTaskName ?? "/root",
             parentId: record.parentId ?? null,
             ...(record.timeoutMs != null ? { timeoutMs: record.timeoutMs } : {}),
             ...(record.waitReleased ? { waitReleased: record.waitReleased } : {}),
@@ -1757,6 +1837,8 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
             ? { modelPool: [...recoveredLoadout.routing.pool] }
             : {}),
           modelRouting: recoveredLoadout?.routing ?? null,
+          canonicalTaskName: record.canonicalTaskName ?? `${record.parentCanonicalTaskName ?? "/root"}/${record.name}`,
+          parentCanonicalTaskName: record.parentCanonicalTaskName ?? "/root",
           parentId: record.parentId ?? null,
           ...(record.timeoutMs != null ? { timeoutMs: record.timeoutMs } : {}),
           ...(record.waitReleased ? { waitReleased: record.waitReleased } : {}),

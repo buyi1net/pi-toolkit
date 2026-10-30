@@ -42,18 +42,23 @@ const HERDR_RETRY_AFTER_MS = 5_000;
 // 只记录本扩展创建或恢复接管的 pane,避免把用户自己的 pane 当成布局目标。
 const managedPaneIds = new Set<string>();
 
-/** HERDR_ENV=1(pi 在 herdr pane 内)且 herdr CLI 可执行。 */
+/** Herdr CLI 是否在 PATH；与当前是否运行在 Herdr 上分开检测。 */
+export function isCliAvailable(): boolean {
+  try {
+    execFileSync("herdr", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** HERDR_ENV=1 且 herdr CLI 可执行。 */
 export function isAvailable(): boolean {
   if (process.env.HERDR_ENV !== "1") return false;
   const now = Date.now();
   if (herdrAvailable === true) return true;
   if (herdrAvailable === false && now - herdrCheckedAt < HERDR_RETRY_AFTER_MS) return false;
-  try {
-    execFileSync("herdr", ["--version"], { stdio: "ignore" });
-    herdrAvailable = true;
-  } catch {
-    herdrAvailable = false;
-  }
+  herdrAvailable = isCliAvailable();
   herdrCheckedAt = now;
   return herdrAvailable;
 }

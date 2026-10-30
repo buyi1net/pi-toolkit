@@ -205,6 +205,10 @@ function registerDetachedLateDelivery(
   watchPromise
     .then((late) => {
       deps.updateWidget();
+      if (late.interruptedRound) {
+        deps.updateWidget();
+        return;
+      }
       // 真实终态才 settle:user_closed/显式停止按取消语义,不误报 failed。
       settleCompletionFromResult(running.name, late, {
         ...(late.userClosed || late.stopped ? { status: "cancelled" as const } : {}),
@@ -811,6 +815,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         running.watchPromise = interactiveWatch;
         interactiveWatch
           .then((result) => {
+            if (result.interruptedRound) return;
             deps.updateWidget();
             // 终态(含 handed-off)落定完成记录:依赖本子代理的下游 spawn 才有
             // 明确的等待结果。/reload 移交(handedOff)不是可用结果,但等待者
@@ -1036,6 +1041,20 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         };
       }
       const result: SubagentResult = raced;
+      if (result.interruptedRound) {
+        deps.updateWidget();
+        return {
+          content: [{ type: "text", text: `Sub-agent "${running.name}" current round interrupted; context is preserved for followup_task.` }],
+          details: {
+            id: running.id,
+            name: running.name,
+            task: running.task,
+            sessionFile: running.sessionFile,
+            status: "waiting",
+            interrupted: true,
+          },
+        };
+      }
 
       // ── 工单 26：临时性路由故障的候选切换判定（仅 tier 候选池路径；快照
       // 无可用池的 fallback 继承不参与，已在 failoverBase 判定中排除）──

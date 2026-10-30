@@ -82,6 +82,12 @@ export interface ModelRuntimeStatus {
   readonly lastCheckedAt: number | null;
   /** 人可读补充（诊断与后续状态摘要展示用）；不参与阻断决策 */
   readonly detail?: string;
+  /** 只读投影可消费的现有错误观测计数；没有错误观测时保持缺省。 */
+  readonly request_count?: number;
+  readonly error_count?: number;
+  readonly consecutive_error_count?: number;
+  readonly last_error_at?: number | null;
+  readonly last_error_type?: string | null;
 }
 
 /** 候选池运行状态表：键 = 候选基础引用（已剥思考等级后缀）。 */
@@ -201,6 +207,12 @@ export function deriveErrorObservationStatus(
     },
     lastCheckedAt: latest.observedAt,
     detail,
+    // 这里仅投影已有错误观测；不把错误日志扩展成完整请求统计系统。
+    request_count: 0,
+    error_count: withinPersistent.length,
+    consecutive_error_count: withinPersistent.length,
+    last_error_at: latest.observedAt,
+    last_error_type: latest.kind,
   };
 }
 

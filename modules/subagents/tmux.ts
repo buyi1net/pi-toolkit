@@ -13,8 +13,7 @@
  */
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
-import { MIN_PANE_COLS, MIN_PANE_ROWS, rectMeetsBudget, type PaneRect } from "./layout-budget.ts";
-import { chooseSplitDirection, chooseSplitTarget, type LayoutPane, type SplitDirection } from "./pane-layout.ts";
+import { chooseSplitTarget, type LayoutPane, type SplitDirection } from "./pane-layout.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -39,12 +38,13 @@ function hasCommand(command: string): boolean {
   return available;
 }
 
-/**
- * True when running inside tmux with the tmux binary on PATH.
- * `TMUX` is set by tmux in every process it spawns (shell or pane).
- */
+export function isCliAvailable(): boolean {
+  return hasCommand("tmux");
+}
+
+/** True when running inside tmux with the tmux binary on PATH. */
 export function isAvailable(): boolean {
-  return !!process.env.TMUX && hasCommand("tmux");
+  return !!process.env.TMUX && isCliAvailable();
 }
 
 export function setupHint(): string {
@@ -83,30 +83,9 @@ export function createSurface(
     throw new Error("Cannot inspect the current tmux window layout for a subagent pane.");
   }
 
-  const direction = chooseSplitDirection(target.rect, MIN_PANE_COLS, MIN_PANE_ROWS);
-  if (!direction) {
-    throw new Error(
-      `Terminal too small for another subagent pane (current pane is ${target.rect.width}x${target.rect.height}, ` +
-        `need >= ${MIN_PANE_COLS * 2}x${MIN_PANE_ROWS * 2} for another split).`,
-    );
-  }
+  const direction: SplitDirection = target.rect.width >= target.rect.height ? "right" : "down";
   const paneId = splitPane(target.pane_id, direction, opts);
   managedPaneIds.add(paneId);
-
-  const after = queryWindowLayout(parentId);
-  const relevantIds = new Set([parentId, ...managedPaneIds]);
-  const invalidPane = after?.find(
-    (pane) => relevantIds.has(pane.pane_id) && !rectMeetsBudget(pane.rect),
-  );
-  if (!after || invalidPane) {
-    managedPaneIds.delete(paneId);
-    try { execFileSync("tmux", ["kill-pane", "-t", paneId], { encoding: "utf8" }); } catch {}
-    const rect = invalidPane?.rect;
-    throw new Error(
-      `Terminal too small for another subagent pane (got ${rect?.width ?? "?"}x${rect?.height ?? "?"}, ` +
-        `need >= ${MIN_PANE_COLS}x${MIN_PANE_ROWS}). Reduce subagents or enlarge the window.`,
-    );
-  }
   return paneId;
 }
 
@@ -115,7 +94,7 @@ function splitPane(
   direction: SplitDirection,
   opts?: { cwd?: string; env?: Record<string, string> },
 ): string {
-  const args = ["split-window", "-d", direction === "right" ? "-h" : "-v", "-t", target, "-p", "50"];
+  const args = ["split-window", "-d", direction === "right" ? "-h" : "-v", "-t", target];
   if (opts?.cwd) {
     args.push("-c", opts.cwd);
   }
