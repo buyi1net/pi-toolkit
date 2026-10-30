@@ -512,15 +512,9 @@ function getArtifactDir(sessionDir: string, sessionId: string): string {
 
 const statusConfig = loadStatusConfig();
 
-/**
- * 生效的状态显示开关：pi-toolkit.json 的 `subagents.status.enabled` 优先，
- * 包内 config.json（→ config.json.example）只作兜底默认。运行时实时读取，
- * 菜单里改完立即生效，不需要重启。
- */
+/** 运行状态展示固定开启；旧 status.enabled 配置不再参与模块装配。 */
 function isStatusEnabled(): boolean {
-  const status = hostSection()?.section.status;
-  if (isPlainObject(status) && typeof status.enabled === "boolean") return status.enabled;
-  return statusConfig.enabled;
+  return true;
 }
 
 function formatWidgetRightLabel(snapshot: StatusSnapshot): string {

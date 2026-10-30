@@ -47,8 +47,7 @@ import {
   type TierMapping,
   type TierThinkingMapping,
 } from "./config.ts";
-import { findDuplicateBaseRef } from "./routing.ts";
-import { supportedThinkingLevels } from "./model-selector.ts";
+import { baseModelRef, findDuplicateBaseRef } from "./routing.ts";
 import type { SubagentsMessageKey } from "./messages/index.ts";
 
 /**
@@ -74,10 +73,8 @@ export type TierMenuRegistry = Pick<ModelRegistry, "getAll" | "hasConfiguredAuth
 export interface TierCandidate {
   readonly provider: string;
   readonly modelId: string;
-  /** 该供应商已配置认证；工单 09 起默认列表只收已认证，未认证折叠进显式入口 */
+  /** 模型池只保存基础 model ref；思考等级由 spawn_agent.reasoning_effort 选择。 */
   readonly authenticated: boolean;
-  /** 目录核验的该模型支持思考等级（复用 model-selector 的口径），供后缀写入口过滤 */
-  readonly supportedThinking: readonly string[];
 }
 
 export function tierCandidateValue(candidate: { provider: string; modelId: string }): string {
@@ -96,7 +93,6 @@ export function discoverTierCandidates(registry: TierMenuRegistry): TierCandidat
     candidates.push({
       ...selection,
       authenticated: registry.hasConfiguredAuth(model),
-      supportedThinking: supportedThinkingLevels(model),
     });
   }
   candidates.sort((left, right) => {
@@ -752,7 +748,7 @@ export class SubagentsPanel implements Component {
           this.mountUnauthenticatedPicker(row, title);
           return;
         }
-        this.mountThinkingPicker(row, value, () => this.mountModelPicker(row, title));
+        this.applyModelSelection(row, value);
       },
       onCancel: () => {
         this.submenu = null;
@@ -781,7 +777,7 @@ export class SubagentsPanel implements Component {
           description: t("module.subagents.tier.noAuthRequired"),
         })),
       onSelect: (value) => {
-        this.mountThinkingPicker(row, value, () => this.mountUnauthenticatedPicker(row, backTitle));
+        this.applyModelSelection(row, value);
       },
       onCancel: () => this.mountModelPicker(row, backTitle),
     });
@@ -789,45 +785,7 @@ export class SubagentsPanel implements Component {
   }
 
   /**
-   * 思考等级选择（后缀写入口）：首项「模型默认」写出裸引用，其余按目录支持集
-   * （supportedThinkingLevels 同一规则，不另设第二套）写出 ":level" 后缀。Esc
-   * 回到来时的模型列表。候选查不到时按全集提供：无法核验就不虚构限制，与
-   * model-selector 的诚实边界同向（当前接线下查不到不会发生，候选值本身
-   * 出自同一份 candidates 快照）。
-   */
-  private mountThinkingPicker(
-    row: { readonly kind: "model" | "add"; readonly tier: ModelTier; readonly index?: number },
-    model: string,
-    back: () => void,
-  ): void {
-    const t = this.options.t;
-    const levels =
-      this.candidates.find((candidate) => tierCandidateValue(candidate) === model)
-        ?.supportedThinking ?? THINKING_LEVELS;
-    this.submenu = new ChoicePicker({
-      title: t("module.subagents.pool.levelTitle", { model }),
-      theme: this.options.theme,
-      t,
-      options: [
-        { value: "", label: t("module.subagents.tier.thinking.unset") },
-        ...levels.map((level) => ({ value: level, label: level })),
-      ],
-      onSelect: (level) => {
-        this.submenu = null;
-        // 早退路径（重选同值）不会触发后续 refresh，这里显式请求一帧，
-        // 保证选择器立刻从渲染里消失
-        this.options.requestRender();
-        void this.applyModelSelection(row, level === "" ? model : `${model}:${level}`);
-      },
-      onCancel: back,
-    });
-    this.options.requestRender();
-  }
-
-  /**
-   * 选择器落选：换指定下标的模型 / 追加到池尾。重复判定按基础引用（工单
-   * 03）：剥掉思考等级后缀后与池内已有候选相同即拒绝（不产生重复候选，
-   * 后缀变体也写不进池），提示同时指明尝试写入的候选与池内已存在的那条。
+   * 选择器落选：换指定下标的基础模型引用 / 追加到池尾。
    */
   private async applyModelSelection(
     row: { readonly kind: "model" | "add"; readonly tier: ModelTier; readonly index?: number },
@@ -835,17 +793,18 @@ export class SubagentsPanel implements Component {
   ): Promise<void> {
     const t = this.options.t;
     // 池取生效值（单一读口）：可编辑档的生效池就是本节当前内容
-    const pool = [...this.view.tiers[row.tier].pool];
+    const modelRef = baseModelRef(model);
+    const pool = this.view.tiers[row.tier].pool.map(baseModelRef);
     const replaceIndex = row.kind === "model" ? row.index : undefined;
-    if (replaceIndex !== undefined && pool[replaceIndex] === model) return;
+    if (replaceIndex !== undefined && pool[replaceIndex] === modelRef) return;
     const nextPool =
       replaceIndex !== undefined
-        ? pool.map((candidate, index) => (index === replaceIndex ? model : candidate))
-        : [...pool, model];
+        ? pool.map((candidate, index) => (index === replaceIndex ? modelRef : candidate))
+        : [...pool, modelRef];
     const duplicate = findDuplicateBaseRef(nextPool);
     if (duplicate) {
-      const existing = duplicate.first === model ? duplicate.second : duplicate.first;
-      this.notify(t("module.subagents.pool.duplicate", { candidate: model, existing }));
+      const existing = duplicate.first === modelRef ? duplicate.second : duplicate.first;
+      this.notify(t("module.subagents.pool.duplicate", { candidate: modelRef, existing }));
       return;
     }
     const outcome = await saveTierPool(this.options, row.tier, nextPool);

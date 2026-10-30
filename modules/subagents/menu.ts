@@ -19,7 +19,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SettingItem } from "@earendil-works/pi-tui";
 import type { Translator } from "../../i18n/index.ts";
-import type { ConfigWriteHooks } from "../../kit/config-transaction.ts";
 import { schemaFieldRow } from "../../kit/menu/items.ts";
 import { ChoicePicker, SettingsPanel } from "../../kit/menu/panels.ts";
 import type { MenuTheme } from "../../kit/menu/theme.ts";
@@ -28,7 +27,6 @@ import {
   normalizeConfigValue,
   type ModuleConfigRecord,
   type ModuleMenuContext,
-  type RowChangeEntry,
 } from "../../kit/module.ts";
 import {
   displayModePatch,
@@ -42,14 +40,12 @@ import {
   effectiveTierMapping,
   loadEffectiveTierConfig,
   MODEL_TIERS,
-  statusEnabledPatch,
   subagentsSectionPath,
   tierRouteError,
   type EffectiveTierRouteConfig,
   type TierConfigLoadResult,
   type TierMapping,
 } from "./config.ts";
-import { loadStatusConfig } from "./status.ts";
 import {
   type EffectivePanelView,
   type PoolEditorRow,
@@ -110,18 +106,6 @@ export {
   tierPoolEditable,
 } from "./pool-editor.ts";
 
-/**
- * 包内 config.json（→ config.json.example）的 status.enabled：
- * 本节点未声明时的兜底默认。读不出来时按开启处理（与 example 一致）。
- */
-export function readPackageStatusEnabled(): boolean {
-  try {
-    return loadStatusConfig().enabled;
-  } catch {
-    return true;
-  }
-}
-
 export const SUBAGENTS_DISPLAY_MODE_ROW_ID = "subagents.displayMode";
 
 export interface DisplayModeMenuState {
@@ -154,9 +138,6 @@ export const SUBAGENTS_MENU_ITEM_ID = "subagents.settings";
 
 /** 页内「模型与候选池」入口行 id（打开候选池编辑器） */
 export const SUBAGENTS_POOL_ROW_ID = "subagents.pool";
-
-/** 一级「运行状态显示」行 id（非 schema 字段，保存走本模块的配置事务） */
-export const SUBAGENTS_STATUS_ROW_ID = "subagents.status";
 
 /** 模块开关字段（工单 46）：一级开关行与 schema 同源 */
 export const SUBAGENTS_ENABLED_FIELD = enabledField(
@@ -209,96 +190,33 @@ export function poolEntryDescription(
   return t("module.subagents.menu.description");
 }
 
-/** 状态显示开关的显示值：本节点未声明时展示包内兜底默认 */
-export function statusRowValue(
-  state: SubagentsPanelState,
-  fallbackEnabled: boolean,
-  t: Translator,
-): string {
-  const enabled = state.statusEnabled ?? fallbackEnabled;
-  return enabled ? t("common.on") : t("common.off");
-}
-
-/** 状态开关行的保存依赖（一级状态行与回归 harness 共用） */
-interface StatusSaveOptions {
-  readonly saveConfig: (patch: ModuleConfigRecord, hooks?: ConfigWriteHooks) => Promise<void>;
-}
-
-/** 写状态显示开关：补丁语义在本模块，落盘与重载走配置写入事务 */
-export async function saveStatus(
-  options: StatusSaveOptions,
-  enabled: boolean,
-): Promise<SaveOutcome> {
-  try {
-    await options.saveConfig(statusEnabledPatch(enabled));
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-/**
- * 运行状态显示行（本单起为就地切换）：值位即当前开关，回车/空格直接切；
- * 写盘走本模块的配置事务，失败提示并把显示回滚（菜单层按 read 回读）。
- * 本节点未声明时展示包内兜底默认。
- */
-function subagentsStatusRow(options: {
-  readonly t: Translator;
-  readonly context: ExtensionContext;
-  readonly getSection: () => Record<string, unknown>;
-  readonly saveConfig: (patch: ModuleConfigRecord, hooks?: ConfigWriteHooks) => Promise<void>;
-  readonly requestRender: () => void;
-  readonly registerRowChange: (id: string, entry: RowChangeEntry) => void;
-  readonly packageStatusEnabled: boolean;
-}): SettingItem {
-  const t = options.t;
-  const label = t("module.subagents.status.label");
-  const read = () =>
-    statusRowValue(readPanelState(options.getSection()), options.packageStatusEnabled, t);
-  options.registerRowChange(SUBAGENTS_STATUS_ROW_ID, {
-    read,
-    change: async (value) => {
-      const outcome = await saveStatus(options, value === t("common.on"));
-      if (!outcome.ok) {
-        options.context.ui.notify(t("notify.saveFailed", { reason: outcome.error ?? "" }), "error");
-      }
-      options.requestRender();
-      return outcome.ok;
-    },
-  });
-  return {
-    id: SUBAGENTS_STATUS_ROW_ID,
-    label,
-    description: t("module.subagents.status.description"),
-    currentValue: read(),
-    values: [t("common.on"), t("common.off")],
-  };
-}
-
 export function displayModeRow(options: {
   readonly t: Translator;
   readonly theme: MenuTheme;
   readonly context: ModuleMenuContext;
 }): SettingItem {
   const state = displayModeMenuState(options.context.getConfig());
+  const modeLabel = (mode: DisplayMode) => options.t(`module.subagents.display.${mode}` as any);
+  const contextLabel = options.t(`module.subagents.display.context.${state.context}` as any);
+  const preferenceLabel = modeLabel(state.current);
   return {
     id: SUBAGENTS_DISPLAY_MODE_ROW_ID,
-    label: "Display mode",
-    description: `${state.context}: ${state.options.map((item) => `${item.mode}${item.available ? "" : " (unavailable)"}`).join(", ")}`,
-    currentValue: state.current,
+    label: options.t("module.subagents.display.label"),
+    description: options.t("module.subagents.display.description", { context: contextLabel, preference: preferenceLabel }),
+    currentValue: preferenceLabel,
     submenu: (_currentValue, done) => new ChoicePicker({
-      title: "Display mode",
+      title: options.t("module.subagents.display.title"),
       theme: options.theme,
       t: options.t,
       options: state.options.map((item) => ({
         value: item.mode,
-        label: item.available ? item.mode : `${item.mode} (unavailable)`,
-        description: item.reason ?? undefined,
+        label: item.available ? modeLabel(item.mode) : options.t("module.subagents.display.unavailable", { mode: modeLabel(item.mode) }),
+        description: item.available ? undefined : options.t("module.subagents.display.unavailableReason", { mode: modeLabel(item.mode) }),
       })),
       onSelect: (value) => {
         const mode = value as DisplayMode;
         if (!isDisplayModeSelectable(state, mode)) {
-          options.context.context.ui.notify(`Display mode ${mode} is unavailable`, "warning");
+          options.context.context.ui.notify(options.t("module.subagents.display.unavailableReason", { mode: modeLabel(mode) }), "warning");
           return;
         }
         void options.context.saveConfig(displayModePatch(mode, state.context), { reapply: () => undefined })
@@ -339,15 +257,6 @@ export function buildSubagentsPageItems(context: ModuleMenuContext): readonly Se
       current: section["enabled"],
     }),
     displayModeRow({ t, theme: context.theme, context }),
-    subagentsStatusRow({
-      t,
-      context: context.context,
-      getSection: () => context.getConfig(),
-      saveConfig: (patch, hooks) => context.saveConfig(patch, hooks),
-      requestRender: () => context.requestRender(),
-      registerRowChange: (id, entry) => context.registerRowChange(id, entry),
-      packageStatusEnabled: readPackageStatusEnabled(),
-    }),
     {
       id: SUBAGENTS_POOL_ROW_ID,
       label: t("module.subagents.menu.label"),

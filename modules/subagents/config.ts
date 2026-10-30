@@ -96,8 +96,8 @@ export interface SubagentsSectionView {
   readonly tier: TierMapping;
   /** 已校验的档位默认思考等级；非法项被丢弃并记录在 problems 里 */
   readonly tierThinking: TierThinkingMapping;
-  /** `status.enabled`；未声明时为 undefined（落回包内 config.json 的兜底默认） */
-  readonly statusEnabled: boolean | undefined;
+  /** 状态展示固定开启；旧 status.enabled 字段不再读取。 */
+  readonly statusEnabled: boolean;
   readonly problems: readonly string[];
   /**
    * 本节 models/thinking 树的逐档问题（工单 05）：候选池编辑器的锁定条
@@ -126,18 +126,7 @@ export function readSubagentsSection(section: Record<string, unknown>): Subagent
   const tierProblems: readonly string[] = [...lenient.problems];
   const problems: string[] = [...tierProblems];
 
-  let statusEnabled: boolean | undefined;
-  const status = section.status;
-  if (status !== undefined) {
-    if (!isPlainObject(status)) {
-      problems.push(`${SECTION_LABEL}.status must be an object`);
-    } else if (status.enabled !== undefined) {
-      if (typeof status.enabled === "boolean") statusEnabled = status.enabled;
-      else problems.push(`${SECTION_LABEL}.status.enabled must be a boolean`);
-    }
-  }
-
-  return { tier, tierThinking, statusEnabled, problems, tierProblems };
+  return { tier, tierThinking, statusEnabled: true, problems, tierProblems };
 }
 
 /**
@@ -205,11 +194,6 @@ export function tierPoolPatch(
 ): ModuleConfigRecord {
   assertModelPool(tier, pool, source);
   return { models: { [tier]: [...pool] } };
-}
-
-/** 写盘补丁语义（工单 19）：状态显示开关 */
-export function statusEnabledPatch(enabled: boolean): ModuleConfigRecord {
-  return { status: { enabled } };
 }
 
 /**
