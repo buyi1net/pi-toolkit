@@ -9,7 +9,7 @@ import type { RunningSubagent, SubagentResult } from "./types.ts";
 import { detectDisplayModeAvailability, resolveDisplaySurface } from "./surface.ts";
 import { createParentUpdateQueue, createParentUpdateProducers } from "./parent-update-queue.ts";
 
-const DEFAULT_AGENT_TYPE = "worker";
+const DEFAULT_AGENT_TYPE = "general-purpose";
 
 export type DeliverTerminal = (running: RunningSubagent, result: SubagentResult, source: "spawn" | "followup" | "recovered-exit" | "recovered-headless" | "recovered-pane", deliveryId: string) => void;
 
@@ -63,6 +63,12 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
       display_mode: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("herdr"), Type.Literal("tmux")])),
     }),
     async execute(_toolCallId, raw, _signal, _onUpdate, ctx) {
+      if (parentTaskDepth() >= 2) {
+        return errorResult({
+          code: "agent_depth_limit",
+          message: "Agents at depth 2 or deeper cannot spawn additional sub-agents.",
+        });
+      }
       const validated = validateCodexV2SpawnParams(raw);
       if (!validated.ok) return errorResult({ code: "invalid_params", message: "Invalid spawn_agent parameters.", details: validated.errors });
       const input: CodexV2SpawnParams = validated.value;

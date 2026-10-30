@@ -92,7 +92,7 @@ import { settleCompletionFromResult } from "./dependencies.ts";
 import { extractSubagentResult } from "./result.ts";
 import { registerSubagentRenderers } from "./renderers.ts";
 import { registerListAgentsTool } from "./list-agents-tool.ts";
-import { registerSubagentModelsTool, buildSubagentModelsResult } from "./models-tool.ts";
+import { registerSubagentModelsTool, buildSubagentModelsResult, summarizeAgentTypes } from "./models-tool.ts";
 import { registerSpawnAgentTool, type DeliverTerminal } from "./spawn-agent-tool.ts";
 import { registerWaitAgentTool } from "./wait-agent-tool.ts";
 import { createParentUpdateQueue, createParentUpdateProducers, type ParentSessionUpdate } from "./parent-update-queue.ts";
@@ -105,6 +105,7 @@ import type { RunningSubagent, SubagentResult } from "./types.ts";
 import {
   buildPiPromptArgs,
   buildSubagentToolAllowlist,
+  subagentTaskDepth,
   declaredMcpTools,
   MCP_TOOL_PREFIX,
   resolveEffectiveAutoExit,
@@ -455,21 +456,21 @@ function getBundledAgentsDir(): string {
   return join(SUBAGENTS_DIR, "agents");
 }
 
-function agentDiscoveryOptions() {
+function agentDiscoveryOptions(cwd = process.cwd()) {
   return {
     bundledDir: getBundledAgentsDir(),
     configDir: getAgentConfigDir(),
-    projectDir: process.cwd(),
+    projectDir: cwd,
     allowlist: SUBAGENT_ALLOWLIST,
   };
 }
 
-function discoverAgentDefinitions() {
-  return discoverAgents(agentDiscoveryOptions());
+function discoverAgentDefinitions(cwd = process.cwd()) {
+  return discoverAgents(agentDiscoveryOptions(cwd));
 }
 
-function loadAgentDefaults(agentName: string): AgentDefaults | null {
-  return loadAgentDefaultsFrom(agentName, agentDiscoveryOptions());
+function loadAgentDefaults(agentName: string, cwd = process.cwd()): AgentDefaults | null {
+  return loadAgentDefaultsFrom(agentName, agentDiscoveryOptions(cwd));
 }
 
 /**
@@ -622,7 +623,7 @@ export const subagentsRunningView = {
 };
 
 // When this extension is loaded inside a subagent that itself spawns children
-// (e.g. a worker delegating to plan/researcher), `subagent-done.ts` runs in the
+// (e.g. a general-purpose agent delegating to explore), `subagent-done.ts` runs in the
 // same process and needs to know whether this session still has children in
 // flight — so it can suppress auto-exit and keep the session open until they all
 // report back. Expose a live count through a process-global symbol that both
@@ -753,6 +754,12 @@ function widgetBorderColor(
   return theme.getThinkingBorderColor(level);
 }
 
+function displayAgentName(agent: string | undefined): string | null {
+  if (!agent) return null;
+  const definition = discoverAgentDefinitions(latestCtx?.cwd ?? process.cwd()).find((candidate) => candidate.name === agent);
+  return definition?.displayName ?? agent;
+}
+
 function rowIdentityAndMetadata(
   row: WidgetSnapshot["rows"][number],
   tier: ReturnType<typeof subagentTreeTier>,
@@ -769,7 +776,8 @@ function rowIdentityAndMetadata(
     ? ` ${icon}  `
     : ` ${subagentTreePrefix(row.depth, row.lastFlags, row.isLast, tier, muted ?? ((text) => text))}`;
   const name = row.depth === 0 ? row.name : truncateToWidth(row.name, DESCENDANT_NAME_LIMIT, "…");
-  const role = row.agent ? truncateToWidth(row.agent, DESCENDANT_NAME_LIMIT, "…") : null;
+  const displayAgent = displayAgentName(row.agent ?? undefined);
+  const role = displayAgent ? truncateToWidth(displayAgent, DESCENDANT_NAME_LIMIT, "…") : null;
   const metadata = level === "hidden" ? null : buildSubagentMetadataSegment(row.model, row.thinking, role, level);
   const identity = `${formatElapsedMMSS(row.startTime)}  ${name}`;
   const left = metadata ? `${identity}  ${metadata.text}` : identity;
@@ -1092,15 +1100,17 @@ function applySandboxToParts(
   // list_mcp_resources 等资源工具）；只有 profile 显式声明 mcp__<server>__<tool|*>
   // 时才放行，此时 Pi 的 --tools 过滤会把 MCP 收敛到声明过的 pattern，未声明的
   // 服务器不可达。权限口径见 describeMcpIsolation（随 spawn 结果展示）。
-  if (declaredMcpTools(loadout.toolAllowlist).length === 0) {
+  if (typeof loadout.toolAllowlist === "string" && declaredMcpTools(loadout.toolAllowlist).length === 0) {
     parts.push("--no-mcp");
   }
 
-  // Normal extension discovery is intentionally preserved, but delegation is
-  // a separate capability. When the profile did not explicitly grant
-  // subagent_agents, exclude all three control tools even if the child has no
-  // `--tools` allowlist (or a stale loadout tried to include one).
-  const canSpawnChildren = Array.isArray(loadout.spawnable) && loadout.spawnable.length > 0;
+  // Normal extension discovery is intentionally preserved. Delegation is
+  // controlled by task depth; spawnable is retained only for old loadouts and
+  // is not authoritative for the new Codex v2 launch path.
+  // This function builds the child command. The child is one level deeper than
+  // the current process, so only a root parent may pass the spawn lifecycle tools
+  // to its child; a depth-1 parent creates a depth-2 child without them.
+  const canSpawnChildren = subagentTaskDepth() < 1;
   if (!canSpawnChildren) {
     parts.push("--exclude-tools", escape(SPAWNING_TOOLS.join(",")));
   }
@@ -1348,6 +1358,7 @@ export const __test__ = {
   resolveSurfaceChoice,
   validateAgentLifecycleConfig,
   buildSubagentToolAllowlist,
+  subagentTaskDepth,
   applySandboxToParts,
   classifyToolProvisions,
   validateToolProvision,
@@ -2431,11 +2442,13 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
       ? Object.fromEntries(MODEL_TIERS.map((tier) => [tier, loaded.config!.tiers[tier].pool ?? []]))
       : {};
     const availableModels = (ctx.modelRegistry as any).getAvailable();
+    const agent_types = summarizeAgentTypes(discoverAgentDefinitions(cwd));
     const key = JSON.stringify({
       currentModel: ctx.model ?? null,
       registry: availableModels,
       auth: availableModels.map((model: any) => ({ provider: model.provider, id: model.id, configured: (ctx.modelRegistry as any).hasConfiguredAuth?.(model) ?? null })),
       pools,
+      agent_types,
     });
     let byConfig = modelDirectoryCache.get(registry);
     if (!byConfig) { byConfig = new Map(); modelDirectoryCache.set(registry, byConfig); }
@@ -2447,11 +2460,12 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
         modelRegistry: ctx.modelRegistry as any,
         health: new Map(),
         display_modes: detectDisplayModeAvailability(),
+        agent_types,
       });
       byConfig.set(key, directory);
     }
     const health = hostOptions.modelHealth?.read(Object.values(pools).flatMap((pool) => pool ?? []));
-    return { ...projectModelDirectoryHealth(directory, health), display_modes: detectDisplayModeAvailability() };
+    return { ...projectModelDirectoryHealth(directory, health), display_modes: detectDisplayModeAvailability(), agent_types };
   };
 
   registerSpawnAgentTool(pi, {

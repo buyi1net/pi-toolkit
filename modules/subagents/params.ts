@@ -35,7 +35,7 @@ export const SubagentParams = Type.Object({
   agent: Type.String({
     minLength: 1,
     description:
-      "Which agent to spawn (e.g. 'worker', 'plan', 'researcher'). This loads the agent's " +
+      "Which agent to spawn (e.g. 'general-purpose' or 'explore'). This loads the agent's " + +
       "fixed profile — its model, tool loadout, and system prompt. Must be one of the available agents.",
   }),
   task: Type.String({

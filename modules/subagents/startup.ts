@@ -73,6 +73,7 @@ import {
   resolveLaunchBehavior,
   resolveSubagentPaths,
   resolveSurfaceChoice,
+  subagentTaskDepth,
   validateAgentLifecycleConfig,
 } from "./launch-config.ts";
 import { loadTierRouteConfig, normalizeTier, resolveTierPoolForParams, isThinkingLevel, modelOwnThinkingSuffix, THINKING_LEVELS, type ModelTier, type ThinkingLevel, type TierRouteInjectedSource, type TierConfigLoadResult } from "./routing.ts";
@@ -295,7 +296,7 @@ export interface SubagentStartupDeps {
   /** 宿主信任根（PI_CODING_AGENT_DIR 或 ~/.pi/agent）。 */
   getAgentConfigDir: () => string;
   /** agent profile 读取（含宿主注入的 pi-toolkit 配置链）。 */
-  loadAgentDefaults: (agentName: string) => AgentDefaults | null;
+  loadAgentDefaults: (agentName: string, cwd?: string) => AgentDefaults | null;
   /** 宿主注入的 tier 层（不在宿主里声明 models 时不产生候选层）。 */
   resolveHostTierSources: () => TierRouteInjectedSource[];
   getArtifactDir: (sessionDir: string, sessionId: string) => string;
@@ -590,7 +591,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
       };
     }
 
-    const agentDefs = params.agent ? deps.loadAgentDefaults(params.agent) : null;
+    const agentDefs = params.agent ? deps.loadAgentDefaults(params.agent, ctx.cwd) : null;
 
     // ── 选择器输入先校验（工单 24）：思考等级覆盖链上层（任务显式 >
     // 代理 frontmatter；档位默认来自配置层解析，parseTierConfig 已严格
@@ -861,7 +862,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     // 缺失即拒绝启动并给出可操作的修复路径；核验器缺省（旧注入层）时跳过。
     // 工单 05：白名单只算一次并随计划携带（plan.toolAllowlist），spawn 阶段
     // 与 MCP 能力门/权限说明用同一份，不重复解析。
-    const grantSpawning = !!(agentDefs?.subagentAgents && agentDefs.subagentAgents.length > 0);
+    const grantSpawning = subagentTaskDepth() < 2;
     const toolAllowlist = buildSubagentToolAllowlist(agentDefs?.tools, {
       grantSpawning,
       ...(memberMode ? { grantTeamSend: true } : {}),
@@ -1072,9 +1073,9 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     const surfaceName = normalizeSubagentName(params.name ?? params.agent ?? "subagent");
     const activityFile = getSubagentActivityFile(artifactDir, id);
     mkdirSync(dirname(activityFile), { recursive: true });
-    // An agent with a non-empty subagent_agents list is granted the spawning
-    // toolset and may only spawn the listed agents (enforced via PI_SUBAGENT_ALLOWED).
-    const grantSpawning = !!(agentDefs?.subagentAgents && agentDefs.subagentAgents.length > 0);
+    // Child depth, rather than a role declaration, controls whether this process
+    // receives the subagent lifecycle toolset.
+    const grantSpawning = subagentTaskDepth() < 2;
     // Resolve the config dir the child sees: a target-local .pi/agent/ wins,
     // else the propagated global dir. Captured once so the launch env and the
     // resume snapshot agree.
@@ -1095,9 +1096,8 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     if (resolvedAgentDir) {
       splitEnv.PI_CODING_AGENT_DIR = resolvedAgentDir;
     }
-    if (grantSpawning && agentDefs?.subagentAgents) {
-      splitEnv.PI_SUBAGENT_ALLOWED = agentDefs.subagentAgents.join(",");
-    }
+    // Depth 1 children inherit the complete dynamic role directory. Depth 2
+    // children do not receive spawning tools, so no role allowlist is needed.
     splitEnv.PI_SUBAGENT_NAME = surfaceName;
     splitEnv.PI_SUBAGENT_TASK_PATH = `${process.env.PI_SUBAGENT_TASK_PATH ?? "/root"}/${surfaceName}`;
     if (params.agent) {
@@ -1216,7 +1216,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
       ...(cohortId ? { cohortId } : {}),
       systemPromptMode: systemPromptMode ?? null,
       identity: identityInSystemPrompt ? identity : null,
-      spawnable: agentDefs?.subagentAgents ?? null,
+      spawnable: null,
       autoExit: memberMode ? false : effectiveAutoExit,
       ...(memberMode ? { member: true } : {}),
       // Store the actual cwd used by the child. For an omitted `cwd`, this is

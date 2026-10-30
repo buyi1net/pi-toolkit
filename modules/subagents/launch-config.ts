@@ -37,8 +37,8 @@ export const MCP_TOOL_PREFIX = "mcp__";
 
 /**
  * 工单 05：最终 allowlist 中显式声明的 MCP server/tool pattern（原序去重）。
- * null（无 --tools）与未声明任何 mcp__ 条目时返回空数组——子代理没有
- * 明确授予 MCP，能力门必须 fail closed。
+ * null（无 --tools）表示继承父会话的 MCP 能力，不产生角色级 MCP 声明；显式
+ * allowlist 未声明 mcp__ 时才由启动接缝关闭 MCP。
  */
 export function declaredMcpTools(toolAllowlist: string | null | undefined): string[] {
   if (!toolAllowlist) return [];
@@ -55,10 +55,13 @@ export function declaredMcpTools(toolAllowlist: string | null | undefined): stri
 
 /**
  * 工单 05：MCP 能力门的可见权限说明（随 spawn 结果 details.mcp 展示）。
- * 默认严格隔离时说明未授权 MCP 整体关闭；显式声明时列出声明的 pattern，
- * 并说明未声明的 MCP 不可达。文案是面向操作者的权限口径，不是模型提示。
+ * null 表示继承父会话；显式 allowlist 默认严格隔离，显式声明时列出声明
+ * 的 pattern。文案是面向操作者的权限口径，不是模型提示。
  */
 export function describeMcpIsolation(toolAllowlist: string | null | undefined): string {
+  if (toolAllowlist == null) {
+    return "MCP: inherited from the parent session (no role-level MCP restriction)";
+  }
   const declared = declaredMcpTools(toolAllowlist);
   if (declared.length === 0) {
     return "MCP: isolated (launched with --no-mcp; no MCP servers connect and no MCP tools are reachable)";
@@ -193,6 +196,12 @@ export function resolveSurfaceChoice(
   };
 }
 
+export function subagentTaskDepth(taskPath = process.env.PI_SUBAGENT_TASK_PATH): number {
+  const path = taskPath ?? "/root";
+  const parts = path.split("/").filter(Boolean);
+  return parts[0] === "root" ? Math.max(0, parts.length - 1) : parts.length;
+}
+
 export function buildSubagentToolAllowlist(
   effectiveTools: string | undefined,
   opts?: { grantSpawning?: boolean; grantTeamSend?: boolean; protocol?: SubagentProtocol },
@@ -205,13 +214,13 @@ export function buildSubagentToolAllowlist(
   const grantTeamSend = opts?.grantTeamSend ?? false;
   const hasExplicitTools = effectiveTools !== undefined;
   const protocol = opts?.protocol ?? "codex-v2";
+  if (!hasExplicitTools && (opts?.grantSpawning ?? false) && !(opts?.grantTeamSend ?? false)) return null;
   const spawningNames = new Set<string>(spawningToolsForProtocol(protocol));
   const teamNames = new Set<string>(TEAM_TOOLS);
 
   // A profile cannot opt itself into delegation merely by putting a spawning
-  // tool in `tools`; the explicit subagent_agents grant is the authority.
-  // team_send 同理:profile 不能靠把工具名写进 tools 自授;member spawn 的
-  // 显式注入才是授权来源。
+  // tool in `tools`; the depth policy is the authority for the new spawn path.
+  // team_send remains a separate explicit member capability.
   const allow = new Set(
     requested.filter((tool) =>
       (grantSpawning || !spawningNames.has(tool)) && (grantTeamSend || !teamNames.has(tool)),

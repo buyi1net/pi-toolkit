@@ -31,6 +31,7 @@ export interface AgentDefaults {
 
 export interface AgentDefinition extends AgentDefaults {
   name: string;
+  displayName?: string;
   description?: string;
   disableModelInvocation: boolean;
   filePath: string;
@@ -74,6 +75,8 @@ export function parseAgentDefinition(
 
   return {
     name: getFrontmatterValue(frontmatter, "name") ?? fallbackName,
+    displayName:
+      getFrontmatterValue(frontmatter, "display_name") ?? getFrontmatterValue(frontmatter, "displayName"),
     description: getFrontmatterValue(frontmatter, "description"),
     model: getFrontmatterValue(frontmatter, "model"),
     tier: getFrontmatterValue(frontmatter, "tier"),

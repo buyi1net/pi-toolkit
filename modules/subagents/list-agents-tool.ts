@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
 import type { PublicAgentRecord, RuntimeRegistry } from "./registry.ts";
@@ -14,6 +14,30 @@ function publicStatus(record: PublicAgentRecord, live: ReturnType<RuntimeRegistr
   return live.publicStatus ?? record.status;
 }
 
+// 与 content 的两种 JSON 载荷镜像：公开代理树与软错误；软错误不走 isError，
+// 让 codemode 脚本拿到结构化 code 而不是 reject。
+const listAgentsOutputSchema = Type.Union([
+  Type.Object({
+    agents: Type.Array(Type.Object({
+      agent_id: Type.String(),
+      task_name: Type.String(),
+      canonical_task_name: Type.String(),
+      status: Type.Union([
+        Type.Literal("starting"), Type.Literal("running"), Type.Literal("waiting"),
+        Type.Literal("completed"), Type.Literal("failed"), Type.Literal("interrupted"), Type.Literal("handed_off"),
+      ]),
+      parent_agent_id: Type.Union([Type.String(), Type.Null()]),
+      parent_canonical_task_name: Type.Union([Type.String(), Type.Null()]),
+      summary: Type.String(),
+      updated_at: Type.Number(),
+    })),
+  }),
+  Type.Object({
+    code: Type.String(),
+    message: Type.String(),
+  }),
+]);
+
 export function registerListAgentsTool(pi: ExtensionAPI, deps: ListAgentsToolDeps): void {
   pi.registerTool({
     name: "list_agents",
@@ -21,6 +45,7 @@ export function registerListAgentsTool(pi: ExtensionAPI, deps: ListAgentsToolDep
     description: "List the visible agents in the current parent session as a public status tree. This tool takes no parameters.",
     promptSnippet: "List visible agents, their status, task summary, and parent paths.",
     parameters: Type.Object({}),
+    outputSchema: listAgentsOutputSchema,
     renderResult(result, _opts, theme) {
       const details = result.details as { agents?: PublicAgentRecord[] } | undefined;
       const agents = details?.agents ?? [];
@@ -33,7 +58,11 @@ export function registerListAgentsTool(pi: ExtensionAPI, deps: ListAgentsToolDep
       const sessionFile = ctx?.sessionManager?.getSessionFile?.();
       if (!sessionFile) {
         const error = { code: "session_unavailable", message: "list_agents requires a persistent parent session." };
-        return { content: [{ type: "text" as const, text: JSON.stringify(error) }], details: error };
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(error) }],
+          details: error,
+          structuredContent: error as unknown as AgentToolResult["structuredContent"],
+        };
       }
       const artifactDir = deps.getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId());
       const path = deps.registry.publicPathFor(artifactDir);
@@ -44,6 +73,7 @@ export function registerListAgentsTool(pi: ExtensionAPI, deps: ListAgentsToolDep
       return {
         content: [{ type: "text" as const, text: JSON.stringify({ agents }) }],
         details: { agents },
+        structuredContent: { agents } as unknown as AgentToolResult["structuredContent"],
       };
     },
   });
