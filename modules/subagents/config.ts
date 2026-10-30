@@ -39,7 +39,7 @@ export interface DisplayModeConfig {
 }
 
 const DISPLAY_MODES: readonly DisplayMode[] = ["auto", "herdr", "tmux"];
-const DISPLAY_CONTEXTS: readonly DisplayContext[] = ["terminal", "herdr", "tmux"];
+const DISPLAY_CONTEXTS: readonly DisplayContext[] = ["terminal", "nested", "herdr", "tmux"];
 
 export function isDisplayMode(value: unknown): value is DisplayMode {
   return typeof value === "string" && DISPLAY_MODES.includes(value as DisplayMode);

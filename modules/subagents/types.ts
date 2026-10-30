@@ -96,6 +96,8 @@ export interface RunningSubagent {
   /** 主工具等待已被 Escape 或 timeout 解除,但子代理仍在运行。 */
   waitReleased?: SubagentWaitRelease;
   surface: string;
+  /** Pane surface type persisted for nested Herdr/tmux recovery. */
+  surfaceKind?: "herdr" | "tmux";
   startTime: number;
   sessionFile: string;
   /**

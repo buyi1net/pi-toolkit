@@ -16,6 +16,8 @@ export interface RuntimeRecord {
   agent?: string;
   modelIdentity?: { provider: string; id: string; api: string; baseUrl: string } | null;
   surface: string;
+  /** Pane surface type persisted for nested Herdr/tmux recovery. */
+  surfaceKind?: "herdr" | "tmux";
   startTime: number;
   sessionFile: string;
   activityFile?: string;
@@ -68,6 +70,7 @@ export function createRuntimeRecord(source: RuntimeSource): RuntimeRecord {
     ...(source.agent ? { agent: source.agent } : {}),
     ...(source.modelIdentity ? { modelIdentity: source.modelIdentity } : {}),
     surface: source.surface,
+    ...(source.surfaceKind ? { surfaceKind: source.surfaceKind } : {}),
     startTime: source.startTime,
     sessionFile: source.sessionFile,
     ...(source.activityFile ? { activityFile: source.activityFile } : {}),

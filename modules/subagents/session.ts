@@ -115,6 +115,8 @@ export interface SubagentLoadout {
   model: string | null;
   /** 完整宿主执行身份；公开协议只暴露 modelKey。 */
   modelIdentity?: { provider: string; id: string; api: string; baseUrl: string } | null;
+  /** Resolved pane surface for nested Herdr/tmux resume. */
+  surfaceKind?: "herdr" | "tmux";
   /** Thinking level appended to the model as `model:level`, or null. */
   thinking: string | null;
   /** Spawn 显式指定的思考等级,优先于 frontmatter thinking 与 model 自带后缀。 */
@@ -268,6 +270,7 @@ const LOADOUT_SECURITY_FIELDS = [
   "toolAllowlist",
   "model",
   "modelIdentity",
+  "surfaceKind",
   "thinking",
   "thinkingOverride",
   "tierThinking",

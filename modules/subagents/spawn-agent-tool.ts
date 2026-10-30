@@ -23,6 +23,12 @@ export interface SpawnAgentToolDeps {
   readonly deliverTerminal?: DeliverTerminal;
 }
 
+function parentTaskDepth(): number {
+  const path = process.env.PI_SUBAGENT_TASK_PATH ?? "/root";
+  const parts = path.split("/").filter(Boolean);
+  return parts[0] === "root" ? Math.max(0, parts.length - 1) : parts.length;
+}
+
 function errorResult(error: Record<string, unknown>) {
   return { content: [{ type: "text" as const, text: JSON.stringify(error) }], details: error };
 }
@@ -75,7 +81,8 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
         underlying_error: selected.details,
       }));
 
-      const requestedMode = deps.resolveDisplayMode?.(ctx, input.display_mode) ?? (input.display_mode ?? "auto");
+      const nestedAgentPolicy = parentTaskDepth() >= 1;
+      const requestedMode = nestedAgentPolicy ? "auto" : (deps.resolveDisplayMode?.(ctx, input.display_mode) ?? (input.display_mode ?? "auto"));
       const availability = detectDisplayModeAvailability();
       const resolvedSurface = resolveDisplaySurface(requestedMode, availability);
       if (typeof resolvedSurface === "object") return errorResult(displayError(requestedMode));
@@ -135,9 +142,10 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
           update_id: `spawn:${started.running.id}:terminal`,
         }));
         const publicResolvedDisplayMode = resolvedSurface === "background" ? "auto" : resolvedSurface;
+        const nestedPolicy = nestedAgentPolicy ? { display_policy: "nested_agent_forced_background" } : {};
         return {
-          content: [{ type: "text", text: JSON.stringify({ agent_id: started.running.id, task_name: input.task_name, canonical_task_name: canonical, status: "running", resolved: { model: route, reasoning_effort: input.reasoning_effort, display_mode: requestedMode, resolved_display_mode: publicResolvedDisplayMode, fork_turns: input.fork_turns ?? "all", agent_type: agent } }) }],
-          details: { agent_id: started.running.id, task_name: input.task_name, canonical_task_name: canonical, status: "running", resolved: { model: route, reasoning_effort: input.reasoning_effort, display_mode: requestedMode, resolved_display_mode: publicResolvedDisplayMode, fork_turns: input.fork_turns ?? "all", agent_type: agent } },
+          content: [{ type: "text", text: JSON.stringify({ agent_id: started.running.id, task_name: input.task_name, canonical_task_name: canonical, status: "running", resolved: { model: route, reasoning_effort: input.reasoning_effort, display_mode: requestedMode, resolved_display_mode: publicResolvedDisplayMode, ...nestedPolicy, fork_turns: input.fork_turns ?? "all", agent_type: agent } }) }],
+          details: { agent_id: started.running.id, task_name: input.task_name, canonical_task_name: canonical, status: "running", resolved: { model: route, reasoning_effort: input.reasoning_effort, display_mode: requestedMode, resolved_display_mode: publicResolvedDisplayMode, ...nestedPolicy, fork_turns: input.fork_turns ?? "all", agent_type: agent } },
         };
       } finally {
         deps.registry.releaseName(input.task_name);

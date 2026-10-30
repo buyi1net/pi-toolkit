@@ -216,6 +216,10 @@ export function createSurface(
   return id;
 }
 
+export function setActiveSurfaceKind(kind: SurfaceKind | null): void {
+  activeSurfaceKind = kind;
+}
+
 /** 为指定表面创建 pane；调用方必须先完成该表面的可用性校验。 */
 export function createSurfaceFor(
   kind: SurfaceKind,

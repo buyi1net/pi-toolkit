@@ -36,6 +36,7 @@ import {
   sendCommand,
   shellEscape,
   resolveDisplaySurface,
+  setActiveSurfaceKind,
   type DisplayMode,
   type SurfaceKind,
 } from "./surface.ts";
@@ -1199,6 +1200,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
       toolAllowlist,
       model: effectiveModel,
       modelIdentity: (params as any).modelIdentity ?? null,
+      ...(plan.resolvedDisplayMode !== "auto" ? { surfaceKind: plan.resolvedDisplayMode as SurfaceKind } : {}),
       thinking: agentDefs?.thinking ?? null,
       thinkingOverride: params.thinking ?? null,
       // 档位默认思考等级（工单 23）：与 frontmatter/显式值分开快照，resume
@@ -1400,6 +1402,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
         waitMode: memberMode ? "member-round" : effectiveInteractive ? "interactive" : "hard-barrier",
         surface,
+        ...(plan.resolvedDisplayMode !== "auto" && !useHeadless ? { surfaceKind: plan.resolvedDisplayMode as SurfaceKind } : {}),
         startTime,
         sessionFile: subagentSessionFile,
         hostSessionId: ctx.sessionManager.getSessionId(),
@@ -1529,6 +1532,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     pi: ExtensionAPI,
   ): Promise<ResumeStartedRun> {
     const { name, message, sessionPath, effectiveLoadout, cohortId, artifactDir } = plan;
+    if (effectiveLoadout.surfaceKind) setActiveSurfaceKind(effectiveLoadout.surfaceKind);
     const { autoExit, interactive } = deps.resolveResumeLaunchBehavior();
     const startTime = Date.now();
     const id = Math.random().toString(16).slice(2, 10);
@@ -1669,6 +1673,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         ...(plan.timeoutMs != null ? { timeoutMs: plan.timeoutMs } : {}),
         waitMode: "hard-barrier",
         surface: createdSurface as string,
+        ...(effectiveLoadout.surfaceKind ? { surfaceKind: effectiveLoadout.surfaceKind } : {}),
         startTime,
         sessionFile: sessionPath,
         hostSessionId: ctx.sessionManager.getSessionId(),
@@ -1818,6 +1823,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
           continue;
         }
 
+        if (record.surfaceKind) setActiveSurfaceKind(record.surfaceKind);
         if (!deps.adoptSurface(record.surface)) {
           deps.registry.removeRecord(runtimeFile, record.id);
           continue;
