@@ -2430,9 +2430,11 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
     const pools = loaded.config
       ? Object.fromEntries(MODEL_TIERS.map((tier) => [tier, loaded.config!.tiers[tier].pool ?? []]))
       : {};
+    const availableModels = (ctx.modelRegistry as any).getAvailable();
     const key = JSON.stringify({
       currentModel: ctx.model ?? null,
-      registry: (ctx.modelRegistry as any).getAll?.() ?? [],
+      registry: availableModels,
+      auth: availableModels.map((model: any) => ({ provider: model.provider, id: model.id, configured: (ctx.modelRegistry as any).hasConfiguredAuth?.(model) ?? null })),
       pools,
     });
     let byConfig = modelDirectoryCache.get(registry);

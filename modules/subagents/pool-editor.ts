@@ -68,7 +68,7 @@ export function tierDisplayName(tier: ModelTier, t: Translator): string {
 }
 
 /** 菜单需要的模型注册表能力（取 ModelRegistry 的子集，方便 headless 自测塞 stub） */
-export type TierMenuRegistry = Pick<ModelRegistry, "getAll" | "hasConfiguredAuth">;
+export type TierMenuRegistry = Pick<ModelRegistry, "getAvailable" | "getAll" | "hasConfiguredAuth">;
 
 export interface TierCandidate {
   readonly provider: string;
@@ -85,7 +85,8 @@ export function tierCandidateValue(candidate: { provider: string; modelId: strin
 export function discoverTierCandidates(registry: TierMenuRegistry): TierCandidate[] {
   const candidates: TierCandidate[] = [];
   const seen = new Set<string>();
-  for (const model of registry.getAll()) {
+  const source = registry.getAvailable?.() ?? registry.getAll();
+  for (const model of source) {
     const selection = { provider: model.provider, modelId: model.id };
     const key = tierCandidateValue(selection);
     if (seen.has(key)) continue;
@@ -429,8 +430,27 @@ export class SubagentsPanel implements Component {
     this.candidates = discoverTierCandidates(options.context.modelRegistry);
     this.local = readPanelState(options.getSection());
     this.loadResult = options.loadEffective();
+    this.pruneUnavailableLocalPools();
     this.view = this.buildView();
     this.rows = buildPoolEditorRows(this.view);
+  }
+
+  private pruneUnavailableLocalPools(): void {
+    if (typeof (this.options.context.modelRegistry as any).getAvailable !== "function") return;
+    const section = this.options.getSection();
+    const models = section.models;
+    if (!models || typeof models !== "object" || Array.isArray(models)) return;
+    const available = new Set(this.candidates.map((candidate) => tierCandidateValue(candidate)));
+    const next: Record<string, string[]> = {};
+    let changed = false;
+    for (const tier of MODEL_TIERS) {
+      const pool = (models as Record<string, unknown>)[tier];
+      if (!Array.isArray(pool)) continue;
+      const filtered = pool.filter((ref): ref is string => typeof ref === "string" && available.has(baseModelRef(ref)));
+      next[tier] = filtered;
+      if (filtered.length !== pool.length || filtered.some((ref, index) => ref !== pool[index])) changed = true;
+    }
+    if (changed) void this.options.saveConfig({ models: next }, { reapply: () => undefined }).catch((error) => this.notify(String(error)));
   }
 
   /** 单一读口 → 面板视图（刷新时重建）；本节来源与宿主注入层同一字符串 */
@@ -644,15 +664,9 @@ export class SubagentsPanel implements Component {
     this.options.requestRender();
   }
 
-  /** 待删确认：写掉该候选。档内最后一个候选拒绝删除（不允许写出空池） */
+  /** 待删确认：写掉该候选，允许空池。 */
   private async confirmDelete(row: { readonly tier: ModelTier; readonly index: number }): Promise<void> {
     const pool = [...this.view.tiers[row.tier].pool];
-    if (pool.length <= 1) {
-      this.notify(this.options.t("module.subagents.pool.lastCandidate"));
-      this.pendingDelete = null;
-      this.options.requestRender();
-      return;
-    }
     const outcome = await saveTierPool(
       this.options,
       row.tier,

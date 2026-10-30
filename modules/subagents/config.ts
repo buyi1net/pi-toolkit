@@ -162,6 +162,7 @@ export function tierRouteError(tier: ModelTier, load: () => TierConfigLoadResult
 }
 
 function assertModelPool(tier: ModelTier, pool: readonly string[], source: string): void {
+  if (pool.length === 0) return;
   const checked = parseTierConfig({ models: { [tier]: [...pool] } }, source);
   if ("error" in checked) throw new Error(checked.error);
 }

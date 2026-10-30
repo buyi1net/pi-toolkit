@@ -56,7 +56,9 @@ export interface CatalogModel {
 
 /** 模型目录的最小子集（宿主 modelRegistry 满足；测试注入 stub）。 */
 export type ModelCatalog = {
+  getAvailable(): ReadonlyArray<CatalogModel>;
   getAll(): ReadonlyArray<CatalogModel>;
+  hasConfiguredAuth?: (...args: any[]) => boolean;
 };
 
 /**
@@ -426,6 +428,7 @@ export interface ModelDirectoryEntry extends ModelIdentity {
   readonly resolvable: boolean;
   readonly resolution_reason: string | null;
   readonly health: ModelHealthSummary;
+  readonly availability: { readonly status: "available" | "credentials_unavailable" | "unknown"; readonly reason: string | null };
 }
 export interface ModelDirectory { readonly catalog_version: string; readonly generated_at: string; readonly models: readonly ModelDirectoryEntry[]; }
 export interface ModelDirectoryInput {
@@ -463,11 +466,11 @@ export function projectModelDirectoryHealth(directory: ModelDirectory, health?: 
   };
 }
 
-/** 生成完整模型目录：同一执行身份合并来源，池内不可解析项仅展示。 */
+/** 生成完整模型目录：只纳入 Pi /model available 集合中的模型，池只增加来源标签。 */
 export function buildModelDirectory(input: ModelDirectoryInput): ModelDirectory {
-  const registryModels = [...input.modelRegistry.getAll()];
-  const byRoute = new Map<string, CatalogModel>();
-  for (const model of registryModels) { const identity = directoryIdentity(model); byRoute.set(`${identity.provider}\0${identity.id}`, { ...model, ...identity }); }
+  const registryModels = [...input.modelRegistry.getAvailable()];
+  const isConfigured = (model: CatalogModel): boolean => input.modelRegistry.hasConfiguredAuth?.(model as unknown) ?? true;
+  const availableIdentityKeys = new Set(registryModels.map((model) => directoryIdentityKey(directoryIdentity(model))));
   type Draft = { identity: ModelIdentity; name: string; sources: Set<ModelDirectorySource>; model: CatalogModel | null; resolvable: boolean; reason: string | null };
   const drafts = new Map<string, Draft>();
   const add = (identity: ModelIdentity, source: ModelDirectorySource, model: CatalogModel | null, reason: string | null) => {
@@ -475,17 +478,24 @@ export function buildModelDirectory(input: ModelDirectoryInput): ModelDirectory 
     if (existing) { existing.sources.add(source); if (!existing.model && model) { existing.model = model; existing.resolvable = true; existing.reason = null; existing.name = model.name?.trim() || identity.id; } return; }
     drafts.set(key, { identity, name: model?.name?.trim() || identity.id, sources: new Set([source]), model, resolvable: !!model, reason });
   };
-  if (input.currentModel) add(directoryIdentity(input.currentModel), "current", input.currentModel, null);
+  if (input.currentModel && availableIdentityKeys.has(directoryIdentityKey(directoryIdentity(input.currentModel))) && isConfigured(input.currentModel)) add(directoryIdentity(input.currentModel), "current", input.currentModel, null);
   for (const tier of ["fast", "balanced", "flagship"] as const) for (const raw of input.pools?.[tier] ?? []) {
     const reference = raw.trim(); const base = baseModelRef(reference); const slash = base.indexOf("/");
     const provider = slash > 0 ? base.slice(0, slash).trim() : ""; const id = (slash > 0 ? base.slice(slash + 1) : base).trim();
-    const resolved = provider ? byRoute.get(`${provider}\0${id}`) : registryModels.filter((model) => model.id.trim() === id).length === 1 ? registryModels.find((model) => model.id.trim() === id) ?? null : null;
+    const matches = registryModels.filter((model) => model.provider.trim() === provider && model.id.trim() === id);
+    const resolved = matches.length === 1 ? matches[0] : !provider && registryModels.filter((model) => model.id.trim() === id).length === 1 ? registryModels.find((model) => model.id.trim() === id) ?? null : null;
     if (resolved) add(directoryIdentity(resolved), directoryPoolSource(tier), resolved, null);
-    else add({ provider, id, api: "", baseUrl: "" }, directoryPoolSource(tier), null, provider ? `model "${reference}" is not present in the Pi host model registry` : `model "${reference}" is not an exact provider/id route in the Pi host model registry`);
+    else continue;
   }
   for (const model of registryModels) add(directoryIdentity(model), "catalog", model, null);
   const sorted = [...drafts.values()].sort((a, b) => directoryIdentityKey(a.identity).localeCompare(directoryIdentityKey(b.identity)));
-  // 目录版本由完整执行身份和来源内容决定：同一父会话内 models/spawn
+  for (const draft of sorted) {
+    if (!draft.model || !input.modelRegistry.hasConfiguredAuth) continue;
+    if (!input.modelRegistry.hasConfiguredAuth(draft.model)) {
+      draft.resolvable = false;
+      draft.reason = "provider credentials are not configured";
+    }
+  }
   // 重建时得到同一 modelKey；注册表、池或支持等级变化时版本自然失效。
   const catalogFingerprint = sorted.map((draft) => ({
     identity: draft.identity,
@@ -495,7 +505,14 @@ export function buildModelDirectory(input: ModelDirectoryInput): ModelDirectory 
     reasoning_effort: draft.model ? [...supportedThinkingLevels(draft.model)] : [],
   }));
   const catalog_version = `cat_${directoryDigest(JSON.stringify(catalogFingerprint)).slice(0, 32)}`;
-  const models = sorted.map((draft): ModelDirectoryEntry => { const reasoning_effort = draft.model ? [...supportedThinkingLevels(draft.model)] : []; const modelKey = draft.resolvable ? `mk_${directoryDigest(`${catalog_version}\0${directoryIdentityKey(draft.identity)}`).slice(0, 32)}` : null; return { ...draft.identity, name: draft.name, modelKey, sources: [...draft.sources].sort() as ModelDirectorySource[], reasoning_effort, resolvable: draft.resolvable, resolution_reason: draft.reason, health: directoryHealth(draft.identity, input.health) }; });
+  const models = sorted.map((draft): ModelDirectoryEntry => {
+    const reasoning_effort = draft.model ? [...supportedThinkingLevels(draft.model)] : [];
+    const modelKey = draft.resolvable ? `mk_${directoryDigest(`${catalog_version}\0${directoryIdentityKey(draft.identity)}`).slice(0, 32)}` : null;
+    const availability = draft.reason === "provider credentials are not configured"
+      ? { status: "credentials_unavailable" as const, reason: draft.reason }
+      : draft.resolvable ? { status: "available" as const, reason: null } : { status: "unknown" as const, reason: draft.reason };
+    return { ...draft.identity, name: draft.name, modelKey, sources: [...draft.sources].sort() as ModelDirectorySource[], reasoning_effort, resolvable: draft.resolvable, resolution_reason: draft.reason, health: directoryHealth(draft.identity, input.health), availability };
+  });
   const now = input.now ?? Date.now; return { catalog_version, generated_at: new Date(now()).toISOString(), models };
 }
 /** 只接受当前目录发出的不透明键；原始路由、裸模型名和未知键都会失败。 */
