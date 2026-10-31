@@ -40,11 +40,24 @@ function normalizePart(value: string | undefined): string | undefined {
   return text.replace(/^◆\s*/, "");
 }
 
-export function formatToolCardLine(content: ToolCardContent): string {
-  const parts = [content.title, content.object, content.status]
-    .map(normalizePart)
-    .filter((part): part is string => part !== undefined);
-  return `◆ ${parts.join(" · ")}`;
+type ToolCardLineTheme = Pick<Theme, "fg" | "bold">;
+
+export function formatToolCardLine(
+  content: ToolCardContent,
+  theme?: ToolCardLineTheme,
+  isError = false,
+): string {
+  const title = normalizePart(content.title);
+  const object = normalizePart(content.object);
+  const status = normalizePart(content.status);
+  const parts = theme
+    ? [
+        title === undefined ? undefined : theme.fg("toolTitle", theme.bold(title)),
+        object === undefined ? undefined : theme.fg("accent", object),
+        status === undefined ? undefined : theme.fg(isError ? "error" : "toolOutput", status),
+      ]
+    : [title, object, status];
+  return parts.filter((part): part is string => part !== undefined).join(" · ");
 }
 
 export function compactRenderText(value: unknown): string {
@@ -82,7 +95,7 @@ function cardBox(
   fallbackStatus: ToolCardStatus,
   expanded: boolean,
 ): Component {
-  const lines = [formatToolCardLine(content)];
+  const lines = [formatToolCardLine(content, theme, context?.isError === true || fallbackStatus === "error")];
   if (expanded && content.details && content.details.length > 0) lines.push(...content.details);
   const bg = typeof (theme as Theme & { bg?: unknown }).bg === "function"
     ? (text: string) => theme.bg(statusToken(context, fallbackStatus), text)

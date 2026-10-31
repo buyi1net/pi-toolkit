@@ -110,7 +110,7 @@ export function registerPeersRenderers(
         const contentLines = [formatToolCardLine({
           title: t("module.peers.renderer.title"),
           object: source ?? undefined,
-        })];
+        }, theme)];
         const expanded = options.expanded || (key !== null && expandedPeersMessageIds.has(key));
 
         if (expanded) {

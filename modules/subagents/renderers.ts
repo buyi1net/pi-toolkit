@@ -62,7 +62,7 @@ export function registerSubagentRenderers(
           : stats?.model ?? undefined;
 
         const expanded = options.expanded || (key !== null && expandedCardIds.has(key));
-        const contentLines = [formatToolCardLine({ title: name, object, status: `${status}${lateTag}` })];
+        const contentLines = [formatToolCardLine({ title: name, object, status: `${status}${lateTag}` }, theme, failed)];
 
         if (expanded) {
           const meta = [
@@ -122,7 +122,7 @@ export function registerSubagentRenderers(
           title: t("module.subagents.widget.batch.title"),
           object: t("module.subagents.widget.batch.results", { count: results.length }),
           status: anyFailed ? t("module.subagents.widget.result.failed") : t("module.subagents.widget.result.completed"),
-        })];
+        }, theme, anyFailed)];
 
         const expanded = options.expanded || expandedCardIds.has(key);
         if (expanded) {
@@ -176,7 +176,7 @@ export function registerSubagentRenderers(
           title: t("module.subagents.widget.aggregate.title"),
           object: t("module.subagents.widget.aggregate.updates", { count: lines.length }),
           status: stalled ? t("module.subagents.widget.status.stalled") : undefined,
-        })];
+        }, theme, stalled)];
 
         const expanded = options.expanded || expandedCardIds.has(key);
         if (expanded) {
@@ -208,7 +208,7 @@ export function registerSubagentRenderers(
           title: name,
           object,
           status: t("module.subagents.widget.question.asks"),
-        })];
+        }, theme)];
 
         const expanded = options.expanded || expandedCardIds.has(key);
         if (expanded) {
