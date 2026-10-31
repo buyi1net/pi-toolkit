@@ -6,7 +6,7 @@
 // 只做参数形状与结果呈现，不含判定逻辑。
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Text, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { describePeersReason, deliverPeersMessage, type PeersSendDeps, type PeersSendReport, type PeersTargetStatusSnapshot } from "./messaging.ts";
 import type { PeersTranslate } from "./messages/index.ts";
@@ -62,18 +62,29 @@ function compactRenderText(value: unknown): string {
 /** 把发送回执折成只含目标与结果的 UI 摘要。 */
 function sendRenderSummary(
   result: { details?: unknown },
-  theme: { fg(color: string, text: string): string; bold(text: string): string },
+  theme: { fg(color: string, text: string): string },
+  t?: PeersTranslate,
 ): string {
   const details = result.details as (Partial<PeersSendReport> & { target?: unknown }) | undefined;
-  const target = compactRenderText(details?.target) || "(unknown)";
+  const target = compactRenderText(details?.target) || "(target)";
   if (details?.result === "accepted") {
-    return `${theme.fg("success", "✓")} ${theme.fg("toolTitle", theme.bold(`delivered ${target}`))}`;
+    return theme.fg(
+      "toolOutput",
+      t?.("module.peers.tool.send.result.delivered", { target }) ?? `Delivered ${target}`,
+    );
   }
   const reason = typeof details?.reason === "string"
     ? describePeersReason(details.reason as Parameters<typeof describePeersReason>[0])
     : compactRenderText(details?.detail) || compactRenderText(details?.result) || "delivery failed";
-  const icon = details?.result === "rejected" ? theme.fg("warning", "•") : theme.fg("error", "✗");
-  return `${icon} ${theme.fg("toolTitle", theme.bold(`${target} — ${truncateToWidth(reason, 64, "…")}`))}`;
+  return theme.fg(
+    "error",
+    t?.("module.peers.tool.send.result.failed", { reason }) ?? `Delivery failed: ${reason}`,
+  );
+}
+
+function sendBodyLines(body: unknown): string[] {
+  if (typeof body !== "string" || body.length === 0) return [];
+  return body.split("\n").map((line) => stripTerminalSequences(line));
 }
 
 export function registerPeersSendTool(pi: ExtensionAPI, deps: PeersSendToolDeps): void {
@@ -83,6 +94,7 @@ export function registerPeersSendTool(pi: ExtensionAPI, deps: PeersSendToolDeps)
     description:
       "Send a message to another local pi session on this machine (same agent directory). " +
       "The send completes immediately once the target endpoint accepts it; it does not wait for the receiver's LLM to process it. " +
+      "Replies from the receiver arrive automatically as new messages; do not use wait_agent or repeatedly poll peers_list for them. " +
       "Target may be: a 6-char short id with # prefix (like #62nvbt, from peers_list), a session name, a full session UUID or a unique lowercase prefix (min 4 chars), or an instance id (needed when one session runs multiple instances). " +
       "Optional replyTo carries the full message id of the message this one replies to; omit it when there is no reply relation. It is declarative metadata and is NOT validated against existing messages. " +
       "Large bodies are supported: content over the large-content threshold (default 8192 UTF-8 bytes) is automatically written to a file in the peers shared area and delivered as a file reference with size and sha256; the receiver validates the path and hash before injecting. " +
@@ -118,17 +130,35 @@ export function registerPeersSendTool(pi: ExtensionAPI, deps: PeersSendToolDeps)
       const rawTarget = typeof args.target === "string" ? args.target : "";
       const target = rawTarget.trim() || "(target)";
       return new Text(
-        "○ " +
-          theme.fg("toolTitle", theme.bold(deps.t?.("module.peers.tool.send.display", { target }) ?? `Message ${target}`)),
+        theme.fg("toolTitle", theme.bold(deps.t?.("module.peers.tool.send.display", { target }) ?? `Message ${target}`)) +
+          " " + theme.fg("accent", target),
         0,
         0,
       );
     },
-    renderResult(result, options, theme) {
-      const summary = sendRenderSummary(result, theme);
-      if (!options.expanded) return new Text(summary, 0, 0);
-      const text = result.content.find((part) => part.type === "text")?.text ?? "";
-      return new Text(text ? `${summary}\n${text}` : summary, 0, 0);
+    renderResult(result, options, theme, context) {
+      const summary = sendRenderSummary(result, theme, deps.t);
+      const details = result.details as (Partial<PeersSendReport> & { target?: unknown }) | undefined;
+      const body = sendBodyLines(context?.args?.body);
+      if (!options.expanded) {
+        if (details?.result !== "accepted" || body.length === 0) return new Text(summary, 0, 0);
+        const preview = body.slice(0, 5).map((line) => theme.fg("toolOutput", line));
+        if (body.length > 5) {
+          preview.push(theme.fg("muted", deps.t?.("module.peers.tool.send.result.moreLines", { count: body.length - 5 }) ?? `… ${body.length - 5} more lines`));
+        }
+        return new Text([summary, ...preview].join("\n"), 0, 0);
+      }
+      const reference = typeof details?.messageShortId === "string" && details.messageShortId.trim() !== ""
+        ? `@${details.messageShortId.trim()}`
+        : "";
+      const bodyText = body.length > 0
+        ? body.map((line) => theme.fg("toolOutput", line))
+        : [theme.fg("muted", deps.t?.("module.peers.tool.send.result.bodyUnavailable") ?? "Message body unavailable")];
+      return new Text(
+        [summary, ...bodyText, ...(reference ? [theme.fg("muted", reference)] : [])].join("\n"),
+        0,
+        0,
+      );
     },
 
     async execute(

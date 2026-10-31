@@ -89,90 +89,53 @@ export function registerSubagentMessageTool(
     renderCall(args, theme) {
       const target = args.name ?? "(unknown)";
       return new Text(
-        "○ " +
-          theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent_message.display") ?? "Message subagent")) +
-          theme.fg("dim", ` — ${target}`),
+        theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent_message.display") ?? "Message subagent")) +
+          " " + theme.fg("accent", target),
         0,
         0,
       );
     },
 
-    renderResult(result, _opts, theme) {
+    renderResult(result, options, theme) {
       const details = result.details as any;
+      const t = deps.t ?? subagentsTableTranslator("en");
+      const content = result.content[0];
+      const rawText = content && content.type === "text" ? content.text : "";
+      const detail = (key: Parameters<SubagentsTranslate>[0], fallback: string) => theme.fg("toolOutput", t(key) || fallback);
       if (details?.status === "steered") {
-        return new Text(
-          theme.fg("success", "✓") + " " +
-            theme.fg("toolTitle", theme.bold(details.name ?? "subagent")) +
-            theme.fg("dim", " — message delivered"),
-          0,
-          0,
-        );
+        if (!options.expanded) return new Text("", 0, 0);
+        return new Text(detail("module.subagents.tool.subagent_message.result.delivered", "Message delivered"), 0, 0);
       }
       if (details?.status === "started") {
-        return new Text(
-          theme.fg("accent", "⟳") + " " +
-            theme.fg("toolTitle", theme.bold(details.name ?? "Resume")) +
-            theme.fg("dim", " — resumed"),
-          0,
-          0,
-        );
+        if (!options.expanded) return new Text("", 0, 0);
+        return new Text(detail("module.subagents.tool.subagent_message.result.resumed", "Session resumed"), 0, 0);
       }
       if (details?.status === "handed-off") {
-        return new Text(
-          theme.fg("accent", "⏳") + " " +
-            theme.fg("toolTitle", theme.bold(details.name ?? "Resume")) +
-            theme.fg("dim", " — handed off after reload"),
-          0,
-          0,
-        );
+        return new Text(detail("module.subagents.tool.subagent_message.result.handedOff", "Session handed off"), 0, 0);
       }
-      // Escape 中止等待:非终态,子代理仍在运行,真实结果稍后迟到回注。
       if (details?.status === "detached") {
-        return new Text(
-          theme.fg("accent", "⇄") + " " +
-            theme.fg("toolTitle", theme.bold(details.name ?? "Resume")) +
-            theme.fg("dim", " — detached (still running; late result to follow)"),
-          0,
-          0,
-        );
+        return new Text(detail("module.subagents.tool.subagent_message.result.detached", "Wait detached; still running"), 0, 0);
       }
-      // 用户直接关闭 pane:稳定分类,不是 provider/agent 错误。
       if (details?.status === "user_closed") {
-        return new Text(
-          theme.fg("warning", "✕") + " " +
-            theme.fg("toolTitle", theme.bold(details.name ?? "Resume")) +
-            theme.fg("warning", " — closed by user"),
-          0,
-          0,
-        );
+        return new Text(theme.fg("warning", t("module.subagents.tool.subagent_message.result.closedByUser")), 0, 0);
       }
-      // 等待超时:非终态,resumed 子代理仍在运行,真实结果稍后迟到回注。
       if (details?.status === "timed-out") {
-        const bound = typeof details.timeoutMs === "number" ? ` after ${Math.round(details.timeoutMs / 1000)}s` : "";
+        return new Text(theme.fg("warning", t("module.subagents.tool.subagent_message.result.timedOut")), 0, 0);
+      }
+      if (details?.status === "completed" || details?.status === "failed" || details?.status === "cancelled") {
+        if (details.status === "completed" && !options.expanded) return new Text("", 0, 0);
+        const label = details.status === "completed"
+          ? t("module.subagents.widget.result.completed")
+          : details.status === "cancelled"
+            ? t("module.subagents.widget.result.cancelled")
+            : t("module.subagents.widget.result.failed");
         return new Text(
-          theme.fg("warning", "⏱") + " " +
-            theme.fg("toolTitle", theme.bold(details.name ?? "Resume")) +
-            theme.fg("warning", ` — timed out${bound} (still running; late result to follow)`),
+          [theme.fg(details.status === "failed" ? "error" : details.status === "cancelled" ? "warning" : "toolOutput", label), options.expanded && rawText ? theme.fg("muted", rawText) : ""].filter(Boolean).join("\n"),
           0,
           0,
         );
       }
-      // 硬屏障终态:自动 resume 的结果直接作为 tool result 返回,按状态渲染。
-      if (details?.status === "completed" || details?.status === "failed" || details?.status === "cancelled") {
-        const t = deps.t ?? subagentsTableTranslator("en");
-        const elapsed = typeof details.elapsed === "number" ? ` · ${details.elapsed}s` : "";
-        const reason =
-          details.status === "completed"
-            ? theme.fg("dim", `${t("module.subagents.widget.result.completed")}${elapsed}`)
-            : details.status === "cancelled"
-              ? theme.fg("warning", `${t("module.subagents.widget.result.cancelled")}${elapsed}`)
-              : theme.fg("error", `${t("module.subagents.widget.result.failed")}${elapsed}`);
-        const icon = details.status === "completed" ? theme.fg("success", "✓") : theme.fg("error", "✗");
-        return new Text(icon + " " + theme.fg("toolTitle", theme.bold(details.name ?? "Resume")) + " " + reason, 0, 0);
-      }
-      const content = result.content[0];
-      const text = content && content.type === "text" ? content.text : "";
-      return new Text(theme.fg("dim", text), 0, 0);
+      return new Text(theme.fg("error", rawText), 0, 0);
     },
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx: MessageContext) {

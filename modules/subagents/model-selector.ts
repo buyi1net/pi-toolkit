@@ -141,7 +141,7 @@ export function resolveKnownModelReference(
           reason: "ambiguous",
           message:
             `Model reference "${raw}" is ambiguous across providers. Use one exact route: ` +
-            `${candidates.join(", ")}. Do not infer a provider from the model brand name.`,
+            `${candidates.join(", ")}.`,
         },
       };
     }
@@ -160,8 +160,7 @@ export function resolveKnownModelReference(
         reason: "wrong-provider",
         message:
           `Model reference "${raw}" does not match the host model catalog. ` +
-          `The model id "${id}" is available as: ${candidates.join(", ")}. ` +
-          "Use the exact provider/model route; do not use a provider brand as a guess.",
+          `The model id "${id}" is available as: ${candidates.join(", ")}.`,
       },
     };
   }
@@ -561,7 +560,7 @@ export function resolveDirectoryModelReference(
       code: "model_not_found",
       selected_model: raw,
       candidates: [],
-      message: `Model reference "${raw}" is not in the current /model available list. Read subagent_models again and choose an available model.`,
+      message: `Model reference "${raw}" is not in the current /model available list.`,
     },
   };
 }

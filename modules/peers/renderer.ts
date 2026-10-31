@@ -13,7 +13,7 @@
 // 是唯一实现），不信任详情里可能过时的短码字段。
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Box, MouseRegion, Text, truncateToWidth, stripTerminalSequences, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { deriveSessionShortId } from "../../shared/short-id.ts";
 import { PEERS_BODY_BEGIN_MARKER, PEERS_MESSAGE_CUSTOM_TYPE, sanitizePeersEnvelopeField, type PeersMessageDetails } from "./messaging.ts";
 import { peersTableTranslator, type PeersTranslate } from "./messages/index.ts";
@@ -126,6 +126,15 @@ function cardReplyLine(data: PeersCardData, t: PeersTranslate): string | null {
     : t("module.peers.renderer.replyClaimFull", { id: data.replyTo });
 }
 
+// CustomMessageComponent 在 setExpanded 后会重建 renderer；本地展开状态必须活在返回组件之外。
+const expandedPeersMessageIds = new Map<string, true>();
+
+function peersMessageKey(details: unknown): string | null {
+  if (typeof details !== "object" || details === null) return null;
+  const messageId = (details as Record<string, unknown>).messageId;
+  return typeof messageId === "string" && messageId.trim() !== "" ? messageId : null;
+}
+
 export function registerPeersRenderers(
   pi: ExtensionAPI,
   t: PeersTranslate = peersTableTranslator("en"),
@@ -133,49 +142,63 @@ export function registerPeersRenderers(
   // 装配接缝容错：全链路装配测试面（最小假 pi）未必提供 UI 注册位；渲染器只服务 TUI，
   // 缺位时跳过注册，不影响通讯与模型上下文
   if (typeof pi.registerMessageRenderer !== "function") return;
-  pi.registerMessageRenderer<PeersMessageDetails>(PEERS_MESSAGE_CUSTOM_TYPE, (message, options, theme) => ({
-    invalidate() {},
-    render(width: number): string[] {
-      const data = readCardData(message.details);
-      const content = typeof message.content === "string" ? message.content : null;
-      const body =
-        data !== null && data.bodyBytes !== null && content !== null
-          ? extractPeersCardBody(content, data.bodyBytes)
-          : null;
+  pi.registerMessageRenderer<PeersMessageDetails>(PEERS_MESSAGE_CUSTOM_TYPE, (message, options, theme) => {
+    const key = peersMessageKey(message.details);
+    const card = {
+      invalidate() {},
+      render(width: number): string[] {
+        const data = readCardData(message.details);
+        const content = typeof message.content === "string" ? message.content : null;
+        const body =
+          data !== null && data.bodyBytes !== null && content !== null
+            ? extractPeersCardBody(content, data.bodyBytes)
+            : null;
 
-      const headerParts = [
-        `${theme.fg("accent", "◆")} ${theme.fg("toolTitle", theme.bold(t("module.peers.renderer.title")))}`,
-      ];
-      const source = cardSource(data);
-      if (source !== null) headerParts.push(theme.fg("toolTitle", source));
-      const contentLines = [headerParts.join(theme.fg("dim", " · "))];
+        const headerParts = [
+          `${theme.fg("accent", "◆")} ${theme.fg("toolTitle", theme.bold(t("module.peers.renderer.title")))}`,
+        ];
+        const source = cardSource(data);
+        if (source !== null) headerParts.push(theme.fg("toolTitle", source));
+        const contentLines = [headerParts.join(theme.fg("dim", " · "))];
+        // ctrl+o 的全局展开优先；本地状态只补充展开，不能在全局展开时强制折叠。
+        const expanded = options.expanded || (key !== null && expandedPeersMessageIds.has(key));
 
-      if (options.expanded) {
-        const lineWidth = Math.max(0, width - 6);
-        if (data !== null && data.instanceId !== null) {
-          contentLines.push(theme.fg("dim", truncateToWidth(t("module.peers.renderer.instance", { id: data.instanceId }), lineWidth)));
-        }
-        if (data !== null && data.sentAt !== null) {
-          const time = new Date(data.sentAt).toISOString();
-          contentLines.push(theme.fg("dim", truncateToWidth(t("module.peers.renderer.sentAt", { time }), lineWidth)));
-        }
-        const replyLine = data !== null ? cardReplyLine(data, t) : null;
-        if (replyLine !== null) contentLines.push(theme.fg("dim", truncateToWidth(replyLine, lineWidth)));
-        if (data !== null && data.cwd !== null) {
-          contentLines.push(theme.fg("dim", truncateToWidth(t("module.peers.renderer.cwd", { cwd: data.cwd }), lineWidth)));
+        if (expanded) {
+          const lineWidth = Math.max(0, width - 6);
+          if (data !== null && data.instanceId !== null) {
+            contentLines.push(theme.fg("dim", truncateToWidth(t("module.peers.renderer.instance", { id: data.instanceId }), lineWidth)));
+          }
+          if (data !== null && data.sentAt !== null) {
+            const time = new Date(data.sentAt).toISOString();
+            contentLines.push(theme.fg("dim", truncateToWidth(t("module.peers.renderer.sentAt", { time }), lineWidth)));
+          }
+          const replyLine = data !== null ? cardReplyLine(data, t) : null;
+          if (replyLine !== null) contentLines.push(theme.fg("dim", truncateToWidth(replyLine, lineWidth)));
+          if (data !== null && data.cwd !== null) {
+            contentLines.push(theme.fg("dim", truncateToWidth(t("module.peers.renderer.cwd", { cwd: data.cwd }), lineWidth)));
+          }
+
+          if (body === null) {
+            // 异常路径 / 详情缺失：只给结构化字段 + 正文不可用；绝不渲染完整消息文本
+            contentLines.push("", theme.fg("warning", t("module.peers.renderer.bodyUnavailable")));
+          } else {
+            contentLines.push(
+              "",
+              ...body.split("\n").flatMap((line) => wrapTextWithAnsi(stripTerminalSequences(line), Math.max(1, width - 2))),
+            );
+          }
         }
 
-        if (body === null) {
-          // 异常路径 / 详情缺失：只给结构化字段 + 正文不可用；绝不渲染完整消息文本
-          contentLines.push("", theme.fg("warning", t("module.peers.renderer.bodyUnavailable")));
-        } else {
-          contentLines.push("", ...body.split("\n").map((line) => truncateToWidth(line, lineWidth)));
-        }
-      }
-
-      const box = new Box(1, 1, (text: string) => theme.bg("customMessageBg", text));
-      box.addChild(new Text(contentLines.join("\n"), 0, 0));
-      return ["", ...box.render(width)];
-    },
-  }));
+        const box = new Box(1, 1, (text: string) => theme.bg("customMessageBg", text));
+        box.addChild(new Text(contentLines.join("\n"), 0, 0));
+        return ["", ...box.render(width)];
+      },
+    };
+    return new MouseRegion(card, (event) => {
+      if (key === null || event.type !== "click" || event.button !== "left") return undefined;
+      if (expandedPeersMessageIds.has(key)) expandedPeersMessageIds.delete(key);
+      else expandedPeersMessageIds.set(key, true);
+      return { handled: true };
+    });
+  });
 }

@@ -727,12 +727,6 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
             rejection.kind === "status" && !rejection.reason.includes("excluded by failover policy"),
           );
         if (!allStatusBlocked) {
-          // 生效池来源随逐档合并而定（工单 00）：指到该档池实际生效的那一层。
-          const poolSource =
-            tierPool.tier != null
-              ? tierLoadRef.value?.config?.tiers[tierPool.tier].poolSource
-              : undefined;
-          const source = poolSource ?? tierLoadRef.value?.sourcePath ?? "the pi-subagents config";
           const rejections = outcome.failure.rejections
             .map((rejection) => `  - ${rejection.model}: ${rejection.reason}`)
             .join("\n");
@@ -741,9 +735,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
             kind: "error",
             error:
               `No usable model candidate for tier "${tierPool.tier}": every configured candidate ` +
-              `was filtered out (pool: ${outcome.failure.pool.join(", ")}).\n${rejections}\n` +
-              `Adjust models.${tierPool.tier} in ${source}, the thinking level, ` +
-              `or the agent capability requirements.` +
+              `was filtered out (pool: ${outcome.failure.pool.join(", ")}).\n${rejections}` +
               (statusSkipped
                 ? "\nNote: status-based skips use the last known runtime status (quota exhausted / offline) " +
                   "and refresh in the background; the static pool config is unchanged."
@@ -806,9 +798,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
           kind: "error",
           error:
             `Model "${effectiveModel}" does not support the capabilities required by agent ` +
-            `profile "${params.agent}" (missing: ${missing.join(", ")}). Use a model with these ` +
-            `capabilities, drop the explicit model override, or remove the requirement from ` +
-            `the agent profile's capabilities list.`,
+            `profile "${params.agent}" (missing: ${missing.join(", ")}).`,
           details: {
             error: "missing model capabilities",
             model: effectiveModel,
@@ -834,8 +824,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
           kind: "error",
           error:
             `Model "${effectiveModel}" does not support thinking level "${appliedThinking}" ` +
-            `(supported: ${supported.join(", ")}). Adjust the thinking parameter, the agent profile, ` +
-            `or the tier default thinking configuration.`,
+            `(supported: ${supported.join(", ")}).`,
           details: {
             error: "unsupported thinking level",
             model: effectiveModel,

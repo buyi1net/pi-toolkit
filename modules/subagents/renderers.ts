@@ -1,9 +1,22 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { keyHint } from "@earendil-works/pi-coding-agent";
-import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Box, MouseRegion, Text, truncateToWidth, stripTerminalSequences, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { SessionStats } from "./session.ts";
 import { contextWindowFor, formatContextUsage, formatElapsed, formatUsageSegments } from "./display.ts";
 import { subagentsTableTranslator, type SubagentsTranslate } from "./messages/index.ts";
+
+// CustomMessageComponent 在 setExpanded 后会重建 renderer；本地展开状态必须活在返回组件之外。
+const expandedSubagentResultIds = new Map<string, true>();
+
+function subagentResultKey(details: unknown): string | null {
+  if (typeof details !== "object" || details === null) return null;
+  const record = details as Record<string, unknown>;
+  const deliveryId = record.delivery_id;
+  if (typeof deliveryId === "string" && deliveryId.trim() !== "") return `delivery:${deliveryId}`;
+  const sessionFile = typeof record.sessionFile === "string" ? record.sessionFile : "";
+  const name = typeof record.name === "string" ? record.name : "";
+  return sessionFile !== "" || name !== "" ? `session:${sessionFile}\u0000name:${name}` : null;
+}
 
 /**
  * 终态行等显示语汇的取词（工单 44）：mod.ts 装配时注入实时译者；
@@ -16,8 +29,9 @@ export function registerSubagentRenderers(
   pi.registerMessageRenderer("subagent_result", (message, options, theme) => {
     const details = message.details as any;
     if (!details) return undefined;
+    const key = subagentResultKey(details);
 
-    return {
+    const component = {
       invalidate() {},
       render(width: number): string[] {
         const name = details.name ?? "subagent";
@@ -82,20 +96,25 @@ export function registerSubagentRenderers(
           .replace(`Sub-agent "${name}" failed (exit code ${exitCode}).\n\n`, "")
           .replace(new RegExp(`^Sub-agent "${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}" failed after ${elapsed} \\(provider/agent error — auto-retry exhausted\\)\\.\\n\\n`), "");
 
-        const contentLines = [options.expanded ? header : compactHeader];
-        if (options.expanded && usageLine) contentLines.push(usageLine);
-        if (options.expanded) {
-          if (summary) contentLines.push(...summary.split("\n").map((line) => truncateToWidth(line, Math.max(0, width - 6))));
+        // ctrl+o 的全局展开优先；本地状态只补充展开，不能在全局展开时强制折叠。
+        const expanded = options.expanded || (key !== null && expandedSubagentResultIds.has(key));
+        const contentLines = [expanded ? header : compactHeader];
+        if (expanded && usageLine) contentLines.push(usageLine);
+        const summaryLines = summary
+          ? summary.split("\n").flatMap((line: string) => wrapTextWithAnsi(stripTerminalSequences(line), Math.max(1, width - 2)))
+          : [];
+        if (expanded) {
+          if (summaryLines.length > 0) contentLines.push(...summaryLines.map((line) => theme.fg("dim", line)));
           if (details.name || details.sessionFile) {
             contentLines.push("");
             if (details.name) contentLines.push(theme.fg("dim", `Session preserved: message only for NEW instructions → subagent_message({ name: "${details.name}" })`));
             if (details.sessionFile) contentLines.push(theme.fg("muted", `Session file: ${details.sessionFile}`));
           }
         } else {
-          if (summary) {
-            const previewLines = summary.split("\n").slice(0, 5);
-            contentLines.push(...previewLines.map((line) => theme.fg("dim", truncateToWidth(line, Math.max(0, width - 6)))));
-            if (summary.split("\n").length > 5) contentLines.push(theme.fg("muted", `… ${summary.split("\n").length - 5} more lines`));
+          if (summaryLines.length > 0) {
+            const previewLines = summaryLines.slice(0, 5);
+            contentLines.push(...previewLines.map((line) => theme.fg("dim", line)));
+            if (summaryLines.length > 5) contentLines.push(theme.fg("muted", `… ${summaryLines.length - 5} more lines`));
           }
         }
 
@@ -104,6 +123,12 @@ export function registerSubagentRenderers(
         return ["", ...box.render(width)];
       },
     };
+    return new MouseRegion(component, (event) => {
+      if (key === null || event.type !== "click" || event.button !== "left") return undefined;
+      if (expandedSubagentResultIds.has(key)) expandedSubagentResultIds.delete(key);
+      else expandedSubagentResultIds.set(key, true);
+      return { handled: true };
+    });
   });
 
   // 历史会话兼容:旧版本曾以 subagent_batch_result 消息回注批次结果,
@@ -141,7 +166,9 @@ export function registerSubagentRenderers(
             contentLines.push("", theme.fg("toolTitle", theme.bold(entry.name ?? "subagent")));
             const summary = typeof entry.summary === "string" ? entry.summary : "";
             if (summary) {
-              contentLines.push(...summary.split("\n").map((line: string) => theme.fg("dim", truncateToWidth(line, lineWidth))));
+              contentLines.push(...summary.split("\n").flatMap((line: string) =>
+                wrapTextWithAnsi(stripTerminalSequences(line), Math.max(1, width - 2)).map((wrapped) => theme.fg("dim", wrapped)),
+              ));
             }
             if (entry.sessionFile) contentLines.push(theme.fg("muted", `Session file: ${entry.sessionFile}`));
           }
@@ -190,10 +217,15 @@ export function registerSubagentRenderers(
         const agentTag = details.agent ? theme.fg("dim", ` (${details.agent})`) : "";
         const header = `${theme.fg("accent", "?")} ${theme.fg("toolTitle", theme.bold(name))}${agentTag} ${theme.fg("dim", "— asks a question")}`;
         const contentLines = [header];
+        const question = typeof details.question === "string" ? details.question : "";
+        const questionLines = question
+          .split("\n")
+          .flatMap((line: string) => wrapTextWithAnsi(stripTerminalSequences(line), Math.max(1, width - 2)));
         if (options.expanded) {
-          contentLines.push("", details.question ?? "", "", theme.fg("dim", `Reply: subagent_message({ name: "${name}", message: "…" })`));
+          contentLines.push("", ...questionLines, "", theme.fg("dim", `Reply: subagent_message({ name: "${name}", message: "…" })`));
         } else {
-          contentLines.push(theme.fg("dim", (details.question ?? "").split("\n")[0].slice(0, Math.max(0, width - 10))), theme.fg("muted", keyHint("app.tools.expand", "to expand")));
+          const preview = questionLines[0] ?? "";
+          contentLines.push(theme.fg("dim", preview), theme.fg("muted", keyHint("app.tools.expand", "to expand")));
         }
         const box = new Box(1, 1, (text: string) => theme.bg("toolSuccessBg", text));
         box.addChild(new Text(contentLines.join("\n"), 0, 0));

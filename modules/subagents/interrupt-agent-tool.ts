@@ -35,17 +35,32 @@ export function registerInterruptAgentTool(pi: ExtensionAPI, deps: InterruptAgen
     promptSnippet: "Interrupt a subagent using its agent_id, canonical path, or task name while preserving its context for a follow-up task.",
     parameters: Type.Object({ target: Type.String({ minLength: 1 }) }),
     renderCall(args, theme) {
-      return new Text("○ " + theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.interrupt_agent.display") ?? "Interrupt subagent")) + theme.fg("dim", ` — ${args.target ?? "(target)"}`), 0, 0);
+      return new Text(
+        theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.interrupt_agent.display") ?? "Interrupt subagent")) +
+          " " + theme.fg("accent", args.target ?? "(target)"),
+        0,
+        0,
+      );
     },
     renderResult(result, options, theme) {
       const details = result.details as any;
-      const target = details?.task_name ?? details?.target ?? "subagent";
-      const summary = details?.status === "waiting"
-        ? theme.fg("success", "✓") + " " + theme.fg("toolTitle", theme.bold(target)) + theme.fg("dim", " — interrupted")
-        : theme.fg("warning", "•") + " " + theme.fg("toolTitle", theme.bold(target)) + theme.fg("dim", ` — ${details?.message ?? details?.code ?? "interrupt failed"}`);
-      if (!options.expanded) return new Text(summary, 0, 0);
+      const success = details?.status === "waiting";
+      if (success && !options.expanded) return new Text("", 0, 0);
+      if (success) {
+        const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+        return new Text(
+          [theme.fg("toolOutput", deps.t?.("module.subagents.tool.interrupt_agent.result.interrupted") ?? "Interrupted"), text ? theme.fg("muted", text) : ""].filter(Boolean).join("\n"),
+          0,
+          0,
+        );
+      }
+      const reason = typeof details?.message === "string" && details.message.trim() !== ""
+        ? details.message.replace(/\s+/g, " ").trim()
+        : typeof details?.code === "string" ? details.code : "unknown error";
+      const summary = deps.t?.("module.subagents.tool.interrupt_agent.result.failed", { reason }) ?? `Interrupt failed: ${reason}`;
+      if (!options.expanded) return new Text(theme.fg("error", summary), 0, 0);
       const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-      return new Text(text ? `${summary}\n${theme.fg("dim", text)}` : summary, 0, 0);
+      return new Text([theme.fg("error", summary), text ? theme.fg("muted", text) : ""].filter(Boolean).join("\n"), 0, 0);
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx: ToolContext) {
       const resolved = resolveLifecycleTarget(deps, ctx, params.target);

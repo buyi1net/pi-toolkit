@@ -66,27 +66,27 @@ export function registerTeamDispatchTool(pi: ExtensionAPI, deps: TeamDispatchToo
     renderCall(args, theme) {
       const target = typeof (args as any).name === "string" ? (args as any).name : "(unknown)";
       return new Text(
-        "○ " + theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.team_dispatch.display") ?? "Dispatch to team")) +
-          theme.fg("dim", ` — ${target}`),
+        theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.team_dispatch.display") ?? "Dispatch to team")) +
+          " " + theme.fg("accent", target),
         0,
         0,
       );
     },
 
-    renderResult(result, _opts, theme) {
+    renderResult(result, options, theme) {
       const details = result.details as any;
-      const name = details?.name ?? "member";
       if (details?.status === "dispatched") {
+        if (!options.expanded) return new Text("", 0, 0);
+        const text = result.content[0]?.type === "text" ? result.content[0].text : "";
         return new Text(
-          theme.fg("accent", "◆") + " " + theme.fg("toolTitle", theme.bold(name)) +
-            theme.fg("accent", " — round dispatched"),
+          [theme.fg("toolOutput", deps.t?.("module.subagents.tool.team_dispatch.result.dispatched") ?? "Round dispatched"), text ? theme.fg("muted", text) : ""].filter(Boolean).join("\n"),
           0,
           0,
         );
       }
       const content = result.content[0];
-      const text = content && content.type === "text" ? content.text : "";
-      return new Text(theme.fg("dim", text), 0, 0);
+      const text = content && content.type === "text" ? content.text : "Dispatch failed";
+      return new Text(theme.fg("error", text), 0, 0);
     },
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx: DispatchContext) {

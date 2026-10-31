@@ -125,8 +125,7 @@ export function registerSubagentModelsTool(
     outputSchema: subagentModelsOutputSchema,
     renderCall(_args, theme) {
       return new Text(
-        "○ " +
-          theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent_models.display") ?? "Read available models")),
+        theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent_models.display") ?? "Read available models")),
         0,
         0,
       );
@@ -134,11 +133,15 @@ export function registerSubagentModelsTool(
     renderResult(result, options, theme) {
       const details = result.details as Partial<SubagentModelsResult> | undefined;
       const models = Array.isArray(details?.models) ? details.models : [];
-      const summary = `${models.length} available model${models.length === 1 ? "" : "s"}`;
-      const header = theme.fg("success", "✓") + " " + theme.fg("dim", summary);
-      if (!options.expanded) return new Text(header, 0, 0);
-      const rows = models.map((model) => modelRenderLine(model)).join("\n");
-      return new Text(rows ? `${header}\n${rows}` : header, 0, 0);
+      const summary = deps.t?.("module.subagents.tool.subagent_models.result.summary", { count: models.length })
+        ?? `${models.length} available model${models.length === 1 ? "" : "s"}`;
+      if (!options.expanded) return new Text("", 0, 0);
+      const rows = models.map((model) => modelRenderLine(model));
+      return new Text(
+        [theme.fg("toolOutput", summary), ...rows.map((row) => theme.fg("toolOutput", row))].join("\n"),
+        0,
+        0,
+      );
     },
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       const cwd = ctx.cwd ?? process.cwd();

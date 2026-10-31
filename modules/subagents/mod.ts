@@ -2484,6 +2484,7 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
 
   registerWaitAgentTool(pi, {
     getArtifactDir,
+    registry: runtimeRegistry,
     t: widgetText,
   });
 

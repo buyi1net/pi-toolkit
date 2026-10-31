@@ -185,7 +185,7 @@ export function registerSubagentsListTool(
     }),
 
     renderCall(_args, theme) {
-      return new Text("○ " + theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagents_list.display") ?? "List subagents")), 0, 0);
+      return new Text(theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagents_list.display") ?? "List subagents")), 0, 0);
     },
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

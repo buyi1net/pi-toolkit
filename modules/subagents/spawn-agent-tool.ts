@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { readNameRegistry, registerName } from "./session.ts";
 import { validateCodexV2ModelSelection, validateCodexV2SpawnParams, createCodexV2LaunchError, type CodexV2SpawnParams } from "./protocol.ts";
@@ -51,6 +51,39 @@ function compactRenderText(value: unknown): string {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 }
 
+function spawnFailureReason(
+  details: Record<string, unknown>,
+  t: SubagentsTranslate | undefined,
+): string {
+  const code = typeof details.code === "string" ? details.code : "";
+  switch (code) {
+    case "agent_type_unknown": {
+      const type = compactRenderText(details.requested) || compactRenderText(details.agent_type) || "(unknown)";
+      return t?.("module.subagents.tool.spawn_agent.result.failure.agentTypeUnknown", { type }) ?? `Unknown subagent type ${type}`;
+    }
+    case "agent_definitions_unavailable":
+      return t?.("module.subagents.tool.spawn_agent.result.failure.agentDefinitionsUnavailable") ?? "No subagent definitions were discovered";
+    case "model_ambiguous":
+      return t?.("module.subagents.tool.spawn_agent.result.failure.modelAmbiguous") ?? "The model name matches multiple providers";
+    case "model_not_found":
+      return t?.("module.subagents.tool.spawn_agent.result.failure.modelNotFound") ?? "The model was not found";
+    case "model_key_deprecated":
+      return t?.("module.subagents.tool.spawn_agent.result.failure.modelKeyDeprecated") ?? "The model key is deprecated";
+    case "reasoning_effort_unsupported":
+      return t?.("module.subagents.tool.spawn_agent.result.failure.reasoningUnsupported") ?? "The reasoning level is unsupported";
+    case "task_name_conflict":
+      return t?.("module.subagents.tool.spawn_agent.result.failure.taskNameConflict") ?? "The task name is already in use";
+    case "invalid_params":
+      return t?.("module.subagents.tool.spawn_agent.result.failure.invalidParams") ?? "The spawn parameters are invalid";
+    case "agent_depth_limit":
+      return t?.("module.subagents.tool.spawn_agent.result.failure.agentDepthLimit") ?? "The subagent depth limit was reached";
+    case "agent_launch_failed":
+      return t?.("module.subagents.tool.spawn_agent.result.failure.agentLaunchFailed") ?? "The subagent could not be launched";
+    default:
+      return t?.("module.subagents.tool.spawn_agent.result.failure.unknown") ?? "The subagent could not be started";
+  }
+}
+
 /** Codex v2 的启动接缝：只负责协议映射、启动前校验和立即回执。 */
 export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDeps): void {
   pi.registerTool({
@@ -71,45 +104,50 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
       display_mode: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("herdr"), Type.Literal("tmux")])),
     }),
     renderCall(args, theme) {
-      const taskName = truncateToWidth(compactRenderText(args.task_name) || "(unknown)", 24, "…");
+      const taskName = compactRenderText(args.task_name) || "(task)";
       return new Text(
-        "○ " +
-          theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.spawn_agent.display") ?? "Spawn subagent")) +
-          theme.fg("dim", ` — ${taskName}`),
+        theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.spawn_agent.display") ?? "Spawn subagent")) +
+          " " + theme.fg("accent", taskName),
         0,
         0,
       );
     },
-    renderResult(result, options, theme) {
-      const details = result.details as {
-        task_name?: unknown;
-        status?: unknown;
-        message?: unknown;
-        code?: unknown;
+    renderResult(result, options, theme, context) {
+      const details = (result.details ?? {}) as Record<string, unknown> & {
         resolved?: {
           model?: unknown;
           reasoning_effort?: unknown;
           agent_type?: unknown;
         };
-      } | undefined;
-      const fullTaskName = compactRenderText(details?.task_name) || "spawn_agent";
-      const taskName = options.expanded ? fullTaskName : truncateToWidth(fullTaskName, 24, "…");
-      const succeeded = details?.status === "running";
-      const fullAgentType = compactRenderText(details?.resolved?.agent_type) || "general-purpose";
-      const agentType = options.expanded ? fullAgentType : truncateToWidth(fullAgentType, 16, "…");
-      const icon = succeeded ? theme.fg("success", "✓") : theme.fg("error", "✗");
-      const headline = succeeded
-        ? `${taskName} started (${agentType})`
-        : `${taskName} — ${compactRenderText(details?.message) || compactRenderText(details?.code) || "launch failed"}`;
-      const summary = icon + " " + theme.fg("toolTitle", theme.bold(headline));
-      if (!options.expanded || !succeeded) return new Text(summary, 0, 0);
-      const model = compactRenderText(details?.resolved?.model);
-      const reasoning = compactRenderText(details?.resolved?.reasoning_effort);
+      };
+      const args = (context?.args ?? {}) as { task_name?: unknown };
+      const taskName = compactRenderText(args.task_name) || compactRenderText(details.task_name) || "(task)";
+      const succeeded = details.status === "running";
+      if (!succeeded) {
+        const reason = spawnFailureReason(details, deps.t);
+        const summary = deps.t?.("module.subagents.tool.spawn_agent.result.failed", { reason }) ?? `Launch failed: ${reason}`;
+        if (!options.expanded) return new Text(theme.fg("error", summary), 0, 0);
+        const rawMessage = compactRenderText(details.message);
+        return new Text(
+          [theme.fg("error", summary), rawMessage ? theme.fg("toolOutput", rawMessage) : ""].filter(Boolean).join("\n"),
+          0,
+          0,
+        );
+      }
+      if (!options.expanded) return new Text("", 0, 0);
+      const agentType = compactRenderText(details.resolved?.agent_type) || "general-purpose";
+      const started = deps.t?.("module.subagents.tool.spawn_agent.result.started", { agent: agentType }) ?? `Started (${agentType})`;
+      const model = compactRenderText(details.resolved?.model);
+      const reasoning = compactRenderText(details.resolved?.reasoning_effort);
       const metadata = [
         model ? `model: ${model}` : "",
         reasoning ? `reasoning_effort: ${reasoning}` : "",
-      ].filter(Boolean).join("\n");
-      return new Text(metadata ? `${summary}\n${theme.fg("dim", metadata)}` : summary, 0, 0);
+      ].filter(Boolean);
+      return new Text(
+        [theme.fg("toolOutput", `${taskName} · ${started}`), ...metadata.map((line) => theme.fg("muted", line))].join("\n"),
+        0,
+        0,
+      );
     },
     async execute(_toolCallId, raw, _signal, _onUpdate, ctx) {
       if (parentTaskDepth() >= 2) {
@@ -123,7 +161,23 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
       const input: CodexV2SpawnParams = validated.value;
       const agent = input.agent_type ?? DEFAULT_AGENT_TYPE;
       const allowed = new Set(deps.discoverAgents().map((candidate) => candidate.name));
-      if (!allowed.has(agent)) return errorResult({ code: "agent_type_unknown", message: `Unknown agent_type "${agent}".` });
+      if (!allowed.has(agent)) {
+        const available = [...allowed];
+        if (available.length === 0) {
+          return errorResult({
+            code: "agent_definitions_unavailable",
+            message: "No agent definitions were discovered.",
+            requested: agent,
+            available,
+          });
+        }
+        return errorResult({
+          code: "agent_type_unknown",
+          message: `Unknown agent_type "${agent}". Available: ${available.join(", ")}.`,
+          requested: agent,
+          available,
+        });
+      }
 
       const directory = deps.getModelDirectory(ctx);
       const selected = validateCodexV2ModelSelection(directory, input.model, input.reasoning_effort);

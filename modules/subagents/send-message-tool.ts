@@ -124,12 +124,27 @@ export function registerSendMessageTool(pi: ExtensionAPI, deps: SendMessageToolD
     description: "Deliver an immediate message to an existing subagent. target accepts agent_id, canonical_task_name, or a unique local task name. This never starts a new task round.",
     promptSnippet: "Send an immediate message using the agent_id, canonical path, or task name without starting a new round.",
     parameters: Type.Object({ target: Type.String({ minLength: 1 }), message: Type.String({ minLength: 1 }) }),
-    renderCall(args, theme) { return new Text("○ " + theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.send_message.display") ?? "Message subagent")) + theme.fg("dim", ` — ${args.target ?? "(target)"}`), 0, 0); },
-    renderResult(result, _opts, theme) {
+    renderCall(args, theme) {
+      return new Text(
+        theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.send_message.display") ?? "Message subagent")) +
+          " " + theme.fg("accent", args.target ?? "(target)"),
+        0,
+        0,
+      );
+    },
+    renderResult(result, options, theme) {
       const details = result.details as any;
-      if (details?.submission_id) return new Text(theme.fg("success", "✓") + " " + theme.fg("toolTitle", theme.bold(details.task_name)) + theme.fg("dim", " — message submitted"), 0, 0);
-      const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-      return new Text(theme.fg("dim", text), 0, 0);
+      if (details?.submission_id) {
+        if (!options.expanded) return new Text("", 0, 0);
+        const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+        return new Text(
+          [theme.fg("toolOutput", deps.t?.("module.subagents.tool.send_message.result.submitted") ?? "Message submitted"), text ? theme.fg("muted", text) : ""].filter(Boolean).join("\n"),
+          0,
+          0,
+        );
+      }
+      const text = result.content[0]?.type === "text" ? result.content[0].text : "Message delivery failed";
+      return new Text(theme.fg("error", text), 0, 0);
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx: ToolContext) {
       const message = params.message.trim();

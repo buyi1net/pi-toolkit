@@ -726,7 +726,8 @@ export function registerSubagentInspectTool(pi: ExtensionAPI, deps: SubagentInsp
         ? (args as any).name.trim()
         : "all running";
       return new Text(
-        "○ " + theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent_inspect.display") ?? "Inspect subagent")) + theme.fg("dim", ` — ${name}`),
+        theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent_inspect.display") ?? "Inspect subagent")) +
+          " " + theme.fg("accent", name),
         0,
         0,
       );
@@ -880,7 +881,7 @@ export function registerSubagentInspectTool(pi: ExtensionAPI, deps: SubagentInsp
       }
       const views = details?.subagents ?? [];
       if (views.length === 0) {
-        return new Text(theme.fg("dim", "No running subagents"), 0, 0);
+        return new Text(theme.fg("toolOutput", deps.t?.("module.subagents.tool.subagent_inspect.result.empty") ?? "No running subagents"), 0, 0);
       }
       return new Text(
         views.map((view) => {

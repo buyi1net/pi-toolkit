@@ -190,8 +190,7 @@ export function registerPeersListTool(pi: ExtensionAPI, deps: PeersListToolDeps)
     parameters: Type.Object({}),
     renderCall(_args, theme) {
       return new Text(
-        "○ " +
-          theme.fg("toolTitle", theme.bold(deps.t?.("module.peers.tool.list.display") ?? "List local sessions")),
+        theme.fg("toolTitle", theme.bold(deps.t?.("module.peers.tool.list.display") ?? "List local sessions")),
         0,
         0,
       );
@@ -200,7 +199,10 @@ export function registerPeersListTool(pi: ExtensionAPI, deps: PeersListToolDeps)
       const details = result.details as PeersListOutput | undefined;
       const online = details?.entries.online.length ?? 0;
       const offline = details?.entries.offline.length ?? 0;
-      const summary = theme.fg("success", "✓") + " " + theme.fg("dim", `${online} online · ${offline} offline`);
+      const summary = theme.fg(
+        "toolOutput",
+        deps.t?.("module.peers.tool.list.result.summary", { online, offline }) ?? `${online} online · ${offline} offline`,
+      );
       if (!options.expanded) return new Text(summary, 0, 0);
       const text = result.content.find((part) => part.type === "text")?.text ?? "";
       return new Text(text || summary, 0, 0);

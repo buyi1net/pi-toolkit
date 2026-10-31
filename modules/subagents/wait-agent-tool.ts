@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { createParentUpdateQueue, type ParentSessionUpdate } from "./parent-update-queue.ts";
+import type { RuntimeRegistry } from "./registry.ts";
 import type { SubagentsTranslate } from "./messages/index.ts";
 
 /** wait_agent 的公开时限边界；工具 schema 与运行时校验共用这组值。 */
@@ -11,6 +12,7 @@ export const WAIT_AGENT_MAX_TIMEOUT_MS = 120_000;
 
 export interface WaitAgentToolDeps {
   readonly getArtifactDir: (sessionDir: string, sessionId: string) => string;
+  readonly registry: RuntimeRegistry;
   /** 测试接缝；生产默认短轮询以观察 watcher 写入的持久化队列。 */
   readonly pollIntervalMs?: number;
   readonly t?: SubagentsTranslate;
@@ -58,12 +60,39 @@ function collapsedRenderText(value: unknown, maxWidth: number): string {
   return truncateToWidth(compactRenderText(value), maxWidth, "…");
 }
 
-function updateIcon(status: string, theme: { fg(color: string, text: string): string }): string {
-  if (status === "completed") return theme.fg("success", "✓");
-  if (status === "failed") return theme.fg("error", "✗");
-  if (status === "interrupted") return theme.fg("warning", "Ⅱ");
-  if (status === "running" || status === "starting") return theme.fg("accent", "●");
-  return theme.fg("dim", "•");
+function updateTone(status: string): "success" | "error" | "warning" | "toolOutput" {
+  if (status === "completed") return "success";
+  if (status === "failed") return "error";
+  if (status === "interrupted") return "warning";
+  return "toolOutput";
+}
+
+function waitStatusText(status: string, t?: SubagentsTranslate): string {
+  switch (status) {
+    case "starting": return t?.("module.subagents.widget.status.starting") ?? "starting";
+    case "running": return t?.("module.subagents.widget.status.running") ?? "running";
+    case "waiting": return t?.("module.subagents.widget.status.waiting") ?? "waiting";
+    case "completed": return t?.("module.subagents.widget.result.completed") ?? "completed";
+    case "failed": return t?.("module.subagents.widget.result.failed") ?? "failed";
+    case "interrupted": return t?.("module.subagents.widget.result.cancelled") ?? "cancelled";
+    case "handed_off": return t?.("module.subagents.tool.wait_agent.result.status.handedOff") ?? "handed off";
+    default: return status;
+  }
+}
+
+function waitNoUpdateMessage(
+  details: Partial<WaitAgentResult> & { code?: unknown },
+  t?: SubagentsTranslate,
+): string {
+  if (details.timed_out === true) return t?.("module.subagents.tool.wait_agent.result.timeout") ?? "Timed out waiting for a subagent update";
+  switch (details.code) {
+    case "cancelled": return t?.("module.subagents.tool.wait_agent.result.cancelled") ?? "Wait cancelled";
+    case "no_running_agents": return t?.("module.subagents.tool.wait_agent.result.noRunningAgents") ?? "No subagents are currently running";
+    case "wait_in_progress": return t?.("module.subagents.tool.wait_agent.result.waitInProgress") ?? "Another wait is already in progress";
+    case "invalid_params": return t?.("module.subagents.tool.wait_agent.result.invalidParams") ?? "Invalid wait parameters";
+    case "context_unavailable": return t?.("module.subagents.tool.wait_agent.result.contextUnavailable") ?? "Parent session is unavailable";
+    default: return t?.("module.subagents.tool.wait_agent.result.noUpdate") ?? "No subagent update received";
+  }
 }
 
 function waitForUpdate(
@@ -113,7 +142,8 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
     description:
       "Wait for the next update in the current parent session queue. " +
       "This does not take a target list and a timeout never cancels a sub-agent. " +
-      "Read the returned update to identify its agent and event kind.",
+      "Read the returned update to identify its agent and event kind. " +
+      "This cannot wait for peers_send replies; those messages arrive automatically, so do not use wait_agent or repeatedly poll peers_list.",
     promptSnippet: "Wait for one new parent-session agent update without cancelling agents on timeout.",
     parameters: Type.Object({
       timeout_ms: Type.Optional(Type.Integer({
@@ -124,8 +154,7 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
     }),
     renderCall(_args, theme) {
       return new Text(
-        "○ " +
-          theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.wait_agent.display") ?? "Wait for subagent")),
+        theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.wait_agent.display") ?? "Wait for subagent")),
         0,
         0,
       );
@@ -136,19 +165,18 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
       } | undefined;
       const update = details?.update;
       if (!update) {
-        const fullMessage = compactRenderText(details?.message) || "No update";
-        const message = options.expanded ? fullMessage : collapsedRenderText(fullMessage, 48);
-        const cancelled = details?.code === "cancelled";
-        const icon = cancelled ? theme.fg("warning", "Ⅱ") : theme.fg("dim", "•");
-        return new Text(icon + " " + theme.fg("dim", message), 0, 0);
+        const message = waitNoUpdateMessage(details ?? {}, deps.t);
+        const tone = details?.code === "cancelled" ? "warning" : "toolOutput";
+        return new Text(theme.fg(tone, options.expanded ? message : collapsedRenderText(message, 48)), 0, 0);
       }
       const fullTaskName = compactRenderText(update.task_name) || "subagent";
       const fullSummary = compactRenderText(update.summary);
       const taskName = options.expanded ? fullTaskName : collapsedRenderText(fullTaskName, 20);
-      const status = compactRenderText(update.status) || "unknown";
+      const statusCode = compactRenderText(update.status) || "unknown";
+      const status = waitStatusText(statusCode, deps.t);
       const summary = options.expanded ? fullSummary : collapsedRenderText(fullSummary, 28);
       const headline = `${taskName} — ${status}${summary ? `: ${summary}` : ""}`;
-      const line = updateIcon(status, theme) + " " + theme.fg("toolTitle", theme.bold(headline));
+      const line = theme.fg(updateTone(statusCode), headline);
       if (!options.expanded) return new Text(line, 0, 0);
       const metadata = [
         `kind: ${compactRenderText(update.kind)}`,
@@ -184,6 +212,17 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
       }
       const artifactDir = deps.getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId());
       const queue = createParentUpdateQueue(artifactDir);
+      const hasNoRunningAgents = deps.registry.list().length === 0;
+      if (hasNoRunningAgents && queue.peek() === null) {
+        return result(
+          {
+            message: "wait_agent only waits for subagents dispatched by this session; peers messages arrive automatically, so end this turn instead of waiting.",
+            timed_out: false,
+            update: null,
+          },
+          { code: "no_running_agents" },
+        );
+      }
       let waitToken: string;
       try {
         waitToken = queue.beginWait();

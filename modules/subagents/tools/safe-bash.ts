@@ -66,8 +66,8 @@ export default function (pi: ExtensionAPI, t: SubagentsTranslate = subagentsTabl
 		renderCall(args, theme) {
 			const command = typeof args.command === "string" ? args.command.replace(/\s+/g, " ").trim() : "(command)";
 			return new Text(
-				"○ " + theme.fg("toolTitle", theme.bold(t("module.subagents.tool.safe_bash.display"))) +
-					theme.fg("dim", ` — ${command}`),
+				theme.fg("toolTitle", theme.bold(t("module.subagents.tool.safe_bash.display"))) +
+					" " + theme.fg("accent", command),
 				0,
 				0,
 			);

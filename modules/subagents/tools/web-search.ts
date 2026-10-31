@@ -126,7 +126,12 @@ export default function webSearchExtension(pi: ExtensionAPI, t: SubagentsTransla
     }),
     renderCall(args, theme) {
       const query = typeof args.query === "string" ? args.query.replace(/\s+/g, " ").trim() : "(query)";
-      return new Text("○ " + theme.fg("toolTitle", theme.bold(t("module.subagents.tool.web_search.display"))) + theme.fg("dim", ` — ${query}`), 0, 0);
+      return new Text(
+        theme.fg("toolTitle", theme.bold(t("module.subagents.tool.web_search.display"))) +
+          " " + theme.fg("accent", query),
+        0,
+        0,
+      );
     },
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const query = String((params as { query?: unknown }).query ?? "").trim();

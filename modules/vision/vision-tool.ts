@@ -42,9 +42,11 @@ export function registerVisionQuery(
     promptSnippet: "Ask the auxiliary vision model a focused question about the most recent screenshot",
     promptGuidelines: ["Use after computer_screenshot when the current visual state needs a specific answer. Ask any task-relevant question; do not guess if the answer is uncertain. You can call this tool repeatedly for follow-up questions."],
     parameters: VisionQueryParams,
-    renderCall(_args, theme) {
+    renderCall(args, theme) {
+      const question = typeof args.question === "string" ? args.question.split("\n").find((line) => line.trim())?.trim() ?? "" : "";
       return new Text(
-        "○ " + theme.fg("toolTitle", theme.bold(t?.("module.vision.tool.vision_query.display") ?? "Visual query")),
+        theme.fg("toolTitle", theme.bold(t?.("module.vision.tool.vision_query.display") ?? "Visual query")) +
+          (question ? " " + theme.fg("accent", question) : ""),
         0,
         0,
       );

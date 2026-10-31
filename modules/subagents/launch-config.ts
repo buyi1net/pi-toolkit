@@ -182,8 +182,7 @@ export function resolveSurfaceChoice(
     if (effectiveInteractive) {
       const reason =
         'interactive (demo) sub-agents run in a visible pane the user operates; ' +
-        'surface "background" (headless) was refused instead of silently creating a pane. ' +
-        "Spawn an autonomous agent, or omit `surface` to place this sub-agent in a pane.";
+        'surface "background" (headless) was refused instead of silently creating a pane.';
       return { error: reason };
     }
     return { choice: "headless" };

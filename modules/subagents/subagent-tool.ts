@@ -1290,7 +1290,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       const task = typeof partialArgs.task === "string" ? partialArgs.task : "";
       const agent = agentName && name !== agentName ? theme.fg("dim", ` (${agentName})`) : "";
       const cwdHint = typeof partialArgs.cwd === "string" && partialArgs.cwd ? theme.fg("dim", ` in ${partialArgs.cwd}`) : "";
-      let text = "○ " + theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent.display") ?? "Run subagent")) + theme.fg("dim", ` — ${name}`) + agent + cwdHint;
+      let text = theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent.display") ?? "Run subagent")) + " " + theme.fg("accent", name) + agent + cwdHint;
       if (task) {
         const firstLine = task.split("\n").find((line: string) => line.trim()) ?? "";
         const preview = firstLine.length > 100 ? firstLine.slice(0, 100) + "…" : firstLine;
@@ -1301,82 +1301,41 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       return new Text(text, 0, 0);
     },
 
-    renderResult(result, _opts, theme) {
+    renderResult(result, options, theme) {
       const details = result.details as any;
-      const name = details?.name ?? "(unnamed)";
+      const t = deps.t ?? subagentsTableTranslator("en");
       if (details?.status === "started") {
-        return new Text(
-          theme.fg("accent", "⟳") + " " + theme.fg("toolTitle", theme.bold(name)) + theme.fg("dim", " — started"),
-          0,
-          0,
-        );
+        if (!options.expanded) return new Text("", 0, 0);
+        return new Text(theme.fg("toolOutput", t("module.subagents.tool.subagent.result.started")), 0, 0);
       }
-      // 持久成员启动:立即 ack,首轮结果稍后经轮次回注送达。
       if (details?.status === "member-started") {
-        return new Text(
-          theme.fg("accent", "◆") + " " + theme.fg("toolTitle", theme.bold(name)) +
-            theme.fg("accent", " — team member · round 1 running"),
-          0,
-          0,
-        );
+        if (!options.expanded) return new Text("", 0, 0);
+        return new Text(theme.fg("toolOutput", t("module.subagents.tool.subagent.result.memberStarted")), 0, 0);
       }
-      // /reload 移交:非终态,真实结果稍后由恢复路径回注。
       if (details?.status === "handed-off") {
-        return new Text(
-          theme.fg("accent", "⏳") + " " +
-            theme.fg("toolTitle", theme.bold(name)) +
-            theme.fg("dim", " — handed off after reload"),
-          0,
-          0,
-        );
+        return new Text(theme.fg("toolOutput", t("module.subagents.tool.subagent.result.handedOff")), 0, 0);
       }
-      // Escape 中止等待:非终态,子代理仍在运行,真实结果稍后迟到回注。
       if (details?.status === "detached") {
-        return new Text(
-          theme.fg("accent", "⇄") + " " +
-            theme.fg("toolTitle", theme.bold(name)) +
-            theme.fg("dim", " — detached (still running; late result to follow)"),
-          0,
-          0,
-        );
+        return new Text(theme.fg("toolOutput", t("module.subagents.tool.subagent.result.detached")), 0, 0);
       }
-      // 用户直接关闭 pane:稳定分类,不是 provider/agent 错误。
       if (details?.status === "user_closed") {
-        return new Text(
-          theme.fg("warning", "✕") + " " +
-            theme.fg("toolTitle", theme.bold(name)) +
-            theme.fg("warning", " — closed by user"),
-          0,
-          0,
-        );
+        return new Text(theme.fg("warning", t("module.subagents.tool.subagent.result.closedByUser")), 0, 0);
       }
-      // 等待超时:非终态,子代理仍在运行,真实结果稍后迟到回注。
       if (details?.status === "timed-out") {
-        const bound = typeof details.timeoutMs === "number" ? ` after ${Math.round(details.timeoutMs / 1000)}s` : "";
-        return new Text(
-          theme.fg("warning", "⏱") + " " +
-            theme.fg("toolTitle", theme.bold(name)) +
-            theme.fg("warning", ` — timed out${bound} (still running; late result to follow)`),
-          0,
-          0,
-        );
+        return new Text(theme.fg("warning", t("module.subagents.tool.subagent.result.timedOut")), 0, 0);
       }
-      // 硬屏障终态:自动子代理的结果直接作为 tool result 返回,按状态渲染。
       if (details?.status === "completed" || details?.status === "failed" || details?.status === "cancelled") {
-        const t = deps.t ?? subagentsTableTranslator("en");
-        const elapsed = typeof details.elapsed === "number" ? ` · ${details.elapsed}s` : "";
-        const reason =
-          details.status === "completed"
-            ? theme.fg("dim", `${t("module.subagents.widget.result.completed")}${elapsed}`)
-            : details.status === "cancelled"
-              ? theme.fg("warning", `${t("module.subagents.widget.result.cancelled")}${elapsed}`)
-              : theme.fg("error", `${t("module.subagents.widget.result.failed")}${elapsed}`);
-        const icon = details.status === "completed" ? theme.fg("success", "✓") : theme.fg("error", "✗");
-        return new Text(icon + " " + theme.fg("toolTitle", theme.bold(name)) + " " + reason, 0, 0);
+        if (details.status === "completed" && !options.expanded) return new Text("", 0, 0);
+        const label = details.status === "completed"
+          ? t("module.subagents.widget.result.completed")
+          : details.status === "cancelled"
+            ? t("module.subagents.widget.result.cancelled")
+            : t("module.subagents.widget.result.failed");
+        return new Text(theme.fg(details.status === "failed" ? "error" : details.status === "cancelled" ? "warning" : "toolOutput", label), 0, 0);
       }
       const content = result.content[0];
       const text = content && content.type === "text" ? content.text : "";
-      return new Text(theme.fg("dim", text), 0, 0);
+      return new Text(theme.fg("error", text), 0, 0);
     },
   });
 }

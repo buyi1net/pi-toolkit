@@ -36,12 +36,28 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
     description: "Start the next task round for an existing subagent while preserving its session context. target accepts agent_id, canonical_task_name, or a local task name.",
     promptSnippet: "Continue an existing subagent session with a new task round using its agent_id, canonical path, or task name.",
     parameters: Type.Object({ target: Type.String({ minLength: 1 }), message: Type.String({ minLength: 1 }) }),
-    renderCall(args, theme) { return new Text("○ " + theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.followup_task.display") ?? "Follow-up task")) + theme.fg("dim", ` — ${args.target ?? "(target)"}`), 0, 0); },
-    renderResult(result, _opts, theme) {
+    renderCall(args, theme) {
+      return new Text(
+        theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.followup_task.display") ?? "Follow-up task")) +
+          " " + theme.fg("accent", args.target ?? "(target)"),
+        0,
+        0,
+      );
+    },
+    renderResult(result, options, theme) {
       const details = result.details as any;
-      if (details?.submission_id) return new Text(theme.fg("accent", "⟳") + " " + theme.fg("toolTitle", theme.bold(details.task_name)) + theme.fg("dim", " — follow-up started"), 0, 0);
-      const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-      return new Text(theme.fg("dim", text), 0, 0);
+      const t = deps.t;
+      if (details?.submission_id) {
+        if (!options.expanded) return new Text("", 0, 0);
+        const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+        return new Text(
+          [theme.fg("toolOutput", t?.("module.subagents.tool.followup_task.result.started") ?? "Follow-up started"), text ? theme.fg("muted", text) : ""].filter(Boolean).join("\n"),
+          0,
+          0,
+        );
+      }
+      const text = result.content[0]?.type === "text" ? result.content[0].text : "Follow-up failed";
+      return new Text(theme.fg("error", text), 0, 0);
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx: ToolContext) {
       const message = params.message.trim();

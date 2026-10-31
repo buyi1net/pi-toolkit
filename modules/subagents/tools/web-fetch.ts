@@ -138,7 +138,12 @@ export default function webFetchExtension(pi: ExtensionAPI, t: SubagentsTranslat
     }),
     renderCall(args, theme) {
       const url = typeof args.url === "string" ? args.url.trim() : "(url)";
-      return new Text("○ " + theme.fg("toolTitle", theme.bold(t("module.subagents.tool.web_fetch.display"))) + theme.fg("dim", ` — ${url}`), 0, 0);
+      return new Text(
+        theme.fg("toolTitle", theme.bold(t("module.subagents.tool.web_fetch.display"))) +
+          " " + theme.fg("accent", url),
+        0,
+        0,
+      );
     },
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const url = String((params as { url?: unknown }).url ?? "");

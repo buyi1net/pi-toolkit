@@ -17,9 +17,14 @@ const EN = {
 
   "module.peers.tool.list.label": "List peer sessions",
   "module.peers.tool.list.display": "List local sessions",
+  "module.peers.tool.list.result.summary": "{online} online · {offline} offline",
 
   "module.peers.tool.send.label": "Send message to peer session",
-  "module.peers.tool.send.display": "Message {target}",
+  "module.peers.tool.send.display": "Message",
+  "module.peers.tool.send.result.delivered": "Delivered {target}",
+  "module.peers.tool.send.result.failed": "Delivery failed: {reason}",
+  "module.peers.tool.send.result.moreLines": "… {count} more lines",
+  "module.peers.tool.send.result.bodyUnavailable": "Message body unavailable",
 
   // 外部消息卡片渲染器（工单 50）：标题 / 元信息 / 正文不可用
   "module.peers.renderer.title": "External session",
@@ -42,9 +47,14 @@ const ZH_CN: typeof EN = {
 
   "module.peers.tool.list.label": "列出本机会话",
   "module.peers.tool.list.display": "查询本机会话列表",
+  "module.peers.tool.list.result.summary": "{online} 在线 · {offline} 离线",
 
   "module.peers.tool.send.label": "给本机会话发消息",
-  "module.peers.tool.send.display": "发消息给 {target}",
+  "module.peers.tool.send.display": "发消息给",
+  "module.peers.tool.send.result.delivered": "已送达 {target}",
+  "module.peers.tool.send.result.failed": "发送失败：{reason}",
+  "module.peers.tool.send.result.moreLines": "… 还有 {count} 行",
+  "module.peers.tool.send.result.bodyUnavailable": "消息正文不可用",
 
   // 外部消息卡片渲染器（工单 50）
   "module.peers.renderer.title": "外部会话",
@@ -67,9 +77,14 @@ const ZH_TW: typeof EN = {
 
   "module.peers.tool.list.label": "列出本機會話",
   "module.peers.tool.list.display": "查詢本機會話列表",
+  "module.peers.tool.list.result.summary": "{online} 線上 · {offline} 離線",
 
   "module.peers.tool.send.label": "給本機會話傳訊息",
-  "module.peers.tool.send.display": "發訊息給 {target}",
+  "module.peers.tool.send.display": "發訊息給",
+  "module.peers.tool.send.result.delivered": "已送達 {target}",
+  "module.peers.tool.send.result.failed": "傳送失敗：{reason}",
+  "module.peers.tool.send.result.moreLines": "… 還有 {count} 行",
+  "module.peers.tool.send.result.bodyUnavailable": "訊息內文無法取得",
 
   // 外部訊息卡片渲染器（工單 50）
   "module.peers.renderer.title": "外部會話",

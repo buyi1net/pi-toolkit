@@ -64,35 +64,25 @@ export function registerSubagentStopTool(pi: ExtensionAPI, deps: SubagentStopToo
     renderCall(args, theme) {
       const target = typeof (args as any).name === "string" ? (args as any).name : "(unknown)";
       return new Text(
-        "○ " + theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent_stop.display") ?? "Stop subagent")) +
-          theme.fg("dim", ` — ${target}`),
+        theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent_stop.display") ?? "Stop subagent")) +
+          " " + theme.fg("accent", target),
         0,
         0,
       );
     },
 
-    renderResult(result, _opts, theme) {
+    renderResult(result, options, theme) {
       const details = result.details as any;
-      const name = details?.name ?? "subagent";
       if (details?.status === "stopped") {
-        return new Text(
-          theme.fg("error", "■") + " " + theme.fg("toolTitle", theme.bold(name)) +
-            theme.fg("warning", " — stopped"),
-          0,
-          0,
-        );
+        if (!options.expanded) return new Text("", 0, 0);
+        return new Text(theme.fg("toolOutput", deps.t?.("module.subagents.tool.subagent_stop.result.stopped") ?? "Stopped"), 0, 0);
       }
       if (details?.status === "stop-requested") {
-        return new Text(
-          theme.fg("warning", "■") + " " + theme.fg("toolTitle", theme.bold(name)) +
-            theme.fg("dim", " — stop requested (settling)"),
-          0,
-          0,
-        );
+        return new Text(theme.fg("warning", deps.t?.("module.subagents.tool.subagent_stop.result.stopRequested") ?? "Stop requested; settling"), 0, 0);
       }
       const content = result.content[0];
-      const text = content && content.type === "text" ? content.text : "";
-      return new Text(theme.fg("dim", text), 0, 0);
+      const text = content && content.type === "text" ? content.text : "Stop failed";
+      return new Text(theme.fg("error", text), 0, 0);
     },
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {

@@ -500,9 +500,8 @@ export default function (pi: ExtensionAPI) {
 
     renderCall(args, theme) {
       const text =
-        "○ " +
         theme.fg("toolTitle", theme.bold(toolText("module.subagents.tool.ask_question.display"))) +
-        theme.fg("muted", ` — ${String((args as any).question ?? "")}`);
+        " " + theme.fg("accent", String((args as any).question ?? ""));
       return new Text(text, 0, 0);
     },
   });
@@ -545,8 +544,7 @@ export default function (pi: ExtensionAPI) {
               type: "text",
               text:
                 `Not allowed: "${to}" is not in this profile's peer-send ACL` +
-                `${peerSendAcl.length > 0 ? ` (allowed: ${peerSendAcl.join(", ")})` : " (no peer-send declared)"}. ` +
-                `Ask the orchestrator to relay the information instead.`,
+                `${peerSendAcl.length > 0 ? ` (allowed: ${peerSendAcl.join(", ")})` : " (no peer-send declared)"}.`,
             }],
             details: { error: "acl-denied", to },
           };
@@ -592,9 +590,8 @@ export default function (pi: ExtensionAPI) {
       renderCall(args, theme) {
         const to = String((args as any).to ?? "?");
         return new Text(
-          "○ " +
           theme.fg("toolTitle", theme.bold(toolText("module.subagents.tool.team_send.display"))) +
-          theme.fg("muted", ` — ${to}`),
+          " " + theme.fg("accent", to),
           0,
           0,
         );
