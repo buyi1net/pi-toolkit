@@ -1,15 +1,5 @@
-// peers_list 模型侧工具（工单 36）：列出本机（同一 agentDir）全部 pi 会话。
-//
-// 数据源纪律：工具输出与 `peers.discovery` 句柄快照出自同一份合并结果——execute 先走
-// runtime 的异步 refresh（并发复用同一在途操作），再读同一快照，不自己另行扫描。
-// 快照字段集沿用 api.ts 定义不扩张：短码派生、重码标注、「自己」标记与状态展示组合
-// 都在本层用共享纯函数（shared/short-id、discovery 的 peerDisplayStatus）计算。
-//
-// 文案口径与 vision_query 相同：工具名、描述与模型可见的结果文本是稳定的协议文本
-// （英文），不随界面语言变化；人类界面的工具显示名走三语键表（mod.ts 装配时解析）。
-
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import { Type } from "typebox";
 import { deriveSessionShortId } from "../../shared/short-id.ts";
 import type { PeersDiscoverySnapshot, PeersSnapshotError } from "./api.ts";
@@ -17,35 +7,34 @@ import { peerDisplayStatus, type PeerDisplayStatus } from "./discovery.ts";
 import type { PeersTranslate } from "./messages/index.ts";
 
 export interface PeersListToolDeps {
-  /** 快照读出：与 peers.discovery 句柄同一 runtime 的 snapshot */
+
   readonly getSnapshot: () => PeersDiscoverySnapshot;
-  /** 异步刷新（重扫描并刷新快照）；与句柄 refresh 同一在途复用操作 */
+
   readonly refresh: () => Promise<void>;
-  /** 本实例 id（会话未绑定为 null），「自己」标记用 */
+
   readonly getInstanceId: () => string | null;
-  /** 工具显示名（三语键表在装配时解析） */
+
   readonly label: string;
-  /** TUI 调用行展示译者 */
+
   readonly t?: PeersTranslate;
 }
 
-/** 一条列表输出的结构化视图（details 载荷与文本行的同一数据） */
 export interface PeersListEntryView {
   readonly sessionId: string;
   readonly shortId: string | null;
-  /** 离线条目为 null（无实例概念） */
+
   readonly instanceId: string | null;
   readonly status: PeerDisplayStatus;
   readonly name: string | null;
   readonly cwd: string | null;
   readonly sessionFile: string | null;
-  /** 自己的会话（含同会话的其它实例） */
+
   readonly self: boolean;
-  /** 正是本实例（自己会话中的当前实例） */
+
   readonly ownInstance: boolean;
-  /** 短码在本次列表内命中多个会话 */
+
   readonly duplicateShortId: boolean;
-  /** 该会话在活分区有多个实例并列 */
+
   readonly multipleInstances: boolean;
 }
 
@@ -56,7 +45,6 @@ export interface PeersListOutput {
   readonly error: Pick<PeersSnapshotError, "kind" | "detail"> | null;
 }
 
-/** 「自己」身份：拿不到会话 id 或实例 id（如会话未绑定）时不标自己 */
 export interface PeersSelfIdentity {
   readonly ownSessionId: string | null;
   readonly ownInstanceId: string | null;
@@ -66,7 +54,7 @@ function buildEntryViews(
   snapshot: PeersDiscoverySnapshot,
   identity: PeersSelfIdentity,
 ): { online: PeersListEntryView[]; offline: PeersListEntryView[] } {
-  // 短码重码统计：同一短码（非 null）命中多个会话时全部标注（规格「短码性质」）
+
   const shortIdSessions = new Map<string, Set<string>>();
   const consider = (sessionId: string, shortId: string | null): void => {
     if (!shortId) return;
@@ -79,7 +67,6 @@ function buildEntryViews(
   const isDuplicate = (shortId: string | null): boolean =>
     shortId !== null && (shortIdSessions.get(shortId)?.size ?? 0) > 1;
 
-  // 多实例标注统计：同一会话在活分区并列的实例数（规格：多实例条目带显式标注）
   const liveInstanceCounts = new Map<string, number>();
   for (const entry of snapshot.online) {
     liveInstanceCounts.set(entry.sessionId, (liveInstanceCounts.get(entry.sessionId) ?? 0) + 1);
@@ -122,7 +109,7 @@ function buildEntryViews(
 }
 
 function formatEntryLine(entry: PeersListEntryView, truncated: boolean): string {
-  // 会话文件为 null 分两种成因：真被删（missing）vs 落在截断后的扫描窗口外，措辞不撒谎
+
   const file = entry.sessionFile ?? (truncated ? "(not in scan window)" : "(session file missing)");
   const segments = [
     `short ${entry.shortId !== null ? `#${entry.shortId}` : "(none)"}`,
@@ -141,7 +128,6 @@ function formatEntryLine(entry: PeersListEntryView, truncated: boolean): string 
   return `• ${segments.join(" | ")}`;
 }
 
-/** 由快照构建列表输出：文本与 details 载荷同源，纯函数（不含扫描与刷新） */
 export function buildPeersListOutput(snapshot: PeersDiscoverySnapshot, identity: PeersSelfIdentity): PeersListOutput {
   const { online, offline } = buildEntryViews(snapshot, identity);
   const lines: string[] = [];
@@ -150,7 +136,7 @@ export function buildPeersListOutput(snapshot: PeersDiscoverySnapshot, identity:
       `PEER DISCOVERY PROBLEM (${snapshot.error.kind}): ${snapshot.error.detail} — the list below is the last successful scan and may be stale.`,
     );
   }
-  // 重码投递口径（工单 51，规格决策 8）：有重码条目才补这一句，说清离线条目不把目标拖成多义
+
   if ([...online, ...offline].some((entry) => entry.duplicateShortId)) {
     lines.push(
       "DUPLICATE SHORT IDS: a target that matches both live and offline sessions is delivered to the live instance; only multiple live instances are ambiguous.",
@@ -188,24 +174,22 @@ export function registerPeersListTool(pi: ExtensionAPI, deps: PeersListToolDeps)
     promptSnippet:
       "List local peer pi sessions (active/offline) with short id, session id, instance id, name, cwd, file path and status",
     parameters: Type.Object({}),
-    renderCall(_args, theme) {
-      return new Text(
-        theme.fg("toolTitle", theme.bold(deps.t?.("module.peers.tool.list.display") ?? "List local sessions")),
-        0,
-        0,
-      );
+    renderShell: "self",
+    renderCall(_args, theme, context) {
+      return renderToolCardCall({ title: deps.t?.("module.peers.tool.list.display") ?? "List local sessions" }, theme, context);
     },
-    renderResult(result, options, theme) {
+    renderResult(result, options, theme, context) {
       const details = result.details as PeersListOutput | undefined;
       const online = details?.entries.online.length ?? 0;
       const offline = details?.entries.offline.length ?? 0;
-      const summary = theme.fg(
-        "toolOutput",
-        deps.t?.("module.peers.tool.list.result.summary", { online, offline }) ?? `${online} online · ${offline} offline`,
-      );
-      if (!options.expanded) return new Text(summary, 0, 0);
+      const summary = deps.t?.("module.peers.tool.list.result.summary", { online, offline }) ?? `${online} online · ${offline} offline`;
       const text = result.content.find((part) => part.type === "text")?.text ?? "";
-      return new Text(text || summary, 0, 0);
+      return renderToolCardResult(
+        { title: deps.t?.("module.peers.tool.list.display") ?? "List local sessions", status: summary, details: options.expanded ? text.split("\n") : [] },
+        theme,
+        options,
+        context,
+      );
     },
 
     async execute(
@@ -218,7 +202,7 @@ export function registerPeersListTool(pi: ExtensionAPI, deps: PeersListToolDeps)
       content: { type: "text"; text: string }[];
       details: PeersListOutput;
     }> {
-      // 与句柄同一数据源：先复用 runtime 的在途刷新，再读同一份快照，不另行扫描
+
       await deps.refresh();
       const snapshot = deps.getSnapshot();
       const ownSessionId = ctx?.sessionManager?.getSessionId?.() ?? null;

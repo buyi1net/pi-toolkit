@@ -1,6 +1,3 @@
-// 模块契约：每个源插件迁入 pi-toolkit 后实现为一个 ModuleDefinition。
-// 装配器按 enabled 开关决定是否调用 register；声明 alwaysAssemble: true 的模块是例外（关闭时同样装配）。
-
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SettingItem } from "@earendil-works/pi-tui";
 import type { Translator } from "../i18n/index.ts";
@@ -8,46 +5,28 @@ import type { ConfigWriteHooks } from "./config-transaction.ts";
 import type { MenuTheme } from "./menu/theme.ts";
 import type { ServiceRegistry } from "./services.ts";
 
-/** 配置节里的标量取值；schema 字段（菜单控件）只接受标量 */
 export type ModuleConfigScalar = string | number | boolean | null;
-/**
- * 配置节里能存的值：标量、数组与嵌套对象。
- * 嵌套结构不属于 schema 字段（菜单不渲染），模块在自己的配置解析里读取校验，
- * 例如视觉模块的 `backend.route.allowedModels` / `fixedModel`。
- */
+
 export type ModuleConfigValue =
   | ModuleConfigScalar
   | ModuleConfigValue[]
   | { [key: string]: ModuleConfigValue };
 export type ModuleConfigRecord = Record<string, ModuleConfigValue>;
 
-/**
- * 一个配置字段。
- * - default 为 boolean：开/关字段
- * - default 为 string 且带 values：枚举字段（配置里存 values 中的规范化代码）
- * - 枚举值的显示文案从 valueLabelKeys 取；某个值没配键时直接显示该值原文
- *
- * 数值/自由文本字段等后续工单需要时再扩展控件类型，本工单不预置无用分支。
- *
- * 键字段是 string（工单 09 定案）：模块自带键表，跨模块键存在性由运行时
- * hasMessage 与三语完整性测试兜底，模块内的局部 keyof 校验在模块自己的配置里做。
- */
 export interface ConfigField {
   default: ModuleConfigScalar;
   values?: readonly string[];
   labelKey: string;
   descriptionKey?: string;
-  /** 枚举值 → 显示文案键，必须覆盖 values 里的每一项 */
+
   valueLabelKeys?: Readonly<Record<string, string>>;
 }
 
 export type ModuleConfigSchema = Record<string, ConfigField>;
 
-/** 菜单分组：决定一级菜单里的行序（模块按组依次排列；菜单不再渲染分组标题） */
 export type ModuleGroup = "general" | "tui" | "models" | "subagents";
 export const MODULE_GROUPS: readonly ModuleGroup[] = ["general", "tui", "models", "subagents"];
 
-/** 模块总开关字段名；每个模块的 schema 必须声明它 */
 export const ENABLED_FIELD = "enabled";
 
 export function enabledField(labelKey: string, descriptionKey?: string): ConfigField {
@@ -58,7 +37,6 @@ export function isBooleanField(field: ConfigField): boolean {
   return typeof field.default === "boolean";
 }
 
-/** 把外部输入（菜单回传的显示文案、配置文件里的值）规范化成 schema 接受的值；不接受则返回 undefined */
 export function normalizeConfigValue(field: ConfigField, value: unknown): ModuleConfigScalar | undefined {
   if (typeof field.default === "boolean") {
     if (typeof value === "boolean") return value;
@@ -81,37 +59,24 @@ export function normalizeConfigValue(field: ConfigField, value: unknown): Module
 
 export interface ModuleContext {
   readonly moduleId: string;
-  /** 收到 pi API 后自行注册命令、工具与钩子 */
+
   readonly pi: ExtensionAPI;
   readonly services: ServiceRegistry;
   readonly t: Translator;
-  /** 实时读取本模块配置（已合并 schema 默认值） */
+
   getConfig(): ModuleConfigRecord;
-  /**
-   * 重新从磁盘读取整份配置文件并刷新状态中枢的内存副本。
-   * 模块用自己的配置层写到盘上（如视觉路由）之后，靠它让 getConfig 跟上磁盘。
-   */
+
   reloadConfig(): Promise<void>;
-  /**
-   * 写入并持久化单个配置字段，返回规范化后的值。
-   * 只接受 schema 声明的字段；模块私有的结构化配置（非 schema 键）走 saveConfig。
-   */
+
   setConfig(key: string, value: ModuleConfigScalar): Promise<ModuleConfigScalar>;
-  /**
-   * 结构化配置写入事务（工单 19）：把本模块配置节的补丁写盘 → 内存重载 → reapply。
-   * 只允许从 kit 出去写盘，模块只提供补丁与重生效回调。
-   */
+
   saveConfig(patch: ModuleConfigRecord, hooks?: ConfigWriteHooks): Promise<void>;
 }
 
-/**
- * 自绘短选项行的就地切换契约（本单）：行带 `values` 显示数组后，用户回车/空格直接循环切换，
- * 菜单层把新文案交回这里的 change；保存失败时按 read 回读的文案回滚行显示。
- */
 export interface RowChangeEntry {
-  /** 当前应显示的文案（保存失败时回滚显示用） */
+
   read(): string;
-  /** 就地切换：新显示文案 → 保存；返回是否成功（失败时菜单层回滚显示，提示由行自己负责） */
+
   change(label: string): Promise<boolean>;
 }
 
@@ -119,68 +84,46 @@ export interface ModuleMenuContext {
   readonly t: Translator;
   readonly services: ServiceRegistry;
   getConfig(): ModuleConfigRecord;
-  /** 打开菜单时的扩展上下文：需要与宿主交互的菜单项（如视觉探测）从这里取 modelRegistry / model / signal */
+
   readonly context: ExtensionContext;
-  /** pi 的配置目录（<agentDir>/pi-toolkit.json 就在它下面）：模块自写盘时用 */
+
   readonly agentDir: string;
-  /** 子菜单自绘面板上色用的主题 */
+
   readonly theme: MenuTheme;
-  /** 异步动作结束后请宿主重绘（pi 的 TUI 是按需渲染） */
+
   requestRender(): void;
-  /**
-   * 结构化配置写入事务（工单 19）：补丁 → 落盘 → 内存重载 → reapply → 菜单重绘请求。
-   * 重绘请求由菜单层注入，模块只需给出补丁与 reapply。
-   */
+
   saveConfig(patch: ModuleConfigRecord, hooks?: ConfigWriteHooks): Promise<void>;
-  /** 顶层统一改动入口（id 与显示文案，工单 46）：共享二级页里 schema 字段行的取值经它落盘 */
+
   onChange(id: string, value: string): void;
-  /**
-   * 自绘短选项行的就地切换注册（本单）：行构造时注册，用户切换后由菜单层调用 entry.change；
-   * schema 字段行不需要（骨架自动行直接走 applyMenuChange）。
-   */
+
   registerRowChange(id: string, entry: RowChangeEntry): void;
-  /**
-   * 共享二级页行集合（工单 46）：与本模块同 pageId 的启用模块的行，本模块的行在前。
-   * 未声明 pageId 的模块没有这一项。
-   */
+
   pageItems?(): readonly SettingItem[];
 }
 
 export interface ModuleDefinition {
-  /** 模块 id：同时是配置节名与菜单项 id 前缀 */
+
   readonly id: string;
   readonly labelKey: string;
   readonly descriptionKey: string;
   readonly group: ModuleGroup;
-  /** 配置 schema，必须包含 enabled 字段 */
+
   readonly configSchema: ModuleConfigSchema;
-  /**
-   * 常驻装配（工单 01）：声明为 true 的模块即使磁盘 `enabled` 为 false 也纳入装配并
-   * 执行 register，一级菜单照常渲染其 topLevel 入口——用户能从菜单里重新打开模块。
-   * 模块自己的运行行为必须按实时配置自行旁路（关闭时不产生默认不应有的副作用）。
-   */
+
   readonly alwaysAssemble?: boolean;
-  /** 仅在模块启用时调用（alwaysAssemble 模块在关闭时同样调用，由模块自行旁路） */
+
   readonly register: (context: ModuleContext) => void;
-  /** 可选：schema 自动生成的行之外，本模块专属的菜单行；同样只在模块启用时渲染
-   *  （alwaysAssemble 模块关闭时也会装配，此时是否渲染由模块的 topLevel 钩子自己决定） */
+
   readonly menuItems?: (context: ModuleMenuContext) => readonly SettingItem[];
-  /**
-   * 共享二级页归属（工单 46）：同 pageId 的启用模块共用一个二级页，
-   * 页面入口行由页主模块（提供 topLevel 入口行的模块）的子菜单打开。
-   */
+
   readonly pageId?: string;
-  /**
-   * 顶层行钩子（工单 46）：模块在一级菜单（所在分组标题下）直接呈现的行。
-   * 不提供时按默认规则生成：schema 字段行 + menuItems 的入口行。
-   * 提供空数组表示本模块在一级不出现，行全部收进二级页。
-   */
+
   readonly topLevel?: (context: ModuleMenuContext) => readonly SettingItem[];
 }
 
 const MODULE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 
-/** 装配期校验：schema 写错就当场抛出，不拖到菜单渲染时才炸 */
 export function assertModuleDefinition(definition: ModuleDefinition): void {
   if (!MODULE_ID_PATTERN.test(definition.id)) {
     throw new Error(`模块 id 不合法：${JSON.stringify(definition.id)}`);

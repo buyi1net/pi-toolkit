@@ -1,8 +1,3 @@
-// 压缩模块三语键表（自包含：本模块的文案只在这里；模块目录拿走则这些文案一起消失）。
-// 框架级键（command/menu/group/problem/language/common/hint/notify）在 i18n/messages.ts。
-// 三语（en / zh-CN / zh-TW）必须同时补齐：ZH_CN / ZH_TW 以 typeof EN 断言，缺键/多键 typecheck 报错；
-// 三语键集合相等与无未翻译值由 tests/pi-toolkit/i18n-messages.test.ts 兜底。
-
 import { formatMessage } from "../../../i18n/index.ts";
 import type { MessageTables, MessageVars, ResolvedLanguage, Translator } from "../../../i18n/index.ts";
 import type {
@@ -136,7 +131,6 @@ const EN = {
     "Current model resolved to codex mode without an explicit rule, official auto detection or a session override; codex compaction only applies to explicit provider/model rules, official OpenAI Responses / Codex OAuth links and the current session override, so this session keeps the existing policy (Pi native)",
   "module.compression.codex.resolve.noModel": "Codex compaction needs an active session model",
 
-  // ── 工单 08：展示 owner 仲裁与扩展消息状态 ──
   "module.compression.display.inProgress": "Context compression in progress ({mode})…",
   "module.compression.display.succeeded": "Context compression complete ({mode}); continuing",
   "module.compression.display.failed": "Context compression failed ({mode}): {reason}",
@@ -209,7 +203,6 @@ const EN = {
   "module.compression.config.ruleMissingIdentity":
     "Compression config problem: {field} has no usable provider/model identity ({value}); the rule was skipped",
 
-  // ── ACP 高级设置（工单 10）：入口行、设置页、字段与诊断 ──
   "module.compression.acpAdvanced.label": "ACP advanced settings",
   "module.compression.acpAdvanced.description":
     "ACP preset (recommended or custom), auto-detection switch and threshold, plus per-field overrides merged global → provider → model",
@@ -294,7 +287,6 @@ const EN = {
   "module.compression.config.badArray":
     "Compression config problem: {field} value {value} is not an array of strings; the field was dropped",
 
-  // ── 跨模式生命周期与切换保护（工单 11）：独立分组的运行期诊断键 ──
   "module.compression.lifecycle.reparsed":
     "The session model changed; the compression strategy was re-resolved: {previous} → {diagnosis}",
   "module.compression.lifecycle.protected":
@@ -321,7 +313,6 @@ const EN = {
   "module.compression.acp.foreignExtensionClaim":
     "This session carries a checkpoint written by an external compression extension: under ACP its opaque history will not be replayed. Disable or migrate that extension first, or start a new session",
 
-  // ── 工单 01：模型压缩常驻壳与动态设置面板 ──
   "module.compression.settings.description":
     "Compression master switch, model rules and ACP options; off keeps Pi-native compaction",
   "module.compression.settings.value.on": "On",
@@ -331,7 +322,6 @@ const EN = {
   "module.compression.disabled.protected":
     "Model compression is off, but this session still carries active private state ({states}): this {reason} compaction is cancelled and nothing is overwritten. Turn model compression back on, or start a new session",
 
-  // ── 工单 02：Codex 官方能力检测与管理向导 ──
   "module.compression.source.codex-auto": "Codex auto detection",
   "module.compression.codexManagement.label": "Codex mode",
   "module.compression.codexManagement.value.count": "{official} official · {manual} manual",
@@ -359,7 +349,7 @@ const EN = {
   "module.compression.codex.capability.unexpected-path":
     "the path is not the official one: never auto-detected",
   "module.compression.codex.capability.auth-unavailable": "credentials unavailable",
-  // ── 工单 03：ACP 推荐预设与高级管理页 ──
+
   "module.compression.acpPreset.label": "ACP preset",
   "module.compression.acpPreset.description":
     "Recommended applies the tuned ACP parameters out of the box; custom uses your own draft, and the advanced parameters only expand there",
@@ -367,7 +357,6 @@ const EN = {
   "module.compression.acpPreset.value.custom": "Custom advanced",
   "module.compression.acpAdvanced.value.overview": "{preset} · auto detection {state}",
 
-  // ── 工单 05：当前会话压缩覆盖与五级优先级 ──
   "module.compression.source.session-override": "current session override",
   "module.compression.sessionOverride.label": "Current session mode",
   "module.compression.sessionOverride.description":
@@ -377,11 +366,9 @@ const EN = {
   "module.compression.sessionOverride.value.acp": "ACP compression",
   "module.compression.sessionOverride.value.codex": "Codex mode",
 
-  // ── 工单 06：跨模式保护与 fallback 清除总线 ──
   "module.compression.codex.capabilityRecheck":
     "Codex takeover recheck at runtime failed ({detail}): Codex is not taking over this compaction and Pi native compaction continues",
 
-  // ── 工单 07：旧配置平滑迁移 ──
   "module.compression.config.legacyCodexDefaultMode":
     "Compression config compatibility notice: {field} still holds the legacy value codex, which is no longer a global default mode; it is read as {fallback}. Add an explicit Codex rule for your GPT models in Codex mode to keep Codex compression; confirming the global default mode once in settings clears this notice",
 } satisfies Record<string, string>;
@@ -500,7 +487,6 @@ const ZH_CN: typeof EN = {
     "当前模型解析为 codex 模式，但既没有显式规则、也没命中官方自动检测、也不是当前会话覆盖：codex 压缩只对显式 provider/model 规则、官方 OpenAI Responses / Codex OAuth 链路与当前会话覆盖生效，本会话继续沿用既有策略（Pi 原生）",
   "module.compression.codex.resolve.noModel": "Codex 压缩需要会话中存在活动模型",
 
-  // ── 工单 08：展示 owner 仲裁与扩展消息状态 ──
   "module.compression.display.inProgress": "上下文压缩进行中（{mode}）…",
   "module.compression.display.succeeded": "上下文压缩完成（{mode}），继续工作",
   "module.compression.display.failed": "上下文压缩失败（{mode}）：{reason}",
@@ -573,7 +559,6 @@ const ZH_CN: typeof EN = {
   "module.compression.config.ruleMissingIdentity":
     "压缩配置问题：{field} 没有可用的 provider/model 身份（{value}），该规则已跳过",
 
-  // ── ACP 高级设置（工单 10）：入口行、设置页、字段与诊断 ──
   "module.compression.acpAdvanced.label": "ACP 高级设置",
   "module.compression.acpAdvanced.description":
     "ACP 预设（推荐默认 / 自定义进阶）、自动检测开关与分流阈值，以及按 global → provider → model 逐字段合并的覆盖参数",
@@ -658,7 +643,6 @@ const ZH_CN: typeof EN = {
   "module.compression.config.badArray":
     "压缩配置问题：{field} 的取值 {value} 不是字符串数组，该字段已剔除",
 
-  // ── 跨模式生命周期与切换保护（工单 11）：独立分组的运行期诊断键 ──
   "module.compression.lifecycle.reparsed":
     "会话模型已变化，压缩策略已重新解析：{previous} → {diagnosis}",
   "module.compression.lifecycle.protected":
@@ -685,7 +669,6 @@ const ZH_CN: typeof EN = {
   "module.compression.acp.foreignExtensionClaim":
     "本会话携带外部压缩扩展写入的 checkpoint：ACP 模式下不回放其 opaque 历史；请先停用/迁移该外部扩展，或新建会话",
 
-  // ── 工单 01：模型压缩常驻壳与动态设置面板 ──
   "module.compression.settings.description": "模型压缩总开关、模型规则与 ACP 选项；关闭时走 Pi 原生压缩",
   "module.compression.settings.value.on": "开",
   "module.compression.settings.value.off": "关",
@@ -693,7 +676,6 @@ const ZH_CN: typeof EN = {
   "module.compression.disabled.protected":
     "模型压缩已关闭，但本会话仍保留活动的私有压缩状态（{states}）：本次压缩（{reason}）已取消，不会覆盖任何状态。请重新打开模型压缩，或新建会话",
 
-  // ── 工单 02：Codex 官方能力检测与管理向导 ──
   "module.compression.source.codex-auto": "Codex 自动检测",
   "module.compression.codexManagement.label": "Codex 模式",
   "module.compression.codexManagement.value.count": "官方 {official} · 手动 {manual}",
@@ -715,7 +697,7 @@ const ZH_CN: typeof EN = {
   "module.compression.codex.capability.non-official-host": "host 不是官方域名（中转或第三方）：不会自动检测",
   "module.compression.codex.capability.unexpected-path": "路径不是官方路径：不会自动检测",
   "module.compression.codex.capability.auth-unavailable": "认证信息不可用",
-  // ── 工单 03：ACP 推荐预设与高级管理页 ──
+
   "module.compression.acpPreset.label": "ACP 预设",
   "module.compression.acpPreset.description":
     "推荐默认直接使用调优好的 ACP 参数；自定义进阶使用自己的草稿，高级调参项只在该档展开",
@@ -723,7 +705,6 @@ const ZH_CN: typeof EN = {
   "module.compression.acpPreset.value.custom": "自定义进阶",
   "module.compression.acpAdvanced.value.overview": "{preset} · 自动检测 {state}",
 
-  // ── 工单 05：当前会话压缩覆盖与五级优先级 ──
   "module.compression.source.session-override": "当前会话覆盖",
   "module.compression.sessionOverride.label": "当前会话压缩模式",
   "module.compression.sessionOverride.description":
@@ -733,11 +714,9 @@ const ZH_CN: typeof EN = {
   "module.compression.sessionOverride.value.acp": "ACP 压缩",
   "module.compression.sessionOverride.value.codex": "Codex 模式",
 
-  // ── 工单 06：跨模式保护与 fallback 清除总线 ──
   "module.compression.codex.capabilityRecheck":
     "Codex 接管资格的运行期复核未通过（{detail}）：本次不接管 Codex，继续用 Pi 原生压缩",
 
-  // ── 工单 07：旧配置平滑迁移 ──
   "module.compression.config.legacyCodexDefaultMode":
     "压缩配置兼容提示：{field} 仍是旧值 codex，它已不再是全局默认模式，本次按 {fallback} 读取。要继续使用 Codex 压缩，请在「Codex 模式」里为对应的 GPT 模型添加显式规则；在设置页确认一次「全局默认模式」后这条提示不再出现",
 };
@@ -856,7 +835,6 @@ const ZH_TW: typeof EN = {
     "目前模型解析為 codex 模式，但既沒有明確規則、也沒命中官方自動檢測、也不是目前會話覆蓋：codex 壓縮只對明確 provider/model 規則、官方 OpenAI Responses / Codex OAuth 鏈路與目前會話覆蓋生效，本會話繼續沿用既有策略（Pi 原生）",
   "module.compression.codex.resolve.noModel": "Codex 壓縮需要會話中存在活動模型",
 
-  // ── 工單 08：展示 owner 仲裁與擴展消息狀態 ──
   "module.compression.display.inProgress": "上下文壓縮進行中（{mode}）…",
   "module.compression.display.succeeded": "上下文壓縮完成（{mode}），繼續工作",
   "module.compression.display.failed": "上下文壓縮失敗（{mode}）：{reason}",
@@ -929,7 +907,6 @@ const ZH_TW: typeof EN = {
   "module.compression.config.ruleMissingIdentity":
     "壓縮設定問題：{field} 沒有可用的 provider/model 身份（{value}），該規則已跳過",
 
-  // ── ACP 高級設定（工單 10）：入口行、設定頁、欄位與診斷 ──
   "module.compression.acpAdvanced.label": "ACP 進階設定",
   "module.compression.acpAdvanced.description":
     "ACP 預設（推薦預設 / 自訂進階）、自動偵測開關與分流閾值，以及按 global → provider → model 逐欄位合併的覆寫參數",
@@ -1014,7 +991,6 @@ const ZH_TW: typeof EN = {
   "module.compression.config.badArray":
     "壓縮設定問題：{field} 的取值 {value} 不是字串陣列，該欄位已剔除",
 
-  // ── 跨模式生命周期與切換保護（工單 11）：獨立分組的運行期診斷鍵 ──
   "module.compression.lifecycle.reparsed":
     "會話模型已變化，壓縮策略已重新解析：{previous} → {diagnosis}",
   "module.compression.lifecycle.protected":
@@ -1041,7 +1017,6 @@ const ZH_TW: typeof EN = {
   "module.compression.acp.foreignExtensionClaim":
     "本會話攜帶外部壓縮擴充寫入的 checkpoint：ACP 模式下不回放其 opaque 歷史；請先停用/遷移該外部擴充，或新建會話",
 
-  // ── 工單 01：模型壓縮常駐殼與動態設定面板 ──
   "module.compression.settings.description": "模型壓縮總開關、模型規則與 ACP 選項；關閉時走 Pi 原生壓縮",
   "module.compression.settings.value.on": "開",
   "module.compression.settings.value.off": "關",
@@ -1049,7 +1024,6 @@ const ZH_TW: typeof EN = {
   "module.compression.disabled.protected":
     "模型壓縮已關閉，但本會話仍保留活動的私有壓縮狀態（{states}）：本次壓縮（{reason}）已取消，不會覆寫任何狀態。請重新啟用模型壓縮，或新建會話",
 
-  // ── 工單 02：Codex 官方能力檢測與管理引導 ──
   "module.compression.source.codex-auto": "Codex 自動檢測",
   "module.compression.codexManagement.label": "Codex 模式",
   "module.compression.codexManagement.value.count": "官方 {official} · 手動 {manual}",
@@ -1071,7 +1045,7 @@ const ZH_TW: typeof EN = {
   "module.compression.codex.capability.non-official-host": "host 不是官方網域（中轉或第三方）：不會自動檢測",
   "module.compression.codex.capability.unexpected-path": "路徑不是官方路徑：不會自動檢測",
   "module.compression.codex.capability.auth-unavailable": "認證資訊不可用",
-  // ── 工單 03：ACP 推薦預設與進階管理頁 ──
+
   "module.compression.acpPreset.label": "ACP 預設",
   "module.compression.acpPreset.description":
     "推薦預設直接使用調校好的 ACP 參數；自訂進階使用自己的草稿，進階調參項只在該檔展開",
@@ -1079,7 +1053,6 @@ const ZH_TW: typeof EN = {
   "module.compression.acpPreset.value.custom": "自訂進階",
   "module.compression.acpAdvanced.value.overview": "{preset} · 自動偵測 {state}",
 
-  // ── 工单 05：当前会话压缩覆盖与五级优先级 ──
   "module.compression.source.session-override": "當前會話覆蓋",
   "module.compression.sessionOverride.label": "當前會話壓縮模式",
   "module.compression.sessionOverride.description":
@@ -1089,19 +1062,15 @@ const ZH_TW: typeof EN = {
   "module.compression.sessionOverride.value.acp": "ACP 壓縮",
   "module.compression.sessionOverride.value.codex": "Codex 模式",
 
-  // ── 工单 06：跨模式保护与 fallback 清除总线 ──
   "module.compression.codex.capabilityRecheck":
     "Codex 接管資格的運行期複核未通過（{detail}）：本次不接管 Codex，繼續用 Pi 原生壓縮",
 
-  // ── 工单 07：旧配置平滑迁移 ──
   "module.compression.config.legacyCodexDefaultMode":
     "壓縮設定相容提示：{field} 仍是舊值 codex，它已不再是全域預設模式，本次按 {fallback} 讀取。要繼續使用 Codex 壓縮，請在「Codex 模式」裡為對應的 GPT 模型新增顯式規則；在設定頁確認一次「全域預設模式」後這條提示不再出現",
 };
 
-/** 本键表：全部模块键表在 modules/index.ts 聚合登记 */
 export const COMPRESSION_MESSAGES = { en: EN, "zh-CN": ZH_CN, "zh-TW": ZH_TW } satisfies MessageTables;
 
-/** 模块内使用的键类型 */
 export type CompressionMessageKey = keyof typeof EN;
 
 const PROBLEM_KEYS: Record<CompressionConfigProblem["kind"], CompressionMessageKey> = {
@@ -1126,7 +1095,6 @@ const PROBLEM_KEYS: Record<CompressionConfigProblem["kind"], CompressionMessageK
   legacyCodexDefaultMode: "module.compression.config.legacyCodexDefaultMode",
 };
 
-/** 配置问题 → 三语文案（模块解析器只产出结构化问题，翻译在这里做） */
 export function formatCompressionProblem(problem: CompressionConfigProblem, t: Translator): string {
   const vars: MessageVars = { field: problem.field, value: problem.value };
   if (problem.kind === "schemaVersionTooNew") vars.supported = problem.supported;
@@ -1137,91 +1105,66 @@ export function formatCompressionProblem(problem: CompressionConfigProblem, t: T
   if (problem.kind === "badBoolean" || problem.kind === "badNumber") {
     vars.fallback = String(problem.fallback);
   }
-  // 工单 07 的迁移提示要把「现在按什么读」写进文案（旧值不是错误，而是被迁移过的事实）
+
   if (problem.kind === "legacyCodexDefaultMode") vars.fallback = problem.fallback;
   return t(PROBLEM_KEYS[problem.kind], vars);
 }
 
-/** 模块内取词函数（键收窄到本模块键表）：mod.ts 装配时注入宿主实时译者 */
 export type CompressionTranslate = (key: CompressionMessageKey, vars?: MessageVars) => string;
 
-/**
- * 只读本模块键表的译者：不依赖 modules/index.ts 的全局登记，
- * 供测试与独立装载直接取三语文案。
- */
 export function compressionTableTranslator(language: ResolvedLanguage): Translator {
   const table: Record<string, string> = COMPRESSION_MESSAGES[language];
   return (key, vars) => formatMessage(table[key], key, vars);
 }
 
-// ─────────────────────────────────────────────────────────────
-// 策略与规则的显示文案（工单 02）
-// ─────────────────────────────────────────────────────────────
-
-/** 模式显示名（诊断与规则行使用；schema 行的取值文案另有 defaultMode.value.* 键） */
 export function compressionModeLabel(mode: CompressionMode, t: Translator): string {
   return t(`module.compression.mode.${mode}`);
 }
 
-/** 策略来源显示名 */
 export function compressionSourceLabel(source: CompressionSource, t: Translator): string {
   return t(`module.compression.source.${source}`);
 }
 
-/** 回退原因显示名 */
 export function compressionFallbackLabel(reason: CompressionFallbackReason, t: Translator): string {
   return t(`module.compression.fallback.${reason}`);
 }
 
-/** Codex 协议显示名（undefined 显示产品默认条目） */
 export function codexProtocolLabel(protocol: CodexProtocol | undefined, t: Translator): string {
   return t(`module.compression.protocol.${protocol ?? "default"}`);
 }
 
-// ─────────────────────────────────────────────────────────────
-// ACP 高级设置的显示文案（工单 10）：字段名、枚举值与值位格式化
-// ─────────────────────────────────────────────────────────────
-
-/** ACP 覆盖字段显示名（编辑器行标签） */
 export function acpFieldLabel(field: AcpCompressField, t: Translator): string {
   return t(`module.compression.acpSettings.field.${field}.label`);
 }
 
-/** ACP 预设显示名（工单 03；菜单值位与选择器共用） */
 export function acpPresetLabel(preset: AcpPreset, t: Translator): string {
   return t(`module.compression.acpPreset.value.${preset}`);
 }
 
-/** 布尔开关显示名（工单 03 的自动检测行 / 入口值位）：开 / 关 */
 export function acpToggleLabel(value: boolean, t: Translator): string {
   return t(value ? "module.compression.acpSettings.on" : "module.compression.acpSettings.off");
 }
 
-/** prompt pack 显示名 */
 export function acpPromptPackLabel(pack: AcpPromptPack | undefined, t: Translator): string {
   if (pack === undefined) return t("module.compression.acpSettings.inherit");
   return t(`module.compression.acpSettings.promptPack.${pack}`);
 }
 
-/** percent 值位显示（75%）；未设显示继承 */
 export function acpPercentValue(ratio: number | undefined, t: Translator): string {
   if (ratio === undefined) return t("module.compression.acpSettings.inherit");
   return `${Number((ratio * 100).toPrecision(6))}%`;
 }
 
-/** 数值/计数字段值位显示；未设显示继承 */
 export function acpCountValue(value: number | undefined, t: Translator): string {
   if (value === undefined) return t("module.compression.acpSettings.inherit");
   return String(value);
 }
 
-/** 工具名单值位（N 项）；未设显示继承 */
 export function acpToolsValue(tools: readonly string[] | undefined, t: Translator): string {
   if (tools === undefined) return t("module.compression.acpSettings.inherit");
   return t("module.compression.acpSettings.global.value.set", { count: tools.length });
 }
 
-/** 提示词覆写组值位（已覆写 N 项）；未设显示继承 */
 export function acpPromptsValue(
   prompts: Readonly<Partial<Record<AcpPromptOverrideKey, string>>> | undefined,
   t: Translator,
@@ -1230,7 +1173,6 @@ export function acpPromptsValue(
   return t("module.compression.acpSettings.prompts.set", { count: Object.keys(prompts).length });
 }
 
-/** reasoning 组值位（开/关 · 阈值）；未设显示继承 */
 export function acpReasoningValue(
   reasoning: { drop?: boolean; threshold?: number } | undefined,
   t: Translator,
@@ -1244,7 +1186,6 @@ export function acpReasoningValue(
   return parts.join(" · ");
 }
 
-/** 图片处理组值位（开/关 · 保留 N 条）；未设显示继承 */
 export function acpImagesValue(
   value: { stripImages?: boolean; stripImagesKeepRecent?: number },
   t: Translator,
@@ -1257,10 +1198,6 @@ export function acpImagesValue(
   return parts.length === 0 ? t("module.compression.acpSettings.inherit") : parts.join(" · ");
 }
 
-/**
- * baseUrl 的展示形：剥掉 URL 里的 userinfo（凭据），诊断与规则行不携带
- * 敏感信息（规格「运行时诊断」）；无法按 URL 解析时原样展示（trim 过的值）。
- */
 export function displayBaseUrl(raw: string): string {
   const trimmed = raw.trim();
   try {
@@ -1271,7 +1208,6 @@ export function displayBaseUrl(raw: string): string {
   }
 }
 
-/** 规则身份的显示标签：provider/model，带可选约束（api / baseUrl） */
 export function compressionRuleLabel(rule: CompressionModelRule): string {
   let label = `${rule.provider}/${rule.model}`;
   if (rule.api !== undefined) label += ` · api=${rule.api}`;
@@ -1279,11 +1215,6 @@ export function compressionRuleLabel(rule: CompressionModelRule): string {
   return label;
 }
 
-/**
- * 策略解析的可读诊断（规格「运行时诊断」）：每次解析都能得到——实际模式、
- * 来源、命中规则、contextWindow、协议、profile 与回退原因；冲突时带冲突规则
- * 编号（展示用 1 基）。逐条一段，菜单详情页逐行展示。
- */
 export function resolutionDiagnosisLines(
   resolution: CompressionStrategyResolution,
   t: Translator,
@@ -1327,7 +1258,6 @@ export function resolutionDiagnosisLines(
   return lines;
 }
 
-/** 诊断的单行形式（菜单行描述位）：各段以「 · 」连接 */
 export function formatResolutionDiagnosis(
   resolution: CompressionStrategyResolution,
   t: Translator,

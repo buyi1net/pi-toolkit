@@ -1,5 +1,4 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { readNameRegistry, registerName } from "./session.ts";
 import { validateCodexV2ModelSelection, validateCodexV2SpawnParams, createCodexV2LaunchError, type CodexV2SpawnParams } from "./protocol.ts";
@@ -10,6 +9,7 @@ import type { RunningSubagent, SubagentResult } from "./types.ts";
 import { detectDisplayModeAvailability, resolveDisplaySurface } from "./surface.ts";
 import { createParentUpdateQueue, createParentUpdateProducers } from "./parent-update-queue.ts";
 import type { SubagentsTranslate } from "./messages/index.ts";
+import { compactRenderText, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 
 const DEFAULT_AGENT_TYPE = "general-purpose";
 
@@ -47,10 +47,6 @@ function displayError(mode: string): Record<string, unknown> {
   });
 }
 
-function compactRenderText(value: unknown): string {
-  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
-}
-
 function spawnFailureReason(
   details: Record<string, unknown>,
   t: SubagentsTranslate | undefined,
@@ -84,11 +80,11 @@ function spawnFailureReason(
   }
 }
 
-/** Codex v2 的启动接缝：只负责协议映射、启动前校验和立即回执。 */
 export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDeps): void {
   pi.registerTool({
     name: "spawn_agent",
     label: "Spawn Agent",
+    renderShell: "self",
     description:
       "Start a sub-agent and return immediately. Read subagent_models first; model accepts a unique model id/name or an exact provider/model route. " +
       "If multiple providers expose the same name, pass the provider/model route from the directory. " +
@@ -103,13 +99,12 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
       reasoning_effort: Type.String({ minLength: 1 }),
       display_mode: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("herdr"), Type.Literal("tmux")])),
     }),
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
       const taskName = compactRenderText(args.task_name) || "(task)";
-      return new Text(
-        theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.spawn_agent.display") ?? "Spawn subagent")) +
-          " " + theme.fg("accent", taskName),
-        0,
-        0,
+      return renderToolCardCall(
+        { title: deps.t?.("module.subagents.tool.spawn_agent.display") ?? "Spawn subagent", object: taskName },
+        theme,
+        context,
       );
     },
     renderResult(result, options, theme, context) {
@@ -125,28 +120,33 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
       const succeeded = details.status === "running";
       if (!succeeded) {
         const reason = spawnFailureReason(details, deps.t);
-        const summary = deps.t?.("module.subagents.tool.spawn_agent.result.failed", { reason }) ?? `Launch failed: ${reason}`;
-        if (!options.expanded) return new Text(theme.fg("error", summary), 0, 0);
         const rawMessage = compactRenderText(details.message);
-        return new Text(
-          [theme.fg("error", summary), rawMessage ? theme.fg("toolOutput", rawMessage) : ""].filter(Boolean).join("\n"),
-          0,
-          0,
+        return renderToolCardResult(
+          {
+            title: deps.t?.("module.subagents.tool.spawn_agent.display") ?? "Spawn subagent",
+            object: taskName,
+            status: deps.t?.("module.subagents.tool.spawn_agent.result.failed", { reason }) ?? `Launch failed: ${reason}`,
+            details: rawMessage ? [rawMessage] : [],
+          },
+          theme,
+          options,
+          context,
         );
       }
-      if (!options.expanded) return new Text("", 0, 0);
       const agentType = compactRenderText(details.resolved?.agent_type) || "general-purpose";
       const started = deps.t?.("module.subagents.tool.spawn_agent.result.started", { agent: agentType }) ?? `Started (${agentType})`;
       const model = compactRenderText(details.resolved?.model);
       const reasoning = compactRenderText(details.resolved?.reasoning_effort);
-      const metadata = [
-        model ? `model: ${model}` : "",
-        reasoning ? `reasoning_effort: ${reasoning}` : "",
-      ].filter(Boolean);
-      return new Text(
-        [theme.fg("toolOutput", `${taskName} · ${started}`), ...metadata.map((line) => theme.fg("muted", line))].join("\n"),
-        0,
-        0,
+      return renderToolCardResult(
+        {
+          title: deps.t?.("module.subagents.tool.spawn_agent.display") ?? "Spawn subagent",
+          object: taskName,
+          status: started,
+          details: [model ? `model: ${model}` : "", reasoning ? `reasoning_effort: ${reasoning}` : ""].filter(Boolean),
+        },
+        theme,
+        options,
+        context,
       );
     },
     async execute(_toolCallId, raw, _signal, _onUpdate, ctx) {

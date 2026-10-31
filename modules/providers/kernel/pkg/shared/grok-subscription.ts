@@ -1,6 +1,3 @@
-// xAI / Grok 官方订阅额度。grok.com 使用 gRPC-web + protobuf，且未公开 .proto；
-// 此处保留 cc-switch 0b5da51 的防御式字段扫描策略，不把二进制响应当 JSON 猜测。
-
 import type { ProviderUsage } from './provider-contracts.ts';
 
 const ENDPOINT = 'https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig';

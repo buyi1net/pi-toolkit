@@ -45,16 +45,8 @@ import { cleanupSubagentArtifacts, resolveRetentionDecision } from "./retention.
 import type { RuntimeRegistry } from "./registry.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
 
-/** 等待解除原因:Escape 中止或 timeoutMs 超时——都是“只解除工具等待,
- *  不动子代理”的非终态(超时即程序触发的 detach)。 */
 export type WaitRelease = { kind: "escape" } | { kind: "timeout" };
 
-/**
- * 硬屏障等待的三向竞速:watcher 终态 / 宿主 signal 中止(Escape)/ 可选
- * timeoutMs 超时。竞速落定即清理定时器与监听器,不留悬挂的定时器;
- * watcher reject 兑底为失败结果(不丢错误)。signal 与 timeout 同时存在
- * 时先到者胜。未传 signal 且未传 timeout 时直接等待(现有无限等待)。
- */
 export async function waitForSubagentTerminal(params: {
   watchPromise: Promise<SubagentResult>;
   running: RunningSubagent;
@@ -90,23 +82,20 @@ export async function waitForSubagentTerminal(params: {
   });
 }
 
-// timeoutMs 参数校验搬到启动模块（启动计划阶段统一执行），此处保留导出名
-// 以兼容既有调用方与测试。
 export { validateTimeoutMs } from "./startup.ts";
 
 export interface SubagentToolDeps {
-  /** 该 spawn 允许的 agent 名单；null 表示允许 discoverAgents() 的全部。 */
+
   allowlist: Set<string> | null;
   discoverAgents: () => Array<{ name: string }>;
-  /** 启动事务：校验、拼装、进程启动、登记与 watcher 启动都走它。 */
+
   startup: SubagentStartup;
-  /** 表面需要复用器而不可用时的宿主提示结果（启动模块判定，工具只呈现）。 */
+
   muxUnavailableResult: () => any;
   getArtifactDir: (sessionDir: string, sessionId: string) => string;
-  /** 运行态登记表：名字保留/查重与 dependsOn 的运行态查询都走它。 */
+
   registry: RuntimeRegistry;
-  /** 同名重建判定:member spawn 复用 offline 成员名字(roster 状态为准)。可选:
-   *  旧测试夹具缺省时按不可复用处理。 */
+
   canReuseMemberName?: (name: string, artifactDir: string) => boolean;
   updateWidget: () => void;
   resolveResultPresentation: (
@@ -114,24 +103,12 @@ export interface SubagentToolDeps {
     name: string,
     options?: { sessionPreserved?: boolean },
   ) => string;
-  /**
-   * 模型错误观测写入（工单 26，可选）：临时性路由失败（限流/过载/超时/
-   * 临时服务错误）写入健康状态日志，供后续 spawn 的候选选择（持续不稳
-   * 定跳过）与观测复用。工单 04 起记录不以「是否切换到下一候选」为前提：
-   * 有进度失败、没有剩余候选、预算不足、最后一个候选失败的临时性故障
-   * 同样写入；非临时类别在这里按 switchable 收窄，不会到达日志。缺席时
-   * 降级重试照常，只是状态不沉淀。
-   */
+
   recordModelError?: (model: string, exception: RouteException) => void;
-  /**
-   * 终态行显示语汇取词（工单 44，可选）：mod.ts 装配时注入实时译者；
-   * 缺席回退本模块英文表（旧测试夹具兼容）。只影响 renderResult 显示，
-   * 工具 result 内容（模型侧协议）不经它。
-   */
+
   t?: SubagentsTranslate;
 }
 
-/** watcher 异常 reject 时的合成失败结果(正常不 reject,兑底保护不丢错误)。 */
 function syntheticWatcherError(running: RunningSubagent, error: unknown): SubagentResult {
   const message = error instanceof Error ? error.message : String(error);
   return {
@@ -146,10 +123,6 @@ function syntheticWatcherError(running: RunningSubagent, error: unknown): Subage
   };
 }
 
-/**
- * retention 决策 + 清理执行:正常硬屏障返回路径与 detached 迟到回注共用,
- * 保证两条路径的保留语义不漂移。删除发生在结果定型之后,失败只 debug。
- */
 function applyRetentionToRunning(
   running: RunningSubagent,
   policy: "auto" | "preserve" | "discard",
@@ -180,20 +153,6 @@ function applyRetentionToRunning(
   return { policy, outcome: "preserved", reason: decision.reason };
 }
 
-/**
- * detached(Escape 中止等待)后的迟到回注:watcher 到达真实终态时 settle
- * 依赖记录并经 steer 消息把真实结果回注恰好一次。
- *
- * 幂等保证:watcher promise 单次 resolve → 回调至多触发一次;本注册仅在
- * detached 分支发生(正常路径的结果由工具调用直接返回,不再注册);
- * handedOff(再次 /reload 或宿主会话关闭移交)跳过回注,由恢复路径接管,
- * 不伪造、不重复。依赖 completion 不提前 settle——detached 时上游仍在
- * 运行,dependsOn 消费者继续等待真实终态。
- *
- * 工单 26:携带该次运行的模型路由记录(首选/实际/降级原因,若为 tier 路径)。
- * 工单 07:路由说明同时写进回注正文(从工单 06 快照生成,与同步等待同格式),
- * 不只塞低层 details。
- */
 function registerDetachedLateDelivery(
   pi: ExtensionAPI,
   deps: SubagentToolDeps,
@@ -209,11 +168,11 @@ function registerDetachedLateDelivery(
         deps.updateWidget();
         return;
       }
-      // 真实终态才 settle:user_closed/显式停止按取消语义,不误报 failed。
+
       settleCompletionFromResult(running.name, late, {
         ...(late.userClosed || late.stopped ? { status: "cancelled" as const } : {}),
       });
-      // 移交(再次 /reload 或宿主会话关闭):恢复路径接管,不在此回注。
+
       if (late.handedOff) return;
       const failed = late.exitCode !== 0 || !!late.errorMessage;
       const retentionDetails = applyRetentionToRunning(running, retentionPolicy, {
@@ -227,8 +186,7 @@ function registerDetachedLateDelivery(
         : deps.resolveResultPresentation(late, running.name, {
             sessionPreserved: retentionDetails.outcome !== "cleaned",
           });
-      // 工单 07:迟到回注同样把路由说明写进正文;取消类终态(用户关 pane/
-      // 显式停止)没有结果,不附加。
+
       const routingNote =
         modelRouting && !late.stopped && !late.userClosed
           ? describeModelRouting(modelRouting)
@@ -266,7 +224,7 @@ function registerDetachedLateDelivery(
     })
     .catch((error: any) => {
       deps.updateWidget();
-      // watcher reject(正常不发生):兑底为失败终态,唤醒所有等待者并回注一次。
+
       settleCompletionFromResult(running.name, {
         exitCode: 1,
         errorMessage: error?.message ?? String(error),
@@ -290,9 +248,6 @@ function registerDetachedLateDelivery(
     });
 }
 
-// ── dependsOn v1:launch 前的依赖解析与等待 ─────────────────────────────
-// 上游结果摘要拼进下游 task 时的单条截断上限:够模型获知结论,不把 task
-// 撑成上下文炸弹。
 const UPSTREAM_SUMMARY_LIMIT = 1600;
 
 function buildUpstreamAppendix(outcomes: DependencyOutcome[]): string {
@@ -315,23 +270,10 @@ function blockedResolution(exception: DependencyException): DependsOnResolution 
   return { ok: false, appendix: "", exception };
 }
 
-/** 把从会话文件解析出的终态缓存进注册表:同一消息的后续消费者直接命中,
- *  不重读磁盘(.exit sidecar 首读即被消费,缓存也避免二次读取结果漂移)。 */
 function cacheDiskOutcome(dep: string, outcome: DependencyOutcome): void {
   if (!getCompletionRecord(dep)) announceCompletion(dep).settle(outcome);
 }
 
-/**
- * 在真正 launch 前解析并等待 dependsOn(逐条串行,短路返回第一个异常):
- * 1. pending/settled 完成记录(同会话,含同一 assistant message 的 sibling)
- *    → 等待其 completion promise(支持 AbortSignal);等待前登记 waitingOn
- *    边并做环检测——同消息 sibling 互相 dependsOn 会永久互等,必须结构化失败;
- * 2. 本进程运行中但无完成记录(reload 恢复边界)→ 明确 fail-fast,不无限挂;
- * 3. 跨 turn 已完成 → 从会话名字注册表 + 会话文件判定终态(.exit sidecar
- *    只读不消费:失败结果同时缓存进注册表,后续判定不依赖文件存活);
- * 4. 找不到 → unknown_dependency。
- * 自身依赖、空名、交互式提供者一律拒绝,避免死锁。不猜测批次分母。
- */
 export async function resolveDependsOn(params: {
   ownName: string;
   dependsOn: string[];
@@ -365,8 +307,7 @@ export async function resolveDependsOn(params: {
 
     const record = getCompletionRecord(dep);
     if (record) {
-      // 交互式(演示 pane)子代理与持久团队成员都没有可等待的硬屏障终态:
-      // pending 时直接拒绝,不排队等一个语义不成立的结果。
+
       if (record.member) {
         return blockedResolution({
           kind: "member_dependency",
@@ -385,8 +326,7 @@ export async function resolveDependsOn(params: {
             `Consume its steer-delivered result instead, or drop the dependency.`,
         });
       }
-      // 环检测:登记本 spawn 的等待边后,从目标沿 pending 记录的 waitingOn
-      // 边回溯;能回到自己即同消息 sibling 互等——结构化失败,不进入等待。
+
       params.ownRecord?.waitingOn.add(dep);
       const cycle = findDependencyCycle(ownName, dep);
       if (cycle) {
@@ -435,8 +375,6 @@ export async function resolveDependsOn(params: {
       continue;
     }
 
-    // 本进程运行中但无完成记录:典型是 /reload 恢复的子代理(watcher 早已
-    // 启动,注册表里没有它的完成 promise)。明确 fail-fast,绝不无限等。
     const running = registry.findByName(dep);
     if (running) {
       return blockedResolution({
@@ -449,7 +387,6 @@ export async function resolveDependsOn(params: {
       });
     }
 
-    // 跨 turn 已完成:从会话名字注册表 + 会话文件判定终态。
     const entry = resolveNameInRegistry(artifactDir, dep);
     if (!entry) {
       return blockedResolution({
@@ -647,8 +584,6 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         };
       }
 
-      // 启动计划（启动事务第一阶段）：入参校验、运行类别与表面解析、路径与
-      // tier 解析都在启动模块内完成；工具只呈现拒绝理由。
       const planned = deps.startup.planSpawn(params, ctx);
       if (planned.kind === "error") {
         if (planned.muxUnavailable) return deps.muxUnavailableResult();
@@ -658,9 +593,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         };
       }
       const plan = planned.plan;
-      // 工单 05：MCP 能力门权限说明（显式声明时列出 pattern，否则说明隔离）；
-      // 计划携带的 toolAllowlist 是唯一输入，工具层不重算策略。三个返回面
-      // （member ack / interactive ack / 硬屏障终态）用同一份。
+
       const mcpNote = plan.toolAllowlist !== undefined ? describeMcpIsolation(plan.toolAllowlist) : null;
       const timeoutMs = params.timeoutMs ?? null;
 
@@ -678,9 +611,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       } else {
         params.name = normalizeSubagentName(suppliedName);
         const registeredEntry = resolveNameInRegistry(parentArtifactDir, params.name);
-        // offline 成员同名重建:member spawn 允许安全复用 roster 中 offline
-        // 成员的名字(覆盖 registry 登记);与 team_dispatch/subagent_stop 的
-        // 重启指引一致。其余场景(运行中/非 offline/非 member)照旧拒绝。
+
         const memberNameReuse =
           params.member === true &&
           !!registeredEntry &&
@@ -704,16 +635,12 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       let running: RunningSubagent;
       let started: StartedRun;
       try {
-        // 名字已确定:启动前登记完成记录,让同一消息里后执行的 dependsOn
-        // 消费者能找到并等待本次 spawn 的终态。与保留名字同段同步执行,
-        // 不给“找不到依赖”留窗口。
+
         const ownRecord = announceCompletion(params.name, {
           interactive: plan.interactive,
           ...(plan.member ? { member: true } : {}),
         });
-        // 真正 launch 之前解析并等待 dependsOn:依赖未到终态就不启动;失败/
-        // 取消/无法解析直接返回结构化异常,不创建 pane/进程。没有 dependsOn
-        // 时此步直通,旧行为不变。
+
         if (params.dependsOn?.length) {
           const resolution = await resolveDependsOn({
             ownName: params.name,
@@ -724,8 +651,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             ownRecord,
           });
           if (!resolution.ok) {
-            // 本次 spawn 永不启动:完成记录必须落定,依赖本 spawn 的下游
-            // (如有)才能拿到明确失败而不是永久等待。
+
             ownRecord.settle({
               name: params.name,
               status: "failed",
@@ -739,13 +665,11 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
           }
         }
         started = await deps.startup.spawn(plan, ctx, pi);
-        // 工具层负责规范化入参;这里再写回运行态,兼容测试/宿主注入的
-        // 启动实现,确保后续 registry、inspect 和结果详情同源。
+
         running = started.running;
         if (plan.cohortId) running.cohortId = plan.cohortId;
       } catch (error: any) {
-        // launch 失败必须释放/拒绝:完成记录兑成失败终态,等待者不挂死;
-        // 名字保留照旧在 finally 释放,异常按原语义向宿主上抛。
+
         settleCompletionFromResult(params.name, {
           exitCode: 1,
           errorMessage: error?.message ?? String(error),
@@ -762,18 +686,10 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         ...(running.anchoredLoadout ? { anchored: true } : {}),
       });
 
-      // watcher 已由启动事务按运行类别启动（成员轮 / watchSubagent 内部再分
-      // pane、headless）；工具侧只负责等待解除、结果呈现与投递。
-
-      // ── 持久团队成员(member):立即 ack,不走硬屏障。──
-      // 成员是常驻 headless 进程:首轮任务照常经 stdin 投递,轮次结束时
-      // 成员侧写 .round sidecar;父侧 round watcher 消费并恰好回注一次。
-      // 后续轮次经 team_dispatch;显式终止只能 subagent_stop。
       if (running.member) {
         running.dispatchedRound = true;
         running.roundEntryBaseline = 0;
-        // fire-and-forget watcher:成员常驻,轮询循环永不到终态;异常必须
-        // 就地兑底(debug 日志),不能变成 unhandled rejection 杀掉宿主。
+
         Promise.resolve(started.watch).catch((error) => {
           debugLog(`Team member round watcher failed for ${running.name}`, error);
         });
@@ -802,10 +718,6 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         };
       }
 
-      // ── 可见演示子代理(interactive):保持异步立即返回,pane 归用户操作。──
-      // watcher 到达终态后经 steer 消息回注,不阻塞主 turn。演示路径不做
-      // 降级重试(pane 归用户,自动重启会偷换用户正在看的会话);路由记录
-      // 从工单 06 快照生成(覆盖 fallback 分支),正文附路由说明(工单 07)。
       if (running.interactive) {
         const interactiveRouting: ModelRoutingDetails | null = buildModelRoutingFromSnapshot(
           running.modelRouting,
@@ -817,19 +729,14 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
           .then((result) => {
             if (result.interruptedRound) return;
             deps.updateWidget();
-            // 终态(含 handed-off)落定完成记录:依赖本子代理的下游 spawn 才有
-            // 明确的等待结果。/reload 移交(handedOff)不是可用结果,但等待者
-            // 仍要被唤醒并拿到 handed-off 语义;用户直接关闭 pane(userClosed)
-            // 按取消语义 settle,不误报 failed。
+
             settleCompletionFromResult(running.name, result, {
               ...(result.userClosed ? { status: "cancelled" as const } : {}),
             });
-            // /reload 移交(handedOff):不是终态,恢复路径会回注真实结果;
-            // 这里回注会伪造/重复结果,直接跳过。
+
             if (result.handedOff) return;
             const presentation = deps.resolveResultPresentation(result, running.name);
-            // 工单 07:路由说明进 steer 正文(与同步等待同格式),不只塞
-            // details;取消类终态(用户关 pane/显式停止)没有结果,不附加。
+
             const interactiveRoutingNote =
               !result.userClosed && !result.stopped && interactiveRouting
                 ? describeModelRouting(interactiveRouting)
@@ -868,8 +775,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
           .catch((error) => {
             deps.updateWidget();
             settleCompletionFromResult(running.name, { exitCode: 1, errorMessage: error?.message ?? String(error) });
-            // watcher 正常不会 reject(内部已兑底为失败结果);万一 reject,
-            // 真实上报错误,不伪造成功结果。
+
             pi.sendMessage(
               {
                 customType: "subagent_result",
@@ -909,38 +815,9 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         };
       }
 
-      // ── 自动子代理(非 interactive):硬屏障。──
-      // 在本工具调用内等待子代理终态,把真实结果作为 tool result 返回。
-      // pi 对同一条 assistant 消息中的 sibling tool calls 默认并行执行
-      // (agent-core executeToolCallsParallel → Promise.all),且 turn_end 在
-      // 全部工具调用完成后才发出;因此本调用不 resolve,turn 就不结束——
-      // 同一 turn 内并行 spawn 的全部自动子代理都结束后,编排者才会带着
-      // 全部 tool results 继续下一步。无需批次聚合,也不产生额外唤醒。
-      //
-      // 中止语义(与子代理取消严格分离):宿主中止工具等待(Escape)或
-      // timeoutMs 超时都不转发到 watcher——子代理继续运行,进程/pane、
-      // runtime record、依赖 completion 全部保留,本调用立即返回非终态
-      // (detached/timed-out);真实结果由 watcher 终态时经迟到回注
-      // (registerDetachedLateDelivery)送达一次。watcher 自身 signal 的
-      // abort 只来自显式停止(subagent_stop),此时 watcher 兑 cancelled
-      // 终态并终止进程/关闭 pane,走正常返回路径。
-      // ── 工单 26：模型降级重试状态（仅 tier 候选池路径；显式 model 永不换）──
-      // 首选候选遇临时性路由故障（限流/过载/超时/临时服务错误）且本次尝试
-      // 零进度（stats.toolCount === 0）时，按用户配置顺序切换下一个未尝试
-      // 候选重启；参数/凭据/额度/上下文类错误不盲目重试；每个候选至多尝试
-      // 一次、顺序不回绕；timeoutMs 覆盖全部尝试的总预算。失败尝试按保留
-      // 策略收尾；完成记录只在最终终态 settle 一次；结果 details.modelRouting
-      // 记录首选/实际/降级原因；全候选耗尽返回聚合错误。判定细节在
-      // model-failover.ts（纯策略），错误观测写入 deps.recordModelError——
-      // 工单 04 起不认「是否切换」为前提：判定返回不切换的临时性故障同样
-      // 写入（见循环内决策前的记录点），观测与重启决策解耦。
       const retentionPolicy = params.retention ?? "auto";
       const waitDeadline = timeoutMs != null ? Date.now() + timeoutMs : null;
-      // 工单 07：路由口径的唯一底子是工单 06 的 loadout 路由快照（运行态随
-      // spawn/resume/recover 携带），不再从计划对象各自拼。快照冻结首启事实
-      // （池/首选/选择期跳过/继承原因）；运行期 failover 尝试链由本层叠加
-      // （buildAttemptModelRouting）。降级重试的循环判定同样读快照的档位与
-      // 池；fallback 继承路径（无可用池）不参与运行期切换。
+
       const routingSnapshot = running.modelRouting ?? null;
       const failoverBase =
         routingSnapshot?.tier != null &&
@@ -957,15 +834,13 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       const failedCandidates = new Set<string>();
       let activePlan = plan;
       let attemptIndex = 1;
-      /** 当前尝试的模型路由记录（快照底子 + 运行期尝试链；非 tier 路径 null）。 */
+
       const buildAttemptModelRouting = (): ModelRoutingDetails | null =>
         buildModelRoutingFromSnapshot(routingSnapshot, {
           actualModel: running.model ?? null,
           attempts: failoverAttempts,
         });
 
-      // 循环体所有路径要么 return（终态/detach/聚合错误）要么 continue
-      //（降级重试）；非 tier 路径首次迭代即走原单次逻辑，行为不变。
       for (;;) {
       const watchPromise = started.watch as Promise<SubagentResult>;
       running.watchPromise = watchPromise;
@@ -974,16 +849,13 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         watchPromise,
         running,
         signal,
-        // 工单 26：降级重试的全部尝试共享同一截止时间（首尝试与旧行为等价）。
+
         timeoutMs: waitDeadline != null ? Math.max(0, waitDeadline - Date.now()) : undefined,
       });
       if (typeof raced === "object" && "kind" in raced) {
         running.waitReleased = raced.kind;
         deps.registry.markWaitReleased(running.runtimeFile, running.id, raced.kind);
-        // 主工具等待被解除(Escape 或超时):子代理仍在运行,返回非终态。
-        // 不 settle completion(上游仍在跑,dependsOn 等真实终态)、不清理
-        // retention、不伪造摘要,也不触发降级重试(等待已解除)。迟到回注
-        // 与 handed-off 移交由同一机制幂等处理。
+
         const releaseRouting = buildAttemptModelRouting();
         registerDetachedLateDelivery(
           pi,
@@ -1056,8 +928,6 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         };
       }
 
-      // ── 工单 26：临时性路由故障的候选切换判定（仅 tier 候选池路径；快照
-      // 无可用池的 fallback 继承不参与，已在 failoverBase 判定中排除）──
       if (failoverBase) {
         const cancelledNow =
           started.signal.aborted || !!result.userClosed || !!result.stopped;
@@ -1067,12 +937,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         const untried = failoverBase.pool.filter(
           (candidate) => !failedCandidates.has(baseModelRef(candidate)),
         ).length;
-        // 工单 04：错误观测全覆盖——临时性故障在切换判定之前就按基础引用写入
-        // 观测日志，不再以「是否切换到下一候选」为前提：有进度失败（重启会
-        // 重复副作用所以交还编排者，但服务不稳定是观测事实）、没有剩余候选、
-        // 预算不足、最后一个候选失败的临时性故障同样记录；取消类终态不是路由
-        // 失败、非临时类别不反映服务不稳定，均不写入（switchable 收窄，与装配
-        // 层适配器和日志自身的过滤双保险）。
+
         const failedModel =
           running.model ?? activePlan.effectiveModel ?? failoverBase.preferred;
         if (routeExceptionNow && isFailoverSwitchable(routeExceptionNow.kind) && deps.recordModelError) {
@@ -1090,9 +955,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
           untriedCandidates: untried,
         });
         if (decision.failover) {
-          // 本次尝试按失败收尾：记录降级链、按保留策略清理工件。完成记录保持
-          // pending——依赖等待者只被最终终态唤醒一次，中间尝试失败不单独 settle。
-          // 错误观测已在判定前写入（工单 04，见上）。
+
           failoverAttempts.push({
             index: attemptIndex,
             model: failedModel,
@@ -1106,8 +969,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             failed: true,
             handedOff: false,
           });
-          // 重规划：排除已失败候选，按用户配置顺序取下一个；剩余候选全被
-          // 过滤时 planSpawn 报结构化错误 → 聚合错误返回（全候选不可用）。
+
           const replan = deps.startup.planSpawn(params, ctx, { excludeModels: failedCandidates });
           if (replan.kind === "error") {
             const aggregated = aggregateFailoverExhaustion({
@@ -1154,13 +1016,13 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             };
           }
           activePlan = replan.plan;
-          // 名字同首启规则：spawn 前后短暂保留，防止 sibling 并发抢占。
+
           deps.registry.reserveName(running.name);
           let nextStarted: StartedRun;
           try {
             nextStarted = await deps.startup.spawn(activePlan, ctx, pi);
           } catch (error: any) {
-            // 重试启动失败与首启同语义：完成记录兑成失败终态后上抛。
+
             settleCompletionFromResult(
               running.name,
               { exitCode: 1, errorMessage: error?.message ?? String(error) },
@@ -1171,7 +1033,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             deps.registry.releaseName(running.name);
           }
           if (activePlan.cohortId) nextStarted.running.cohortId = activePlan.cohortId;
-          // 名字登记指向最新尝试的会话（后续 resume/steer 寻址最新会话）。
+
           registerName(parentArtifactDir, nextStarted.running.name, {
             sessionFile: nextStarted.running.sessionFile,
             sessionId: getSessionId(nextStarted.running.sessionFile),
@@ -1181,37 +1043,28 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
           running = nextStarted.running;
           started = nextStarted;
           attemptIndex += 1;
-          // 工单 27：换候选后实际模型/思考等级已变，立即触发状态行重绘，
-          // 不等 1s 轮询兑底——降级必须尽快可见。
+
           deps.updateWidget();
           continue;
         }
       }
 
-      // watcherAbort 到此只可能被 sibling subagent_stop 触发(工具 Escape 不
-      // 再转发);此时 watcher 已兑出真实取消终态,走本返回路径。stopped
-      // 标志覆盖 mock watcher 直接 resolve 取消终态的场景。
       const userClosed = !!result.userClosed;
       const cancelled = started.signal.aborted || userClosed || !!result.stopped;
       const failed = result.exitCode !== 0 || !!result.errorMessage;
       const routeException = cancelled ? undefined : routeExceptionFromResult(result, running.model);
-      // 硬屏障终态(成功/失败/取消/handed-off)落定完成记录:同一消息或后续
-      // turn 的 dependsOn 消费者都以此为等待源头;用户关闭 pane 按取消 settle。
+
       settleCompletionFromResult(running.name, result, {
         ...(cancelled ? { status: "cancelled" as const } : {}),
       });
-      // ── 会话保留(retention)──在结果提取(watcher 内)、依赖 settle(上段)、
-      // runtime record 清理(watcher 内)全部完成之后才删除工件;删除失败只
-      // debug,绝不覆盖已取得的子代理结果。pane/演示与 handed-off 恒保留。
-      // retentionPolicy 已在降级重试状态段声明（循环外，工单 26）。
+
       const retentionDetails = applyRetentionToRunning(running, retentionPolicy, {
         cancelled,
         failed,
         handedOff: !!result.handedOff,
       });
       if (result.handedOff) {
-        // /reload 移交:显式 handed-off 语义,不报 cancelled/failed;
-        // 真实结果由恢复路径在子代理结束后经 steer 消息回注。
+
         const handoffRouting = buildAttemptModelRouting();
         return {
           content: [{
@@ -1235,9 +1088,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
           },
         };
       }
-      // 工单 26/07：路由说明附在正文末尾（规格 §6：不能让用户误以为调用了
-      // 首选模型）；底子来自工单 06 快照，运行期尝试链叠加；继承父会话同样
-      // 有正文说明。未降级且非继承不附加；取消类终态没有结果，不附加。
+
       const modelRouting = buildAttemptModelRouting();
       const routingNote = modelRouting ? describeModelRouting(modelRouting) : null;
       const presentation = deps.resolveResultPresentation(result, running.name, {
@@ -1280,7 +1131,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
           ...(plan.tierConfigProblems ? { configProblems: [...plan.tierConfigProblems] } : {}),
         },
       };
-      } // for(;;)：工单 26 降级重试循环——所有路径在循环体内 return/continue
+      }
     },
 
     renderCall(args, theme) {

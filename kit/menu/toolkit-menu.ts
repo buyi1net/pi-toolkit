@@ -1,11 +1,3 @@
-// 顶层菜单组件与菜单改动落盘。
-// 顶层用 I18nSettingsList（原生 SettingsList + 提示行 i18n + 子面板回滚转发），内嵌在 Container 里
-// （上下边框）；二级页与取值选择器见 panels.ts。
-//
-// 短选项行（values 数组）由原生列表就地循环切换；列表的 onChange 先经过本组件：
-// 自绘行（模块经 registerRowChange 注册过）由行自己的 change 保存、失败按 read 回滚显示；
-// 其余走外部改动链（语言与 schema 字段行 → applyMenuChange）。
-
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container } from "@earendil-works/pi-tui";
@@ -41,15 +33,15 @@ export function readMenuState(toolkit: Toolkit): MenuState {
 export interface ToolkitMenuOptions {
   readonly toolkit: Toolkit;
   readonly theme: MenuTheme;
-  /** 打开菜单时的扩展上下文（模块自绘子菜单用） */
+
   readonly context: ExtensionContext;
-  /** pi 的配置目录（传给模块菜单，供模块自写盘） */
+
   readonly agentDir: string;
-  /** 异步动作结束后请宿主重绘 */
+
   readonly requestRender: () => void;
-  /** 未被自绘直切行接住的取值变化到这里（语言与 schema 字段行，id + 显示文案） */
+
   readonly onChange: (id: string, value: string) => void;
-  /** 顶层 Esc：关闭菜单 */
+
   readonly onClose: () => void;
 }
 
@@ -57,20 +49,20 @@ export class ToolkitMenu extends Container {
   private readonly options: ToolkitMenuOptions;
   private readonly build: MenuBuildContext;
   private list: I18nSettingsList | undefined;
-  /** 自绘短选项行的就地切换处理器（模块在行构造时注册；重建时随 items 一并刷新） */
+
   private readonly rowChanges = new Map<string, RowChangeEntry>();
 
   constructor(options: ToolkitMenuOptions) {
     super();
     this.options = options;
-    // 结构化配置写入事务（工单 19）：写盘与内存重载走 kit，重绘请求由菜单层注入（kit 不依赖 tui）
+
     const transaction = createConfigTransaction({
       configPath: options.toolkit.configPath,
       reload: () => options.toolkit.reloadConfig(),
       requestRender: () => options.requestRender(),
     });
     this.build = {
-      // 译者始终读当前语言，重建时 label 自然换成新语言
+
       t: options.toolkit.getTranslator(),
       theme: options.theme,
       context: options.context,
@@ -91,15 +83,10 @@ export class ToolkitMenu extends Container {
     this.rebuild();
   }
 
-  /** 语言切换后重建整棵菜单，让全部文案立刻生效 */
   refresh(selectId?: string): void {
     this.rebuild(selectId);
   }
 
-  /**
-   * 把指定行的显示值重置为当前生效配置的取值：原生列表对子菜单回选做乐观更新，
-   * 保存失败或取值无法识别时用它回滚，避免界面谎报已保存。只换显示，不触发 onChange。
-   */
   restoreValue(id: string): void {
     const toolkit = this.options.toolkit;
     const t = toolkit.getTranslator();
@@ -122,7 +109,6 @@ export class ToolkitMenu extends Container {
     this.list?.handleInput(data);
   }
 
-  /** 行取值变化的总入口：自绘直切行先查注册表，其余交给外部改动链 */
   private async handleRowChange(id: string, value: string): Promise<void> {
     const entry = this.rowChanges.get(id);
     if (!entry) {
@@ -133,7 +119,7 @@ export class ToolkitMenu extends Container {
     try {
       ok = await entry.change(value);
     } catch {
-      // 契约：change 内部完成失败提示；这里兜住异常，统一按失败回滚显示
+
       ok = false;
     }
     if (!ok) {
@@ -172,14 +158,10 @@ export type MenuChangeResult =
       readonly field: string;
       readonly value: ModuleConfigScalar;
     }
-  /** 回显文案属于已声明的设置行，却翻不回配置取值：真实丢改动，调用方必须提示 */
+
   | { readonly kind: "unmapped" }
   | { readonly kind: "ignored" };
 
-/**
- * 把菜单行 id 与显示文案翻回配置改动并持久化。
- * 显示文案 → 规范化取值的映射见 items.ts（同一份 i18n 选项表）。
- */
 export async function applyMenuChange(
   toolkit: Toolkit,
   id: string,
@@ -199,8 +181,7 @@ export async function applyMenuChange(
   const field = id.slice(separator + 1);
   const definition = toolkit.getModuleDefinition(moduleId);
   const schemaField = definition?.configSchema[field];
-  // 入口行/自管行的关闭回显（providers.settings 等非 schema 字段）属于预期静默；
-  // 已声明字段的文案翻不回取值才是真实丢改动。
+
   if (!definition || !schemaField) return { kind: "ignored" };
 
   const value = fieldValueFromLabel(t, schemaField, displayValue);

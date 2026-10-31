@@ -10,39 +10,36 @@ export interface RuntimeRecord {
   name: string;
   task: string;
   cohortId?: string;
-  /** 新旧工具协议接缝；缺省表示旧记录。 */
+
   protocol?: SubagentProtocol;
   launchPlan?: SubagentLaunchPlanMetadata;
   agent?: string;
   modelIdentity?: { provider: string; id: string; api: string; baseUrl: string } | null;
   surface: string;
-  /** Pane surface type persisted for nested Herdr/tmux recovery. */
+
   surfaceKind?: "herdr" | "tmux";
   startTime: number;
   sessionFile: string;
   activityFile?: string;
   sentinelToken: string;
   interactive: boolean;
-  /**
-   * 发起本次运行的宿主会话 id（工单 32）：/reload 或会话切换后恢复的运行时用它
-   * 把终态统计归回发起会话；缺省（旧记录）按恢复时刻的当前会话处理。
-   */
+
   hostSessionId?: string | null;
-  /** 运行载体;缺省(旧记录)按 "pane" 处理。 */
+
   kind?: "pane" | "headless";
-  /** headless 运行的子进程 PID,用于 /reload 后探测存活性。 */
+
   pid?: number;
-  /** 直接父子代理 run id;顶层子代理为 null。 */
+
   canonicalTaskName?: string;
   parentCanonicalTaskName?: string | null;
   parentId?: string | null;
-  /** 本次硬屏障等待上限(毫秒)。 */
+
   timeoutMs?: number;
-  /** 启动时的等待载体,供 /reload 后状态观测。 */
+
   waitMode?: SubagentWaitMode;
-  /** 主工具等待已被 Escape/timeout 解除,子代理仍在运行。 */
+
   waitReleased?: SubagentWaitRelease;
-  /** 持久团队成员(member: true):常驻 headless,恢复路径按 offline 处理。 */
+
   member?: boolean;
 }
 
@@ -53,11 +50,6 @@ interface RuntimeRegistry {
 
 export type RuntimeSource = Omit<RuntimeRecord, "version">;
 
-/**
- * 从运行中的 RunningSubagent 挑选可持久化字段构造记录。
- * 显式挑选而非展开:running 上挂着 statusState/headlessChild 等运行时对象
- * (ChildProcess 存在循环引用),整体展开会让 JSON.stringify 炸掉。
- */
 export function createRuntimeRecord(source: RuntimeSource): RuntimeRecord {
   return {
     version: 1,
@@ -77,8 +69,7 @@ export function createRuntimeRecord(source: RuntimeSource): RuntimeRecord {
     sentinelToken: source.sentinelToken,
     interactive: source.interactive,
     ...(source.hostSessionId ? { hostSessionId: source.hostSessionId } : {}),
-    // （hostSessionId 的空值统一按缺省落盘：它不需要「显式 null」这一档，缺省即表达未绑定；
-    // parentId 则用 null 表达「顶层子代理」，两者语义不同。）
+
     ...(source.kind ? { kind: source.kind } : {}),
     ...(source.pid != null ? { pid: source.pid } : {}),
     ...(source.canonicalTaskName ? { canonicalTaskName: source.canonicalTaskName } : {}),
@@ -150,7 +141,6 @@ export function upsertRuntimeRecord(path: string, record: RuntimeRecord): void {
   writeRuntimeRecords(path, [...records, record]);
 }
 
-/** 更新仍在登记中的等待释放原因;记录已被 watcher 移除时不重新创建。 */
 export function markRuntimeWaitReleased(
   path: string,
   id: string,
@@ -174,7 +164,7 @@ export function removeRuntimeRecord(path: string, id: string): void {
     try {
       writeRuntimeRecords(path, []);
     } catch (error) {
-      // 运行态清理失败不能覆盖已经取得的子代理结果。
+
       debugLog(`Could not clear runtime registry ${path}`, error);
     }
     return;
@@ -182,7 +172,7 @@ export function removeRuntimeRecord(path: string, id: string): void {
   try {
     writeRuntimeRecords(path, records);
   } catch (error) {
-    // watcher 清理是尽力而为，失败不会改变主会话结果。
+
     debugLog(`Could not update runtime registry ${path}`, error);
   }
 }

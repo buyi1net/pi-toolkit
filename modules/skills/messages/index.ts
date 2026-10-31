@@ -7,6 +7,8 @@ const EN = {
   "module.skills.enabled.label": "Enable Skill tool",
   "module.skills.enabled.description": "Register the Claude Code compatible skill tool using Pi's resolved skill registry",
   "module.skills.tool.skill.label": "Skill",
+  "module.skills.tool.skill.display": "skill",
+  "module.skills.tool.skill.result.loaded": "Skill loaded: {name} ({lines} lines)",
 } satisfies Record<string, string>;
 
 const ZH_CN: typeof EN = {
@@ -15,6 +17,8 @@ const ZH_CN: typeof EN = {
   "module.skills.enabled.label": "启用 Skill 工具",
   "module.skills.enabled.description": "使用 Pi 已解析的 skill registry 注册 Claude Code 兼容的 skill 工具",
   "module.skills.tool.skill.label": "Skill",
+  "module.skills.tool.skill.display": "技能",
+  "module.skills.tool.skill.result.loaded": "已加载 Skill：{name}（{lines} 行）",
 };
 
 const ZH_TW: typeof EN = {
@@ -23,6 +27,8 @@ const ZH_TW: typeof EN = {
   "module.skills.enabled.label": "啟用 Skill 工具",
   "module.skills.enabled.description": "使用 Pi 已解析的 skill registry 註冊 Claude Code 相容的 skill 工具",
   "module.skills.tool.skill.label": "Skill",
+  "module.skills.tool.skill.display": "技能",
+  "module.skills.tool.skill.result.loaded": "已載入 Skill：{name}（{lines} 行）",
 };
 
 export const SKILLS_MESSAGES = { en: EN, "zh-CN": ZH_CN, "zh-TW": ZH_TW } satisfies MessageTables;

@@ -1,27 +1,18 @@
-// ACP decompress 工具（工单 09）：把压缩块或单条消息的原文找回。
-//
-// 移植自 billion-context-pi 的 src/decompress-tool.ts（MIT，见模块
-// UPSTREAM.md），按本仓口径裁剪：
-// - 工具名 `decompress`，参数 { blockId, full?, toFile?, inline? }；
-// - 块模式默认写文件（块可能很大），inline: true 才把内容作为工具结果带回
-//   当前请求视图（引用回到视图 + 重复插入被引擎拒绝）；单消息模式默认内联；
-// - toFile 只允许临时/缓存目录（路径安全见 restore.ts）；
-// - 执行链在引擎（engine.executeDecompress）：collectBlockContent 只读收集 →
-//   内联登记（markBlockRestoredInline，支持 K2 原地重折叠）→ sidecar 落盘；
-// - 模块关闭或会话未命中 ACP 时返回标准拒绝结果（工单 01），不触碰任何状态。
-//
-// 未移植（上游裁剪）：omp 宿主 refused 口径、abort 信号细粒度检查、祖先
-// 会话日志回溯与 live-* 引用桥接（归后续工单）。
-
 import type {
   AgentToolResult,
   ExtensionContext,
+  Theme,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { compactSegment, renderToolCardCall, renderToolCardResult, toolCardText } from "../../../kit/tool-card.ts";
 import type { Translator } from "../../../i18n/index.ts";
-import type { AcpCompressionEngine } from "./engine.ts";
-import { acpToolUnavailable } from "./tool-guard.ts";
+import type { AcpCompressionEngine, AcpDecompressOutcome } from "./engine.ts";
+import {
+  acpToolUnavailable,
+  isAcpToolUnavailableDetails,
+  TOOL_UNAVAILABLE_REASON,
+} from "./tool-guard.ts";
 
 const DecompressParams = Type.Object({
   blockId: Type.String({
@@ -48,11 +39,50 @@ const DecompressParams = Type.Object({
   ),
 });
 
+const TOOL_LABEL = "Decompress";
+const OBJECT_WIDTH = 40;
+const STATUS_WIDTH = 64;
+
+export interface AcpDecompressToolDetails {
+  readonly toolUnavailable?: typeof TOOL_UNAVAILABLE_REASON;
+  readonly mode?: AcpDecompressOutcome["mode"];
+  readonly blockId?: string;
+}
+
+function failureStatus(result: AgentToolResult<unknown> | undefined): string {
+  if (result && isAcpToolUnavailableDetails(result.details)) return "unavailable";
+  const firstLine = toolCardText(result ?? {}).split("\n").find((line) => line.trim()) ?? "";
+  return compactSegment(firstLine, STATUS_WIDTH) ?? "failed";
+}
+
+const MODE_STATUS: Record<AcpDecompressOutcome["mode"], string> = {
+  "block-inline": "restored inline",
+  "block-file": "written to file",
+  "message-inline": "message restored inline",
+  "message-file": "message written to file",
+  notice: "notice",
+};
+
+function decompressStatusText(
+  details: AcpDecompressToolDetails | undefined,
+  result: AgentToolResult<unknown> | undefined,
+): string | undefined {
+  const mode = details?.mode;
+  if (mode === undefined) return undefined;
+  if (mode !== "notice") return MODE_STATUS[mode];
+  const firstLine = toolCardText(result ?? {}).split("\n").find((line) => line.trim()) ?? "";
+  return compactSegment(firstLine, STATUS_WIDTH) ?? MODE_STATUS.notice;
+}
+
+function decompressObject(args: { blockId?: unknown } | undefined): string | undefined {
+  return compactSegment(typeof args?.blockId === "string" ? args.blockId : undefined, OBJECT_WIDTH);
+}
+
 export interface AcpDecompressToolDeps {
-  /** Lazy engine 代理（工单 01）：未启用或非 ACP 模式时不取用（不会创建引擎） */
+
   readonly engine: () => AcpCompressionEngine | undefined;
   readonly t: Translator;
-  /** 当前会话是否走 ACP（模块启用且模型命中 ACP 策略；mod.ts 每次调用时解析） */
+
   readonly isSessionActive: (ctx: ExtensionContext) => boolean;
 }
 
@@ -74,11 +104,31 @@ export function makeAcpDecompressTool(deps: AcpDecompressToolDeps): ToolDefiniti
       "Restored content re-enters the conversation via this tool's result; re-fold it with compress when done.",
     ],
     parameters: DecompressParams,
+    renderShell: "self",
+    renderCall(args, theme: Theme, context) {
+      return renderToolCardCall({ title: TOOL_LABEL, object: decompressObject(args) }, theme, context);
+    },
+    renderResult(result, options, theme: Theme, context) {
+      const status = context?.isError
+        ? failureStatus(result)
+        : decompressStatusText(result.details as AcpDecompressToolDetails | undefined, result);
+      return renderToolCardResult(
+        {
+          title: TOOL_LABEL,
+          object: decompressObject(context?.args),
+          status,
+          details: options.expanded ? toolCardText(result).split("\n") : [],
+        },
+        theme,
+        options,
+        context,
+      );
+    },
     async execute(toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
       if (!deps.isSessionActive(ctx)) return acpToolUnavailable(t);
       const engine = deps.engine();
       if (!engine) return acpToolUnavailable(t);
-      // 状态不可用等硬错误按异常抛出（isError 落日志，不伪装成功）
+
       const outcome = await engine.executeDecompress(
         {
           blockId: params.blockId,
@@ -89,7 +139,13 @@ export function makeAcpDecompressTool(deps: AcpDecompressToolDeps): ToolDefiniti
         ctx,
         toolCallId,
       );
-      return { details: undefined, content: [{ type: "text", text: outcome.text }] };
+      return {
+        details: {
+          mode: outcome.mode,
+          ...(outcome.blockId === undefined ? {} : { blockId: outcome.blockId }),
+        } satisfies AcpDecompressToolDetails,
+        content: [{ type: "text", text: outcome.text }],
+      };
     },
   };
 }

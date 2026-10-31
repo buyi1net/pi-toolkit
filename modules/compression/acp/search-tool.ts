@@ -1,20 +1,18 @@
-// ACP search_context 工具（工单 09）：按关键词定位压缩块与被折叠消息。
-//
-// 移植自 billion-context-pi 的 src/search-tool.ts（MIT，见模块 UPSTREAM.md），
-// 执行链在引擎（engine.executeSearch → acp/search.ts）：块摘要 + 被覆盖原始
-// 消息建索引 → 内核 searchBlocks 排序 → 格式化（命中带 ref / 归属块 / 块
-// 跨度 / decompress 指令）；空结果返回可理解反馈（搜索范围 + 下一步建议）。
-// 会话未命中 ACP（或模块已关闭）时返回标准拒绝结果（工单 01），不取用引擎。
-
 import type {
   AgentToolResult,
   ExtensionContext,
+  Theme,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { compactSegment, renderToolCardCall, renderToolCardResult, toolCardText } from "../../../kit/tool-card.ts";
 import type { Translator } from "../../../i18n/index.ts";
 import type { AcpCompressionEngine } from "./engine.ts";
-import { acpToolUnavailable } from "./tool-guard.ts";
+import {
+  acpToolUnavailable,
+  isAcpToolUnavailableDetails,
+  TOOL_UNAVAILABLE_REASON,
+} from "./tool-guard.ts";
 
 const SearchParams = Type.Object({
   query: Type.String({
@@ -23,11 +21,37 @@ const SearchParams = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Max results (default 10)." })),
 });
 
+const TOOL_LABEL = "Search Context";
+const OBJECT_WIDTH = 40;
+const STATUS_WIDTH = 64;
+
+export interface AcpSearchToolDetails {
+  readonly toolUnavailable?: typeof TOOL_UNAVAILABLE_REASON;
+  readonly matches?: number;
+}
+
+function failureStatus(result: AgentToolResult<unknown> | undefined): string {
+  if (result && isAcpToolUnavailableDetails(result.details)) return "unavailable";
+  const firstLine = toolCardText(result ?? {}).split("\n").find((line) => line.trim()) ?? "";
+  return compactSegment(firstLine, STATUS_WIDTH) ?? "failed";
+}
+
+function searchStatusText(details: AcpSearchToolDetails | undefined): string | undefined {
+  const matches = details?.matches;
+  if (typeof matches !== "number") return undefined;
+  if (matches <= 0) return "no matches";
+  return matches === 1 ? "1 match" : `${matches} matches`;
+}
+
+function searchObject(args: { query?: unknown } | undefined): string | undefined {
+  return compactSegment(typeof args?.query === "string" ? args.query : undefined, OBJECT_WIDTH);
+}
+
 export interface AcpSearchToolDeps {
-  /** Lazy engine 代理（工单 01）：未启用或非 ACP 模式时不取用（不会创建引擎） */
+
   readonly engine: () => AcpCompressionEngine | undefined;
   readonly t: Translator;
-  /** 当前会话是否走 ACP（模块启用且模型命中 ACP 策略；mod.ts 每次调用时解析） */
+
   readonly isSessionActive: (ctx: ExtensionContext) => boolean;
 }
 
@@ -45,6 +69,26 @@ export function makeAcpSearchTool(deps: AcpSearchToolDeps): ToolDefinition<typeo
       "Message hits link to the owning block — decompress that block to recover surrounding detail.",
     ],
     parameters: SearchParams,
+    renderShell: "self",
+    renderCall(args, theme: Theme, context) {
+      return renderToolCardCall({ title: TOOL_LABEL, object: searchObject(args) }, theme, context);
+    },
+    renderResult(result, options, theme: Theme, context) {
+      const status = context?.isError
+        ? failureStatus(result)
+        : searchStatusText(result.details as AcpSearchToolDetails | undefined);
+      return renderToolCardResult(
+        {
+          title: TOOL_LABEL,
+          object: searchObject(context?.args),
+          status,
+          details: options.expanded ? toolCardText(result).split("\n") : [],
+        },
+        theme,
+        options,
+        context,
+      );
+    },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
       if (!deps.isSessionActive(ctx)) return acpToolUnavailable(t);
       const engine = deps.engine();
@@ -56,7 +100,10 @@ export function makeAcpSearchTool(deps: AcpSearchToolDeps): ToolDefinition<typeo
         },
         ctx,
       );
-      return { details: undefined, content: [{ type: "text", text: outcome.text }] };
+      return {
+        details: { matches: outcome.matches } satisfies AcpSearchToolDetails,
+        content: [{ type: "text", text: outcome.text }],
+      };
     },
   };
 }

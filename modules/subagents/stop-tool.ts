@@ -6,40 +6,20 @@ import type { RunningSubagent, SubagentResult } from "./types.ts";
 import type { SubagentsTranslate } from "./messages/index.ts";
 
 export interface SubagentStopToolDeps {
-  /** 按名字解析本会话运行中的子代理(含空名/未知名/重名的明确错误)。 */
+
   resolveRunningByName: (name: string) => { running: RunningSubagent } | { error: string };
-  /** 关闭 pane(内部 assertOwned 白名单护栏:只关本扩展创建/接管的 pane)。 */
+
   closeSurface: (surface: string) => void;
   updateWidget: () => void;
-  /** 等待落定上限(毫秒),缺省 STOP_SETTLE_TIMEOUT_MS;测试可注入短时限。 */
+
   settleTimeoutMs?: number;
-  /** 持久成员终止(成员 watcher 不兑终态,由这里直接 kill + roster offline)。 */
+
   stopMember?: (running: RunningSubagent) => void;
   readonly t?: SubagentsTranslate;
 }
 
-/**
- * 等待停止落定的上限:watcher 轮询 tick 为 1s,10s 足够宽裕;超时不伪造
- * "已停止",如实报告 stop-requested(停止信号已发出,落定稍后自行完成)。
- */
 const STOP_SETTLE_TIMEOUT_MS = 10_000;
 
-/**
- * `subagent_stop`:唯一的显式停止入口。
- *
- * 生命周期契约(与 Escape/detached 语义严格分离):
- * - 主工具等待被 Escape 中止只会让工具调用返回 detached——子代理继续运行,
- *   不会被杀、不会被记成 cancelled;真正终止子代理只发生在本工具。
- * - 普通的 subagent_message 文本不是停止命令,绝不解析为隐式指令。
- * - 只允许操作本会话内由本插件登记、且仍在运行的子代理;已结束的子代理
- *   没有可停止的进程,明确报错引导(subagents_list 查看)。
- *
- * 执行路径:置 stopRequested 标志(让 watcher 把停止后的 pane 消失按显式
- * cancelled 落定,不误分类 user_closed)→ 交互式 pane 在此直接关闭(自动
- * pane/headless 由 watcher 的 cancelled 分支统一终止)→ abort watcher →
- * 等 watcher 兑出终态(幂等:watcher promise 单次 resolve,结果回注仍由
- * 原有路径——阻塞中的工具调用或 detached 迟到回注——恰好各一次)。
- */
 export function registerSubagentStopTool(pi: ExtensionAPI, deps: SubagentStopToolDeps): void {
   pi.registerTool({
     name: "subagent_stop",
@@ -106,8 +86,7 @@ export function registerSubagentStopTool(pi: ExtensionAPI, deps: SubagentStopToo
       }
 
       const running = resolved.running;
-      // 持久成员:watcher 是常驻轮询(不兑终态 promise),停止由专用入口
-      // 直接终止进程 + roster offline,同步返回 stopped(不等待 watcher 轮次)。
+
       if (running.member) {
         running.stopRequested = true;
         deps.stopMember?.(running);
@@ -129,12 +108,9 @@ export function registerSubagentStopTool(pi: ExtensionAPI, deps: SubagentStopToo
           },
         };
       }
-      // 标记先于 abort:watcher 观察到停止后的 pane 消失时按显式 cancelled
-      // 落定,不会误分类为 user_closed(用户直接关闭)。
+
       running.stopRequested = true;
-      // 交互式 pane 归用户驱动,watcher 的取消分支不会关它——显式停止时在
-      // 此直接关闭(closeSurface 内 assertOwned 白名单护栏只放行本插件
-      // 创建/接管的 pane)。已死 pane 报错忽略,watcher 会按停止终态落定。
+
       if (running.interactive && running.kind !== "headless") {
         try {
           deps.closeSurface(running.surface);
@@ -142,8 +118,7 @@ export function registerSubagentStopTool(pi: ExtensionAPI, deps: SubagentStopToo
           debugLog(`Could not close interactive pane ${running.surface} during stop`, error);
         }
       }
-      // 中止 watcher 等待循环:watcher 判定 cancelled(显式 stop)后终止
-      // headless 进程/关闭自动 pane、移除 runtime record、兑 cancelled 终态。
+
       running.abortController?.abort();
       deps.updateWidget();
 
@@ -187,7 +162,7 @@ export function registerSubagentStopTool(pi: ExtensionAPI, deps: SubagentStopToo
           };
         }
         if (settled.ok && settled.result === null) {
-          // watcher reject(正常不发生):停止已发出,如实报告错误。
+
           const errorText = settled.error ?? "unknown watcher error";
           return {
             content: [{
@@ -213,7 +188,6 @@ export function registerSubagentStopTool(pi: ExtensionAPI, deps: SubagentStopToo
         }
       }
 
-      // 无 watchPromise(旧 mock/极端竞态):停止信号已发出,不伪造完成。
       return {
         content: [{
           type: "text",

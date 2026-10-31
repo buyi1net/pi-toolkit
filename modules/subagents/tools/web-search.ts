@@ -1,17 +1,6 @@
-/**
- * web_search 扩展：给声明了 `web_search` 工具的子代理提供无密钥网页搜索
- * （工单 29）。与 web-fetch.ts 同为模块捆绑兜底实现：用户在
- * `<agentDir>/extensions/web-search/index.ts` 安装了自己的实现时以用户版为准，
- * 否则由 getToolExtensionPath 回退注入本文件。
- *
- * 搜索后端：DuckDuckGo HTML 端点（html.duckduckgo.com/html/?q=…），带浏览器
- * UA 实测可稳定返回结果页；结果锚点是 //duckduckgo.com/l/?uddg=<encoded>
- * 跳转，解析时还原真实目标 URL。无 API key、无配额，代价是反爬策略变化
- * 时可能空手而归——此时返回明确的原因与状态码，不编造结果。
- */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { compactRenderText, renderToolCardCall, renderToolCardResult, toolCardText } from "../../../kit/tool-card.ts";
 import { subagentsTableTranslator, type SubagentsTranslate } from "../messages/index.ts";
 import { assertFetchableUrl, decodeDuckRedirect, htmlToText } from "./web-html.ts";
 import { BROWSER_USER_AGENT, FETCH_TIMEOUT_MS } from "./web-fetch.ts";
@@ -26,10 +15,9 @@ export interface WebSearchResult {
   snippet: string;
 }
 
-/** 从 DuckDuckGo HTML 结果页解析结果列表（纯函数，导出供单测）。 */
 export function parseDuckDuckGoResults(html: string, maxResults = DEFAULT_MAX_RESULTS): WebSearchResult[] {
   const results: WebSearchResult[] = [];
-  // 结果锚点：<a class="result__a" href="…">标题（可含 <b>）</a>
+
   const anchorPattern = /<a[^>]*class="[^"]*\bresult__a\b[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
   let match: RegExpExecArray | null;
   while ((match = anchorPattern.exec(html)) !== null && results.length < maxResults) {
@@ -44,7 +32,7 @@ export function parseDuckDuckGoResults(html: string, maxResults = DEFAULT_MAX_RE
       url = blocked ? null : href;
     }
     if (!url) continue;
-    // 摘要锚点跟在同一个结果块里：从锚点结束位置向后找最近的 result__snippet。
+
     const snippetPattern = /<a[^>]*class="[^"]*\bresult__snippet\b[^"]*"[^>]*>([\s\S]*?)<\/a>/i;
     const after = html.slice(anchorPattern.lastIndex);
     const snippetMatch = snippetPattern.exec(after);
@@ -97,10 +85,17 @@ async function searchDuckDuckGo(query: string, maxResults: number): Promise<stri
   );
 }
 
+function collapsedReason(text: string): string | undefined {
+  const compact = compactRenderText(text);
+  if (!compact) return undefined;
+  return compact.length > 48 ? `${compact.slice(0, 47)}…` : compact;
+}
+
 export default function webSearchExtension(pi: ExtensionAPI, t: SubagentsTranslate = subagentsTableTranslator("en")) {
   pi.registerTool({
     name: "web_search",
     label: "web_search",
+    renderShell: "self",
     description:
       "Search the web (keyless DuckDuckGo backend) and return top results with titles, URLs and snippets. " +
       "Use it to discover sources; then use web_fetch to read the promising ones.",
@@ -124,13 +119,32 @@ export default function webSearchExtension(pi: ExtensionAPI, t: SubagentsTransla
         }),
       ),
     }),
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
       const query = typeof args.query === "string" ? args.query.replace(/\s+/g, " ").trim() : "(query)";
-      return new Text(
-        theme.fg("toolTitle", theme.bold(t("module.subagents.tool.web_search.display"))) +
-          " " + theme.fg("accent", query),
-        0,
-        0,
+      return renderToolCardCall(
+        { title: t("module.subagents.tool.web_search.display"), object: query || "(query)" },
+        theme,
+        context,
+      );
+    },
+    renderResult(result, options, theme, context) {
+      const details = (result.details ?? {}) as { query?: unknown };
+      const query =
+        compactRenderText(details.query) ||
+        (typeof context?.args?.query === "string" ? context.args.query.replace(/\s+/g, " ").trim() : "") ||
+        "(query)";
+      const text = toolCardText(result);
+      const topCount = /\(top (\d+)\)/.exec(text)?.[1];
+      return renderToolCardResult(
+        {
+          title: t("module.subagents.tool.web_search.display"),
+          object: query,
+          status: context?.isError ? collapsedReason(text) : topCount ? `${topCount} results` : undefined,
+          details: options.expanded ? text.split("\n") : [],
+        },
+        theme,
+        options,
+        context,
       );
     },
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {

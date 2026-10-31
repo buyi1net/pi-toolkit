@@ -1,24 +1,3 @@
-// ACP 管理页与高级编辑器（工单 10 的字段编辑 + 工单 03 的预设与管理页收编）：
-// `modules.compression.acp` 的结构化编辑页。
-//
-// 先例：modules/compression/rules-editor.ts 的自绘面板（数值/自由文本不属于
-// schema 控件，复杂对象走模块自己的编辑页——规格「菜单 schema 只放开关和有限
-// 枚举」）。页面结构（高级项按分组进二级页）：
-// - AcpSettingsPanel（根页，工单 03 起是 ACP 管理页）：预设切换（推荐默认 /
-//   自定义进阶）+ ACP 自动检测开关与自动分流阈值；全局压缩参数与供应商/模型
-//   覆盖属于高级调参项，只在自定义进阶下展开；
-// - 层级页（global / provider / model 共用 AcpListPanel）：阈值 / 步长 / 近期
-//   保留走数值编辑器，prompt pack 走有限枚举选择器，工具保护 / 提示词覆写 /
-//   reasoning / 图片处理各进分组子页；provider 层多一行「模型覆盖」入口；
-// - 分组子页（工具名单 / 提示词 / reasoning / 图片）。
-//
-// 键位：↑↓ 全行可达、Enter 编辑（或进子页/选择器）、Ctrl+D 清除该行覆盖
-// （写 null 墨碑）、Esc 返回上级（根页 Esc 回菜单）。写盘走 kit 配置写入事务
-// （saveConfig 注入），失败只提示不改显示；值位每次渲染回读配置节（盘上是
-// 唯一真相），写盘成功后行集按当前配置重建（工具名单这类变长行保持同步）。
-// 值位显示「本级自身」的覆盖：未设置显示「继承」；合并结果由运行时接缝
-// （acp/config.ts）按 global → provider → model 解析。
-
 import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   getKeybindings,
@@ -68,39 +47,33 @@ import {
 } from "./messages/index.ts";
 import { discoverCompressionCandidates, type CompressionMenuRegistry } from "./rules-editor.ts";
 
-// ─────────────────────────────────────────────────────────────
-// 选项与行模型
-// ─────────────────────────────────────────────────────────────
-
 export interface AcpSettingsPanelOptions {
   readonly t: Translator;
   readonly theme: MenuTheme;
   readonly context: ExtensionContext;
-  /** 结构化配置写入事务（菜单层注入；补丁 → 落盘 → 重载 → 重生效 → 重绘） */
+
   readonly saveConfig: (patch: ModuleConfigRecord, hooks?: ConfigWriteHooks) => Promise<void>;
   readonly requestRender: () => void;
-  /** 读本模块配置节（实时，盘上真相） */
+
   readonly getSection: () => Record<string, unknown>;
   readonly onDone: (value: string) => void;
 }
 
-/** 行编辑动作拿到的面板能力（开/关子页、提示、写盘） */
 export interface AcpPanelApi {
   readonly t: Translator;
   readonly theme: MenuTheme;
   readonly context: ExtensionContext;
   readonly getSection: () => Record<string, unknown>;
   readonly requestRender: () => void;
-  /** 在本面板上开子页（选择器 / 输入编辑器 / 子面板） */
+
   openSub(component: Component): void;
-  /** 关掉本面板当前的子页 */
+
   closeSub(): void;
   notify(message: string, level?: "error" | "info" | "warning"): void;
-  /** 写盘（成功后重建行集并重绘；失败提示并返回 false） */
+
   save(patch: ModuleConfigRecord): Promise<boolean>;
 }
 
-/** 编辑器行：标签 + 实时值位 + 可选的编辑/清除动作 */
 export interface AcpRowHandle {
   readonly id: string;
   readonly label: string;
@@ -113,20 +86,15 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-// ─────────────────────────────────────────────────────────────
-// 面板骨架
-// ─────────────────────────────────────────────────────────────
-
 interface AcpPanelSpec {
   readonly titleKey: string;
   readonly hintKey: string;
-  /** 行集（写盘成功后重建；值位闭包每次渲染回读配置节） */
+
   rows(api: AcpPanelApi): readonly AcpRowHandle[];
-  /** Esc：根页回执菜单；子页关掉自己（由开页方注入 closeSub） */
+
   onEscape(api: AcpPanelApi): void;
 }
 
-/** 行列表面板：根页 / 层级页 / 分组子页共用的骨架（光标、滚动、子页、写盘） */
 class AcpListPanel implements Component {
   private readonly options: AcpSettingsPanelOptions;
   private readonly spec: AcpPanelSpec;
@@ -241,7 +209,6 @@ class AcpListPanel implements Component {
     return { handled: true };
   }
 
-  /** 测试与外部定位：把光标移到指定行 id（开着子面板时委托给它；找不到返回 false） */
   selectRow(id: string): boolean {
     const delegate = this.listDelegate();
     if (delegate) return delegate.selectRow(id);
@@ -251,7 +218,6 @@ class AcpListPanel implements Component {
     return true;
   }
 
-  /** 当前光标行 id（空面板返回空串；子面板打开时委托；测试用） */
   currentRowId(): string {
     const delegate = this.listDelegate();
     if (delegate) return delegate.currentRowId();
@@ -259,14 +225,12 @@ class AcpListPanel implements Component {
     return row ? row.id : "";
   }
 
-  /** 行 id 序列（结构断言用；子面板打开时委托） */
   rowIds(): string[] {
     const delegate = this.listDelegate();
     if (delegate) return delegate.rowIds();
     return this.rows.map((row) => row.id);
   }
 
-  /** 子面板若是行列表面板，导航 API 委托给它（选择器/输入编辑器不委托） */
   private listDelegate(): { selectRow(id: string): boolean; currentRowId(): string; rowIds(): string[] } | null {
     const sub = this.submenu as unknown as Record<string, unknown> | null;
     if (!sub || typeof sub.selectRow !== "function" || typeof sub.rowIds !== "function") return null;
@@ -308,22 +272,17 @@ class AcpListPanel implements Component {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// 输入编辑器（数值 / 文本的输入控件）
-// ─────────────────────────────────────────────────────────────
-
 export interface AcpInputEditorOptions {
   readonly t: Translator;
   readonly theme: MenuTheme;
   readonly title: string;
   readonly initial: string;
-  /** 校验：合法返回解析结果（携带规范化写盘值），非法返回错误文案键 */
+
   readonly parse: (text: string) => { readonly ok: true; readonly normalized: string } | { readonly ok: false; readonly errorKey: string };
   readonly onSave: (normalized: string) => Promise<boolean>;
   readonly onClose: () => void;
 }
 
-/** 单行输入编辑器：Enter 校验并保存（保存成功才关闭），Esc 取消 */
 export class AcpInputEditor implements Component {
   private readonly options: AcpInputEditorOptions;
   private readonly input: Input;
@@ -357,13 +316,12 @@ export class AcpInputEditor implements Component {
 
   private async submit(text: string): Promise<void> {
     const parsed = this.options.parse(text);
-    if (!parsed.ok) return; // 提示由 parse 的调用侧（openInput）负责
+    if (!parsed.ok) return;
     const saved = await this.options.onSave(parsed.normalized);
     if (saved) this.options.onClose();
   }
 }
 
-/** 开输入编辑器：校验失败提示原因（留在编辑器），保存走 api.save */
 function openInput(
   api: AcpPanelApi,
   options: {
@@ -395,7 +353,6 @@ function openInput(
   );
 }
 
-/** 有限枚举选择器（prompt pack / 三态布尔）：选中即写盘并关闭 */
 function openChoice(
   api: AcpPanelApi,
   fieldLabel: string,
@@ -418,7 +375,6 @@ function openChoice(
   );
 }
 
-/** 三态枚举条目：继承 / 开 / 关 */
 function triStateOptions(api: AcpPanelApi): readonly { readonly value: string; readonly label: string }[] {
   return [
     { value: "", label: api.t("module.compression.acpSettings.inherit") },
@@ -427,11 +383,6 @@ function triStateOptions(api: AcpPanelApi): readonly { readonly value: string; r
   ];
 }
 
-// ─────────────────────────────────────────────────────────────
-// 候选发现与根行值位（纯函数，测试直测）
-// ─────────────────────────────────────────────────────────────
-
-/** 供应商候选 = 配置里已有的覆盖键 ∪ 模型目录里的供应商，字典序 */
 export function acpProviderCandidates(
   registry: CompressionMenuRegistry,
   section: Record<string, unknown>,
@@ -441,7 +392,6 @@ export function acpProviderCandidates(
   return [...providers].sort((left, right) => left.localeCompare(right));
 }
 
-/** 模型候选 = 指定供应商在配置里的模型覆盖键 ∪ 模型目录里的模型，字典序 */
 export function acpModelCandidates(
   registry: CompressionMenuRegistry,
   section: Record<string, unknown>,
@@ -456,7 +406,6 @@ export function acpModelCandidates(
   return [...models].sort((left, right) => left.localeCompare(right));
 }
 
-/** 根页入口行的值位（菜单行复用；工单 03）：预设档位 · 自动检测状态 */
 export function acpManagementRowValue(section: Record<string, unknown>, t: Translator): string {
   const { settings } = readCompressionSettings(section);
   return t("module.compression.acpAdvanced.value.overview", {
@@ -465,11 +414,6 @@ export function acpManagementRowValue(section: Record<string, unknown>, t: Trans
   });
 }
 
-// ─────────────────────────────────────────────────────────────
-// 行工厂（值位闭包每次渲染回读配置节）
-// ─────────────────────────────────────────────────────────────
-
-/** percent 字段行（最大上下文阈值 / 紧急截断阈值） */
 function percentRow(
   api: AcpPanelApi,
   level: AcpOverrideLevel,
@@ -496,7 +440,6 @@ function percentRow(
   };
 }
 
-/** 数值字段行（正整数 / 非负整数） */
 function numberRow(
   api: AcpPanelApi,
   level: AcpOverrideLevel,
@@ -526,7 +469,6 @@ function numberRow(
   };
 }
 
-/** prompt pack 行（有限枚举：继承 / 完整 / 精简） */
 function promptPackRow(api: AcpPanelApi, level: AcpOverrideLevel): AcpRowHandle {
   const field = "promptPack";
   const read = () => readAcpOverridesAt(api.getSection(), level).promptPack;
@@ -543,7 +485,6 @@ function promptPackRow(api: AcpPanelApi, level: AcpOverrideLevel): AcpRowHandle 
   };
 }
 
-/** 分组子页面板（工具名单 / 提示词 / reasoning / 图片共用骨架） */
 function groupPanel(
   options: AcpSettingsPanelOptions,
   titleKey: string,
@@ -559,7 +500,6 @@ function groupPanel(
   });
 }
 
-/** 层级页（global / provider / model 共用） */
 function levelPanel(
   options: AcpSettingsPanelOptions,
   level: AcpOverrideLevel,
@@ -573,7 +513,6 @@ function levelPanel(
   });
 }
 
-/** 层级页的行集（导出供测试断言行结构） */
 export function buildOverrideRows(
   options: AcpSettingsPanelOptions,
   api: AcpPanelApi,
@@ -586,7 +525,6 @@ export function buildOverrideRows(
     numberRow(api, level, "preserveRecentMessages"),
   ];
 
-  // 工具保护名单子页
   rows.push({
     id: "compression.acpOverride.protectedTools",
     label: acpFieldLabel("protectedTools", api.t),
@@ -604,10 +542,8 @@ export function buildOverrideRows(
     clear: () => void api.save(acpOverrideFieldPatch(level, { protectedTools: null })),
   });
 
-  // prompt pack
   rows.push(promptPackRow(api, level));
 
-  // 提示词覆写子页
   rows.push({
     id: "compression.acpOverride.prompts",
     label: acpFieldLabel("prompts", api.t),
@@ -625,7 +561,6 @@ export function buildOverrideRows(
     clear: () => void api.save(acpOverrideFieldPatch(level, { prompts: null })),
   });
 
-  // reasoning 处理子页
   rows.push({
     id: "compression.acpOverride.reasoning",
     label: acpFieldLabel("reasoning", api.t),
@@ -643,7 +578,6 @@ export function buildOverrideRows(
     clear: () => void api.save(acpOverrideFieldPatch(level, { reasoning: null })),
   });
 
-  // 图片处理子页
   rows.push({
     id: "compression.acpOverride.stripImages",
     label: acpFieldLabel("stripImages", api.t),
@@ -671,14 +605,12 @@ export function buildOverrideRows(
       void api.save(acpOverrideFieldPatch(level, { stripImages: null, stripImagesKeepRecent: null })),
   });
 
-  // provider 层：模型覆盖入口（模型级页的 Esc 关回本层级页：清本页子页栈）
   if (level.provider !== undefined && level.model === undefined) {
     rows.push(modelsRow(options, api, level));
   }
   return rows;
 }
 
-/** 图片处理子页的「剥离历史图片」三态行 */
 function stripImagesRow(api: AcpPanelApi, level: AcpOverrideLevel): AcpRowHandle {
   const read = () => readAcpOverridesAt(api.getSection(), level).stripImages;
   const label = api.t("module.compression.acpSettings.images.strip");
@@ -697,7 +629,6 @@ function stripImagesRow(api: AcpPanelApi, level: AcpOverrideLevel): AcpRowHandle
   };
 }
 
-/** reasoning 子页行集：drop（三态布尔）+ threshold（非负整数） */
 function reasoningRows(api: AcpPanelApi, level: AcpOverrideLevel): AcpRowHandle[] {
   const readDrop = () => readAcpOverridesAt(api.getSection(), level).reasoning?.drop;
   const dropLabel = api.t("module.compression.acpSettings.reasoning.drop");
@@ -738,7 +669,6 @@ function reasoningRows(api: AcpPanelApi, level: AcpOverrideLevel): AcpRowHandle[
   return [dropRow, thresholdRow];
 }
 
-/** 提示词覆写子页行集：四个槽位，值位显示覆写预览 */
 function promptsRows(api: AcpPanelApi, level: AcpOverrideLevel): AcpRowHandle[] {
   return ACP_PROMPT_OVERRIDE_KEYS.map((key) => {
     const label = api.t(`module.compression.acpSettings.prompts.${key}`);
@@ -767,7 +697,6 @@ function promptsRows(api: AcpPanelApi, level: AcpOverrideLevel): AcpRowHandle[] 
   });
 }
 
-/** 工具保护名单子页行集：名单行（改名/删除）+ 添加行 */
 function toolsRows(api: AcpPanelApi, level: AcpOverrideLevel): AcpRowHandle[] {
   const tools = () => [...(readAcpOverridesAt(api.getSection(), level).protectedTools ?? [])];
   const saveTools = (next: string[]) =>
@@ -816,7 +745,6 @@ function toolsRows(api: AcpPanelApi, level: AcpOverrideLevel): AcpRowHandle[] {
   return rows;
 }
 
-/** provider 层的「模型覆盖」行：模型选择器 → 模型级层级页 */
 function modelsRow(
   options: AcpSettingsPanelOptions,
   api: AcpPanelApi,
@@ -854,11 +782,6 @@ function modelsRow(
   };
 }
 
-// ─────────────────────────────────────────────────────────────
-// 根页：ACP 管理页（设置页入口的子页）
-// ─────────────────────────────────────────────────────────────
-
-/** 根页行 id（测试断言用）：预设 / 自动检测 / 阈值 / 全局参数 / 供应商覆盖 */
 export const ACP_SETTINGS_ROW_IDS = {
   preset: "compression.acpPreset",
   autoDetect: "compression.acpAutoDetect",
@@ -867,10 +790,6 @@ export const ACP_SETTINGS_ROW_IDS = {
   providers: "compression.acpAdvanced.providers",
 } as const;
 
-/**
- * 预设行（工单 03）：推荐默认（开箱即用） / 自定义进阶。切到自定义时由
- * acpPresetPatch 决定是否把推荐值填成草稿（草稿已有覆盖则原样保留）。
- */
 function presetRow(api: AcpPanelApi): AcpRowHandle {
   const label = api.t("module.compression.acpPreset.label");
   const read = () => readCompressionSettings(api.getSection()).settings.acpPreset;
@@ -888,10 +807,6 @@ function presetRow(api: AcpPanelApi): AcpRowHandle {
   };
 }
 
-/**
- * 自动检测开关行（工单 03）：属于触发路由层，既不被预设覆盖，也不归属高级调参页，
- * 两档预设下都保持可见可改。
- */
 function autoDetectRow(api: AcpPanelApi): AcpRowHandle {
   const label = api.t("module.compression.acpAutoDetect.label");
   const read = () => readCompressionSettings(api.getSection()).settings.acpAutoDetect;
@@ -912,11 +827,6 @@ function autoDetectRow(api: AcpPanelApi): AcpRowHandle {
   };
 }
 
-/**
- * ACP 管理页根行（工单 03）：预设档位 + 自动检测开关 + 自动分流阈值始终可见；
- * 全局参数与供应商覆盖是高级调参项，只在自定义进阶下展开。
- * Esc 回执菜单（值位文案 = acpManagementRowValue）。
- */
 export class AcpSettingsPanel extends AcpListPanel {
   constructor(options: AcpSettingsPanelOptions) {
     super(options, {
@@ -928,7 +838,6 @@ export class AcpSettingsPanel extends AcpListPanel {
   }
 }
 
-/** 根页行集 */
 function buildRootRows(options: AcpSettingsPanelOptions, api: AcpPanelApi): AcpRowHandle[] {
   const registry = api.context.modelRegistry;
   const thresholdLabel = api.t("module.compression.acpSettings.threshold.label");
@@ -988,8 +897,7 @@ function buildRootRows(options: AcpSettingsPanelOptions, api: AcpPanelApi): AcpR
     },
   };
   const rows: AcpRowHandle[] = [presetRow(api), autoDetectRow(api), thresholdRow];
-  // 高级调参项只在自定义进阶下展开（推荐默认下那 8 个压缩参数由推荐常量接管，
-  // 切换档位后行集即时重建）
+
   if (readCompressionSettings(api.getSection()).settings.acpPreset === "custom") {
     rows.push(globalRow, providersRow);
   }

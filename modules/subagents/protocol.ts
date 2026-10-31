@@ -50,7 +50,6 @@ export interface ProtocolValidationError {
   message: string;
 }
 
-/** New protocol validation entry point; legacy callers never pass through it. */
 export function validateCodexV2SpawnParams(
   value: unknown,
 ): { ok: true; value: CodexV2SpawnParams } | { ok: false; errors: ProtocolValidationError[] } {
@@ -98,7 +97,6 @@ export interface CodexV2ModelSelectionDetails {
   supported_reasoning_effort: readonly string[];
 }
 
-/** 解析当前 /model 可用目录中的可读模型引用，并校验思考等级。 */
 export function validateCodexV2ModelSelection(
   directory: ModelDirectory,
   modelReference: string,
@@ -153,10 +151,6 @@ export function validateCodexV2ModelSelection(
   return { ok: true, modelReference: selected_model, reasoning_effort, model };
 }
 
-/**
- * 保留模型选择与底层摘要的错误形状。调用方可把 provider 摘要
- * 原样放入 `underlying_error`，不会被候选切换或重试逻辑覆盖。
- */
 export function createCodexV2LaunchError(params: {
   code: string;
   message: string;

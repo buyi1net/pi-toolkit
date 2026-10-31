@@ -1,16 +1,3 @@
-// 压缩模块的菜单行。
-//
-// 一级菜单（工单 01）：只一行入口 `compression.settings`，值位只显示 开 / 关；回车打开
-// 二级设置页 CompressionSettingsPanel（settings-panel.ts）。
-//
-// 二级页里的模块专属行（工单 07 定稿：排在规格行之后，不挤进 Codex → ACP 的相邻关系）：
-// - ACP 管理页（工单 03 收编工单 10 的高级设置页）：预设切换 + 自动检测开关与
-//   分流阈值，高级参数只在自定义进阶下展开。紧跟在 Codex 模式管理之后，正好是
-//   规格最终行序的大、七两行；
-// - 模型规则：打开规则编辑器（结构化对象走模块自己的编辑页）。显式规则三种模式都能
-//   在这里增删改，是规则数据的编辑入口；Codex 管理页另提供从已认证模型向导式添加
-//   codex 规则的做法，两边共用 modelRules 这一份真相，所以这一行不能并入 Codex 页。
-
 import { type SettingItem } from "@earendil-works/pi-tui";
 import type { MenuTheme } from "../../kit/menu/theme.ts";
 import type { ModuleMenuContext } from "../../kit/module.ts";
@@ -27,7 +14,6 @@ import {
 } from "./settings-panel.ts";
 import { sessionCompressionOverride } from "./session-override.ts";
 
-/** 当前会话是否具备直接选择 Codex 覆盖的模型资格。 */
 function codexOverrideAvailable(context: ModuleMenuContext): boolean {
   const model = context.context.model;
   if (!model) return false;
@@ -39,13 +25,9 @@ function codexOverrideAvailable(context: ModuleMenuContext): boolean {
 }
 
 export const COMPRESSION_RULES_ROW_ID = "compression.rules";
-/** ACP 管理页在设置页的入口行 id（工单 03） */
+
 export const ROW_ACP_MANAGEMENT = "compression.acpManagement";
 
-/**
- * 模块在一级菜单的行（工单 01 的 topLevel 钩子）：唯一一行入口，值位只显示开 / 关。
- * 全部配置项收进它打开的设置页，一级不再被生僻术语占位。
- */
 export function buildCompressionTopItems(context: ModuleMenuContext): readonly SettingItem[] {
   const t = context.t;
   return [
@@ -65,7 +47,7 @@ export function buildCompressionTopItems(context: ModuleMenuContext): readonly S
           codexManagementRow: () => buildCodexManagementRow(context),
           detailRows: () => buildCompressionMenuItems(context),
           codexOverrideAvailable: codexOverrideAvailable(context),
-          // 工单 05：会话覆盖是内存单例，面板读写的都是它（不经过配置事务）
+
           readSessionOverride: () => sessionCompressionOverride.get(),
           writeSessionOverride: (next) => sessionCompressionOverride.set(next),
           onDone: (value) => done(value),
@@ -74,11 +56,6 @@ export function buildCompressionTopItems(context: ModuleMenuContext): readonly S
   ];
 }
 
-/**
- * ACP 管理页入口行（工单 03，收编工单 10 的 ACP 高级设置行）：值位显示预设档位与
- * 自动检测状态；子菜单 = ACP 管理页（预设切换 + 自动检测开关 + 阈值，高级参数只在
- * 自定义进阶下展开）。
- */
 function buildAcpManagementRow(context: ModuleMenuContext, theme: MenuTheme): SettingItem {
   const t = context.t;
   return {
@@ -99,13 +76,6 @@ function buildAcpManagementRow(context: ModuleMenuContext, theme: MenuTheme): Se
   };
 }
 
-/**
- * 设置页里的模块专属行（规格最终行序之后的工具行）：
- * ACP 管理页入口（紧跟 Codex 管理页）、模型规则编辑器入口
- * （显式规则的编辑入口，三值模式都在这里建）。Codex 模式管理的入口行不在这里：它由 settings-panel 的
- * 专属插槽排在 ACP 管理页之前（工单 02）。配置节有问题时，入口行描述位换成第一条
- * 问题文案——不进编辑器也能看见。
- */
 export function buildCompressionMenuItems(context: ModuleMenuContext): readonly SettingItem[] {
   const t = context.t;
   const { settings, problems } = readCompressionSettings(context.getConfig());

@@ -102,7 +102,7 @@ function getFrameStatus(
 		},
 		duration: {
 			id: "duration",
-			// 保留旧段位键以兼容配置；计时器已迁到 Working 与回合遥测尾部。
+
 			text: "",
 			priority: 1,
 		},
@@ -153,8 +153,6 @@ export class PiUiEditor extends CustomEditor {
 	private disposed = false;
 	private readonly hooks: PiUiEditorHooks;
 
-	// 前四个参数由宿主编辑框工厂签名与基类要求保持原位；其余按数据源分组，
-	// 缺省时回落到与旧位置参数一致的默认行为。
 	constructor(
 		tui: TUI,
 		theme: EditorTheme,
@@ -166,7 +164,7 @@ export class PiUiEditor extends CustomEditor {
 		layout: EditorLayoutSource = {},
 		hooks: PiUiEditorHooks = {},
 	) {
-		// 保留模型信息在编辑框上边框；Working 由 Pi 宿主的 statusContainer 放到编辑框上方独立显示。
+
 		super(tui, theme, keybindings, { embedWorkingStatus: false });
 		this.ctx = ctx;
 		this.getGlyphs = appearance.getGlyphs ?? (() => resolveGlyphs("unicode"));
@@ -185,8 +183,7 @@ export class PiUiEditor extends CustomEditor {
 			}),
 		};
 		const margin: OverlayMargin = {};
-		// Footer 高度会随遥测和供应商数据变化；Overlay 在合成阶段读取最新值，
-		// 始终贴在输入框上方，不进入正文布局，也不覆盖输入框和 Footer。
+
 		Object.defineProperty(margin, "bottom", {
 			enumerable: true,
 			get: () => this.frameHeight + Math.max(0, this.getFooterHeight()),
@@ -235,8 +232,6 @@ export class PiUiEditor extends CustomEditor {
 			return;
 		}
 
-		// 补全确认和命令提交发生在同一次同步调用中。先撤下 Overlay，但不提交旧 Editor 帧；
-		// 等父类给出补全后的完整命令，再决定进入 reload 过渡或恢复普通底图。
 		const originalOnSubmit = this.onSubmit;
 		let didSubmit = false;
 		this.suppressAutocompleteOverlay = true;
@@ -288,7 +283,7 @@ export class PiUiEditor extends CustomEditor {
 			? this.resolveAutocompleteOverlayLayout(autocompleteLines.length)
 			: undefined;
 		if (layout?.maxHeight === 0) {
-			// Editor 已贴到可见区顶部时没有安全的覆盖空间，保留原生内联补全。
+
 			this.updateAutocompleteOverlay([], width);
 			return [...renderedLines];
 		}
@@ -317,7 +312,7 @@ export class PiUiEditor extends CustomEditor {
 		this.autocompleteOverlayOptions.width = Math.max(1, width);
 		const token = ++this.autocompleteOverlayToken;
 		if (initialLines.length > 0) {
-			// 当前正文渲染结束后再定位和挂载，避免在组件 render 中读取旧坐标或修改 Overlay 栈。
+
 			queueMicrotask(() => {
 				if (this.disposed || token !== this.autocompleteOverlayToken) return;
 				const layout = this.resolveAutocompleteOverlayLayout(lines.length);

@@ -1,7 +1,3 @@
-// pi-toolkit 统一配置文件：<agentDir>/pi-toolkit.json
-// 结构：schemaVersion + language + 各模块配置节。
-// 写盘沿用 pi-eyes 的安全行为：剥掉敏感键、0600 权限、临时文件 + rename 原子替换。
-
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
@@ -9,16 +5,13 @@ import { isLanguageSetting, type LanguageSetting } from "../i18n/index.ts";
 import type { ModuleConfigRecord, ModuleConfigValue } from "./module.ts";
 
 export const TOOLKIT_CONFIG_FILENAME = "pi-toolkit.json";
-/**
- * 配置结构版本。工单 07 定案 4：三组旧键迁移一次落地，1 升 2。
- * 迁移在 load 时执行（见 migrateLegacySections）：读到旧节就转换并写回，读不到旧节不写盘。
- */
+
 export const TOOLKIT_SCHEMA_VERSION = 2;
 
 export interface ToolkitConfig {
   readonly schemaVersion: number;
   readonly language: LanguageSetting;
-  /** 模块 id → 该模块的配置节（未经 schema 校验的原始值） */
+
   readonly modules: Readonly<Record<string, ModuleConfigRecord>>;
 }
 
@@ -29,15 +22,15 @@ export interface ToolkitConfigUpdate {
 
 export interface LoadedToolkitConfig {
   readonly config: ToolkitConfig;
-  /** 文件缺失不算问题；解析异常、取值非法逐条记录，交给菜单展示 */
+
   readonly problems: readonly string[];
-  /** 本次读取是否把旧节迁移成了新节（写回已在 load 内完成，这里供调用方与自测观察） */
+
   readonly migrated: boolean;
 }
 
 export interface ParsedToolkitConfig {
   readonly config: ToolkitConfig;
-  /** 本次解析是否搬动过旧节（true = 旧键还在输入对象里，读盘方应当写回清理） */
+
   readonly migrated: boolean;
 }
 
@@ -55,7 +48,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** 配置节可存的值：标量、标量数组，或嵌套的对象/数组（模块私有结构） */
 function isConfigValue(value: unknown): value is ModuleConfigValue {
   if (value === null) return true;
   const type = typeof value;
@@ -115,10 +107,7 @@ export function parseToolkitConfig(
 }
 
 export interface LoadToolkitConfigOptions {
-  /**
-   * 读到旧节时是否把迁移结果写回磁盘（默认 true：全局配置由本扩展自己维护）。
-   * 项目层配置（`<cwd>/.pi/pi-toolkit.json`）按约定只读，那里传 false：只做内存迁移、不碰文件。
-   */
+
   readonly writeBackLegacyMigration?: boolean;
 }
 
@@ -145,8 +134,7 @@ export async function loadToolkitConfig(
     }
     const result = parseToolkitConfig(parsed, path, problems);
     if (result.migrated && options.writeBackLegacyMigration !== false) {
-      // 定案 4：旧节在 load 时写回（mergeRaw 保未知键语义的例外在 saveToolkitConfig 里收口）。
-      // 写不进去也不改变本次生效取值，只补一条问题；下一次带旧节的读取会再试。
+
       try {
         await saveToolkitConfig(path, { language: result.config.language, modules: result.config.modules });
       } catch (error) {
@@ -160,24 +148,9 @@ export async function loadToolkitConfig(
   }
 }
 
-/**
- * 旧键迁移（工单 07 定案 4：TOOLKIT_SCHEMA_VERSION 1→2，三组一次迁移）。
- *
- * - 旧 `modules.eyes` → `modules.vision`（工单 12：eyes 正名，已安装用户配置不丢）
- * - tui 节 `data.providerRefreshMs` → `modules.providers.refreshMs`（工单 10 拆出的模块键，
- *   键名取模块实际读取的 `refreshMs`，否则旧值搬过去也不生效）
- * - tui 节 `data.providerAccess` → `modules.providers.providerAccess`（原值原样保留）
- * - tui 节 `data.telemetry` → `modules.status.telemetry`（工单 11 自定案：遥测归 status）
- * - tui 节 `status.preset` / `status.segments` → `modules.status.*`（工单 11）
- *
- * 规则：目标键已存在时保留新值，旧键一律删除；旧子节搬空即删除，仍有未知键时保留子节本身
- * （不替用户丢数据）。返回是否真的搬动过——没读到旧节时调用方不产生写入。
- * 判定按字段而非 schemaVersion：老文件缺版本号时同样能读旧配置。
- */
 function migrateLegacySections(modules: Record<string, unknown>): boolean {
   let migrated = false;
 
-  // ① eyes → vision：整节搬移
   const eyes = modules.eyes;
   if (isRecord(eyes)) {
     const target = modules.vision;
@@ -189,7 +162,6 @@ function migrateLegacySections(modules: Record<string, unknown>): boolean {
     migrated = true;
   }
 
-  // ②③ tui 节里的旧子节 → providers / status 模块节
   const tui = modules.tui;
   if (isRecord(tui)) {
     if (moveLegacySubsection(modules, tui, "data", {
@@ -206,7 +178,6 @@ function migrateLegacySections(modules: Record<string, unknown>): boolean {
   return migrated;
 }
 
-/** 把一个旧子节里的字段按映射搬进目标模块节（目标键已存在则保留新值），旧字段删除 */
 function moveLegacySubsection(
   modules: Record<string, unknown>,
   parent: Record<string, unknown>,
@@ -290,16 +261,11 @@ function toRawUpdate(update: ToolkitConfigUpdate): Record<string, unknown> {
   };
 }
 
-/**
- * 合并写入：保留磁盘上未识别的键（合并进现有内容），剥掉敏感键后原子替换。
- * 覆盖前把上一版内容留一份 `<path>.bak`。
- */
 export async function saveToolkitConfig(path: string, update: ToolkitConfigUpdate): Promise<ToolkitConfig> {
   const existing = await readRaw(path);
   const cleanExisting = existing ? (sanitizeForWrite(existing) as Record<string, unknown>) : {};
   const merged = mergeRaw(cleanExisting, toRawUpdate(update));
-  // 写入前也做一次旧节迁移：mergeRaw 保未知键，会把盘上的旧键一并留下，
-  // 这里按定案 4 开例外——旧键先搬进新节再从写入内容里删除。
+
   const mergedModules = merged.modules;
   if (isRecord(mergedModules)) migrateLegacySections(mergedModules);
   merged.schemaVersion = TOOLKIT_SCHEMA_VERSION;

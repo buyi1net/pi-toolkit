@@ -12,7 +12,6 @@ import {
 	inferModelProviderName,
 } from "../shared/provider-display.ts";
 
-// 供应商目录与品牌展示是共享领域层公开词汇，宿主不得深路径直连 shared 内部模块。
 export {
 	CC_SWITCH_CLAUDE_PRESET_COUNT,
 	findProviderById,
@@ -166,14 +165,11 @@ export function markUsageSnapshotStale(snapshot: UsageSnapshot): UsageSnapshot {
 	return snapshot.freshness === "stale" ? snapshot : { ...snapshot, freshness: "stale" };
 }
 
-// —— 刷新状态机与缓存时效判定（零 IO 纯函数；文件读写由查询运行层承担） ——
-
 export interface CacheEntry<T> {
 	ts: number;
 	value: T;
 }
 
-/** 缓存条目是否超过 TTL；缺失视为过期。 */
 export function isCacheStale<T>(entry: CacheEntry<T> | null, ttlMs: number, now = Date.now()): boolean {
 	return !entry || now - entry.ts > ttlMs;
 }
@@ -184,16 +180,16 @@ export interface SourceIdentity {
 
 export interface SourceState extends SourceIdentity {
 	status: "pending" | "backoff" | "ready";
-	/** 最近一次启动刷新进程的时间，用于失败退避 */
+
 	attemptTs: number;
 }
 
 export interface SourceRefreshPlan {
-	/** 当前缓存是否属于当前供应商，可以用于布局 */
+
 	usable: boolean;
-	/** 本轮是否启动一次旁路刷新 */
+
 	refresh: boolean;
-	/** 需要先落盘的新状态；null 表示状态不变 */
+
 	nextState: SourceState | null;
 }
 
@@ -249,7 +245,6 @@ function recordScopedValue(
 	return { changed: true, value };
 }
 
-/** 按会话记录模型，避免多个并行会话使用不同模型时互相触发变化。 */
 export function recordModel(
 	cached: ModelSnapshots,
 	scopeKey: string,
@@ -259,7 +254,6 @@ export function recordModel(
 	return recordScopedValue(cached, scopeKey, modelKey, maxEntries);
 }
 
-/** 宿主提供稳定事件键；同一会话的同一轮结束只触发一次刷新。 */
 export function recordRefreshEvent(
 	cached: ScopedSnapshots,
 	scopeKey: string,
@@ -269,7 +263,6 @@ export function recordRefreshEvent(
 	return eventKey ? recordScopedValue(cached, scopeKey, eventKey, maxEntries) : { changed: false, value: cached };
 }
 
-/** 按计费模式判断当前所需的余额或订阅额度缓存是否超龄。 */
 export function usageRefreshDue(
 	mode: BillingMode | null,
 	quotaStale: boolean,
@@ -286,10 +279,6 @@ function matches(current: SourceIdentity, cached: SourceState): boolean {
 	return current.providerKey === cached.providerKey;
 }
 
-/**
- * 数据源变化时立刻隔离旧缓存；同一数据源的 TTL 过期只后台更新，继续显示旧值。
- * pending 会每秒尝试抢刷新锁；只有实际请求失败进入 backoff 后才按 retryMs 退避。
- */
 export function planSourceRefresh(
 	current: SourceIdentity,
 	cached: SourceState | null,

@@ -1,11 +1,3 @@
-// computer 模块三语键表（自包含：本模块的文案只在这里；模块目录拿走则这些文案一起消失）。
-// 框架级键在 i18n/messages.ts，聚合登记点在 modules/index.ts（工单 07 接入装配已登记）。
-// 三语（en / zh-CN / zh-TW）必须同时补齐：ZH_CN / ZH_TW 以 typeof EN 断言，缺键/多键 typecheck 报错。
-//
-// 错误码文案的键是 `module.computer.error.<错误码>`（模块键表只含本模块前缀，由三语完整性测试兜底），
-// 一一对应由 COMPUTER_ERROR_MESSAGE_KEYS 的类型兜底；
-// 工具标题与描述是模型可见的协议文本（英文），不进键表。
-
 import type { ComputerErrorCode } from "../contract.ts";
 import type { MessageTables } from "../../../i18n/index.ts";
 
@@ -102,7 +94,6 @@ const ZH_TW: typeof EN = {
 export const COMPUTER_MESSAGES = { en: EN, "zh-CN": ZH_CN, "zh-TW": ZH_TW } satisfies MessageTables;
 export type ComputerMessageKey = keyof typeof EN;
 
-/** 错误码 → 文案键；Record 按错误码联合类型补齐，漏一个错误码就 typecheck 不过 */
 export const COMPUTER_ERROR_MESSAGE_KEYS: Readonly<Record<ComputerErrorCode, ComputerMessageKey>> = {
   stale_ref: "module.computer.error.stale_ref",
   wrong_scope: "module.computer.error.wrong_scope",

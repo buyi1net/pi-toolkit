@@ -63,19 +63,15 @@ export class TerminalTransitionGate {
 	private failOpenTimer: ReturnType<typeof setTimeout> | undefined;
 	private hasVisibleFrame = false;
 
-	// 实例级拦截：宿主真实 terminal（jiti 双副本下 prototype patch 拦不到宿主）。
 	private hookedTerminal: TerminalWriteTarget | undefined;
 	private instanceOriginalWrite: ((data: string) => void) | undefined;
-	// 拦截挂接前的看门狗：holding 且 hook 未挂期间宿主仍在渲染原生帧（真实配置
-	// 下扩展初始化可达数秒），以约一帧的间隔清屏，落屏帧最多存活 16ms——
-	// 低于单行文字的感知阈值；空屏上的清屏是视觉 no-op，不会闪烁。
+
 	private guardTimer: ReturnType<typeof setInterval> | undefined;
 
 	constructor(output: TransitionOutput = process.stdout) {
 		this.output = output;
 	}
 
-	/** 同一实例重复挂接不叠加拦截；换绑时先恢复旧实例，避免旧终端继续持闸。 */
 	hookTerminal(terminal: TerminalWriteTarget): void {
 		if (this.hookedTerminal === terminal) return;
 		this.stopGuardTimer();
@@ -95,7 +91,6 @@ export class TerminalTransitionGate {
 		};
 	}
 
-	/** 清屏和揭示必须绕过拦截，否则控制序列也会被持闸。 */
 	private writeThrough(data: string): void {
 		if (this.hookedTerminal && this.instanceOriginalWrite) {
 			this.instanceOriginalWrite.call(this.hookedTerminal, data);
@@ -115,8 +110,6 @@ export class TerminalTransitionGate {
 			return true;
 		}
 
-		// 首次启动时隐藏宿主的未装饰帧；reload 时保留当前画面，最终帧会原位覆盖，
-		// 避免 Windows Terminal 把整屏清除前的内容留进回滚历史形成重复残影。
 		if (!this.hasVisibleFrame || options.clearVisibleScreen) {
 			this.writeThrough(CLEAR_VISIBLE_SCREEN);
 		}
@@ -136,7 +129,7 @@ export class TerminalTransitionGate {
 				this.stopGuardTimer();
 				return;
 			}
-			// 经 output 直写清屏：此时 hook 未挂，宿主 write 不经闸门。
+
 			this.output.write(CLEAR_VISIBLE_SCREEN);
 		}, GUARD_CLEAR_INTERVAL_MS);
 		this.guardTimer.unref?.();
@@ -156,7 +149,7 @@ export class TerminalTransitionGate {
 		if (!this.holding) return false;
 
 		try {
-			// 闸门关闭期间仍让 Pi 完成一次内部渲染，随后直接揭示准备好的可见区。
+
 			tui.renderNow(false);
 			if (isMainScreenTui(tui)) {
 				const state = tui.captureRenderState();
@@ -175,7 +168,7 @@ export class TerminalTransitionGate {
 						`${BEGIN_SYNCHRONIZED_OUTPUT}\x1b[H${visibleLines.join("\r\n")}\x1b[J${END_SYNCHRONIZED_OUTPUT}`,
 					);
 					this.hasVisibleFrame = true;
-					// 状态已经与最终帧一致；这一轮只让 Pi 恢复 IME 硬件光标。
+
 					tui.renderNow(false);
 					return true;
 				}
@@ -205,7 +198,7 @@ export class TerminalTransitionGate {
 		this.heldWrites = [];
 		this.heldOutputBytes = 0;
 		if (!replayHeldOutput) return;
-		// 已解除持闸，按捕获来源回放；换绑后的当前直写通道不再属于旧终端。
+
 		for (const held of heldWrites) {
 			held.terminal.write(held.data);
 		}
@@ -246,10 +239,9 @@ export function getTerminalTransitionGate(
 		typeof existing.release === "function"
 	) {
 		const gate = existing as TerminalTransitionGate;
-		// jiti 会在 /reload 时载入新的模块实例，但全局闸门必须沿用同一份拦截状态。
-		// 把旧实例升级到当前原型，避免同一 Pi 进程一直执行上一个版本的方法。
+
 		Object.setPrototypeOf(gate, TerminalTransitionGate.prototype);
-		// 能复用全局实例说明当前进程已经展示过上一版插件界面；旧实例没有该字段。
+
 		if (typeof (gate as unknown as { hasVisibleFrame?: unknown }).hasVisibleFrame !== "boolean") {
 			(gate as unknown as { hasVisibleFrame: boolean }).hasVisibleFrame = true;
 		}

@@ -1,33 +1,7 @@
-// ACP compress 工具（工单 08 最小闭环）：模型驱动的压缩执行入口。
-//
-// 移植自 billion-context-pi 的 src/compress-tool.ts（MIT），按工单 08 裁剪；
-// 评审修复 F1 接上 prompt pack 的工具面：
-// - 工具名 `compress`，参数 { content: [{startId, endId, summary, topic?}],
-//   topic?, summaryMaxChars? }；内核的宽容解析器负责救回字符串化/尾逗号/
-//   截断的参数（parseCompressArgs）；
-// - 执行链：ensure 状态 → processTurn 分配引用 → applyCompression 建块 →
-//   sidecar 原子落盘 → 面板文本（块跨度 + 摘要指纹 + 警告/错误）；
-// - 参数解析失败按异常抛出（Pi 标记 isError，会话日志里成为重建时跳过的
-//   失败调用）；内核校验失败（0 块）以面板文本返回，错误逐条列出；
-// - 模块关闭或会话未命中 ACP（模型不在 ACP 策略下）时返回标准拒绝结果（isError +
-//   details.toolUnavailable，工单 01），不取用 Lazy engine 代理，也不执行任何压缩；
-// - prompt pack 工具面（上游 makeCompressTool + applyToolPromptOverrides 同款
-//   机制）：注册期按全局级 ACP 配置解析一次（Pi 宿主在注册时快照 description/
-//   promptSnippet/promptGuidelines，会话内不可变；无模型身份，取全局层），
-//   lean = 内核 lean 包的一行描述 + 精简参数说明，snippet/guideline 裁掉，
-//   压缩契约（LEAN_HOW_TO_COMPRESS）随 guidelines 走（本仓无系统提示接缝，
-//   上游放在系统提示 howToCompress 节）；full 维持现状。提示词覆写
-//   （howToCompressRules 槽位）追加进 guidelines，与 nudge 渲染同源生效。
-//
-// 未移植（按需再议）：死范围重复熔断、压缩失败重试上限、T3 重写拒绝。
-
-import type {
-  AgentToolResult,
-  ExtensionContext,
-  ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ExtensionContext, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { cloneWithDescriptions, LEAN_HOW_TO_COMPRESS, leanPack, type Pack } from "acp-kernel";
 import { Type } from "typebox";
+import { compactSegment, renderToolCardCall, renderToolCardResult, toolCardText } from "../../../kit/tool-card.ts";
 import type { Translator } from "../../../i18n/index.ts";
 import {
   EMPTY_ACP_ADVANCED_SETTINGS,
@@ -36,7 +10,11 @@ import {
 } from "../api.ts";
 import { resolveAcpRuntimeConfig } from "./config.ts";
 import type { AcpCompressionEngine } from "./engine.ts";
-import { acpToolUnavailable } from "./tool-guard.ts";
+import {
+  acpToolUnavailable,
+  isAcpToolUnavailableDetails,
+  TOOL_UNAVAILABLE_REASON,
+} from "./tool-guard.ts";
 
 const RangeSpec = Type.Object({
   startId: Type.String({
@@ -73,7 +51,6 @@ const CompressParams = Type.Object({
   ),
 });
 
-/** compress 工具的提示面覆写（上游 surface.ts 的 ToolPromptOverrides 同形状） */
 export interface AcpCompressToolSurface {
   readonly description?: string;
   readonly promptSnippet?: string;
@@ -81,7 +58,6 @@ export interface AcpCompressToolSurface {
   readonly paramDescriptions?: Readonly<Record<string, string>>;
 }
 
-/** 基准（full 包）guidelines：与上游 compress-tool.ts 的四条同款 */
 const BASE_GUIDELINES = [
   "Each message carries an acp tag with its mNNNNN ref, token size, and type. Compress ranges by their refs.",
   "Batch multiple unrelated ranges in one call — each gets its own topic and summary.",
@@ -89,8 +65,6 @@ const BASE_GUIDELINES = [
   "Never compress content the current step is actively using.",
 ];
 
-/** 内核 lean 包的 compress 工具面（toolPrompts + pi 适配的 toolExtras，运行时
- *  防御性读取——结构对不上时退回裁剪不变体） */
 function leanCompressSurface(pack: Pack): AcpCompressToolSurface {
   const toolPrompts = pack.surface.toolPrompts?.compress as
     | { description?: unknown; paramDescriptions?: unknown }
@@ -113,19 +87,13 @@ function leanCompressSurface(pack: Pack): AcpCompressToolSurface {
   };
 }
 
-/** compress 工具提示面解析（注册期一次，全局级；无配置 → undefined = 现状）：
- *  - promptPack=lean：内核 lean 包的一行描述 + 精简参数说明 + 空 snippet；压缩
- *    契约（LEAN_HOW_TO_COMPRESS）进 guidelines——本仓无系统提示接缝，上游放在
- *    系统 howToCompress 节；
- *  - 提示词覆写（howToCompressRules 槽位）：追加进 guidelines（lean 下替换契约），
- *    与 nudge 渲染同源。 */
 export function acpCompressToolSurfaceFor(acp: AcpAdvancedSettings | undefined): AcpCompressToolSurface | undefined {
   const resolved = resolveAcpRuntimeConfig({}, acp ?? EMPTY_ACP_ADVANCED_SETTINGS);
   const merged = resolved.merged;
   const overriddenRules = merged.prompts?.howToCompressRules;
   const pack: AcpPromptPack = resolved.promptPack;
   if (pack !== "lean") {
-    // full：维持现状；仅提示词覆写时追加进 guidelines（配置承诺的行为）
+
     return overriddenRules === undefined
       ? undefined
       : { promptGuidelines: [...BASE_GUIDELINES, overriddenRules] };
@@ -137,24 +105,53 @@ export function acpCompressToolSurfaceFor(acp: AcpAdvancedSettings | undefined):
   };
 }
 
+const TOOL_LABEL = "Compress";
+const OBJECT_WIDTH = 40;
+const STATUS_WIDTH = 64;
+
+export interface AcpCompressToolDetails {
+  readonly toolUnavailable?: typeof TOOL_UNAVAILABLE_REASON;
+  readonly blocksCreated?: number;
+  readonly tokensCompressed?: number;
+}
+
+function failureStatus(result: AgentToolResult<unknown> | undefined): string {
+  if (result && isAcpToolUnavailableDetails(result.details)) return "unavailable";
+  const firstLine = toolCardText(result ?? {}).split("\n").find((line) => line.trim()) ?? "";
+  return compactSegment(firstLine, STATUS_WIDTH) ?? "failed";
+}
+
+function compressStatusText(details: AcpCompressToolDetails | undefined): string | undefined {
+  const blocks = details?.blocksCreated;
+  if (typeof blocks !== "number") return undefined;
+  if (blocks <= 0) return "no blocks created";
+  const tokens = details?.tokensCompressed;
+  const tokensText = typeof tokens === "number" && tokens > 0 ? `, ${tokens} tokens` : "";
+  return `${blocks} block${blocks === 1 ? "" : "s"} compressed${tokensText}`;
+}
+
+function compressObject(args: { topic?: unknown; content?: unknown } | undefined): string | undefined {
+  const topic = compactSegment(typeof args?.topic === "string" ? args.topic : undefined, OBJECT_WIDTH);
+  if (topic) return topic;
+  return Array.isArray(args?.content)
+    ? (args.content.length === 1 ? "1 range" : `${args.content.length} ranges`)
+    : undefined;
+}
+
 export interface AcpCompressToolDeps {
-  /** Lazy engine 代理（工单 01）：未启用或非 ACP 模式时不取用（不会创建引擎） */
+
   readonly engine: () => AcpCompressionEngine | undefined;
   readonly t: Translator;
-  /** 当前会话是否走 ACP（模块启用且模型命中 ACP 策略；mod.ts 每次调用时解析） */
+
   readonly isSessionActive: (ctx: ExtensionContext) => boolean;
-  /** ACP 高级配置读取口（与引擎同源；注册期解析一次工具提示面，缺省 = full 现状） */
+
   readonly readAcpSettings?: () => AcpAdvancedSettings;
-  /** 降级清除接缝（工单 06 的第三路）：compress 真正建块并完成 sidecar 原子
-   *  落盘后幂等调用；未注入 = 没有降级状态可清 */
+
   readonly clearFallback?: () => void;
-  /** 展示收束接缝（工单 08）：ACP 压缩真正成功（建块且 sidecar 落盘）时把扩展
-   *  进行中的压缩消息收束为成功；未注入 = 无展示 */
+
   readonly conclude?: (ctx: ExtensionContext) => void;
 }
 
-/** 工具面覆写应用到定义（上游 surface.ts 的 applyToolPromptOverrides 同款；
- *  参数说明经内核 cloneWithDescriptions 按属性名深度替换） */
 function applySurface(
   def: ToolDefinition<typeof CompressParams>,
   surface: AcpCompressToolSurface | undefined,
@@ -183,11 +180,32 @@ export function makeAcpCompressTool(deps: AcpCompressToolDeps): ToolDefinition<t
     promptSnippet: "compress({ content: [{ startId, endId, summary }] }) or batch multiple ranges",
     promptGuidelines: [...BASE_GUIDELINES],
     parameters: CompressParams,
+    renderShell: "self",
+    renderCall(args, theme: Theme, context) {
+      return renderToolCardCall({ title: TOOL_LABEL, object: compressObject(args) }, theme, context);
+    },
+    renderResult(result, options, theme: Theme, context) {
+      const status = context?.isError
+        ? failureStatus(result)
+        : compressStatusText(result.details as AcpCompressToolDetails | undefined);
+      return renderToolCardResult(
+        {
+          title: TOOL_LABEL,
+          object: compressObject(context?.args),
+          status,
+          details: options.expanded ? toolCardText(result).split("\n") : [],
+        },
+        theme,
+        options,
+        context,
+      );
+    },
     async execute(toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
       if (!deps.isSessionActive(ctx)) return acpToolUnavailable(t);
       const engine = deps.engine();
       if (!engine) return acpToolUnavailable(t);
       let text: string;
+      let details: AcpCompressToolDetails = {};
       try {
         const outcome = await engine.executeCompress(
           {
@@ -199,17 +217,16 @@ export function makeAcpCompressTool(deps: AcpCompressToolDeps): ToolDefinition<t
           toolCallId,
         );
         text = outcome.text;
-        // 工单 06：ACP 压缩真正成功（建了块且 sidecar 落盘完成）才清降级；
-        // 没有建块（参数被内核拒掉的面板）不算成功，降级标记保持
+        details = { blocksCreated: outcome.blocksCreated, tokensCompressed: outcome.tokensCompressed };
+
         if (outcome.persisted) deps.clearFallback?.();
-        // 工单 08：ACP 压缩真正成功才收束扩展进行中消息（没建块不收束）
+
         if (outcome.persisted) deps.conclude?.(ctx);
       } catch (error) {
-        // 参数/状态错误：抛出让 Pi 标记 isError（会话日志里的失败调用，
-        // 重建流程会跳过它）
+
         throw error instanceof Error ? error : new Error(String(error));
       }
-      return { details: undefined, content: [{ type: "text", text }] };
+      return { details, content: [{ type: "text", text }] };
     },
   }, surface);
 }

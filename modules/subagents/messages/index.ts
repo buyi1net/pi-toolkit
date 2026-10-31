@@ -1,8 +1,3 @@
-// subagents 模块三语键表（自包含：本模块的文案只在这里；模块目录拿走则这些文案一起消失）。
-// 框架级键（command/menu/group/problem/language/common/hint/notify）在 i18n/messages.ts。
-// 三语（en / zh-CN / zh-TW）必须同时补齐：ZH_CN / ZH_TW 以 typeof EN 断言，缺键/多键 typecheck 报错；
-// 三语键集合相等与无未翻译值由 tests/pi-toolkit/i18n-messages.test.ts 兜底。
-
 import { formatMessage } from "../../../i18n/index.ts";
 import type { MessageTables, MessageVars, ResolvedLanguage, Translator } from "../../../i18n/index.ts";
 
@@ -43,7 +38,7 @@ const EN = {
   "module.subagents.tier.thinking.unset": "Model default",
   "module.subagents.route.label": "Tier routing",
   "module.subagents.route.description": "The tier routing resolved by the six-level config chain (read-only)",
-  // ── 工单 47：候选池编辑器文案 ──
+
   "module.subagents.pool.add": "＋ Add model",
   "module.subagents.pool.thinking": "Thinking {level}",
   "module.subagents.pool.replaceTitle": "Replace candidate · {tier}",
@@ -52,11 +47,11 @@ const EN = {
   "module.subagents.pool.lastCandidate": "A tier must keep at least one candidate; to empty a tier, edit the config file directly",
   "module.subagents.pool.deleteArmed": "Enter to confirm delete · Esc to cancel",
   "module.subagents.pool.hint": "  ↑↓ move · ←→ thinking · Shift+↑↓ reorder · Enter swap/add · Ctrl+D delete · Esc back",
-  // ── 工单 09：选择器凭据折叠与思考后缀文案 ──
+
   "module.subagents.pool.showUnauthenticated": "Show models without credentials ({count})",
   "module.subagents.pool.unauthTitle": "{title} · models without credentials",
   "module.subagents.pool.levelTitle": "{model} · thinking level",
-  // ── 工单 05：单一读口显示与接管文案 ──
+
   "module.subagents.pool.source": "effective from {source}",
   "module.subagents.pool.thinkingSource": "thinking from {source}",
   "module.subagents.pool.takeover": "Take over this tier (write the effective pool here)",
@@ -67,13 +62,13 @@ const EN = {
   "module.subagents.pool.lockedHint": "Fix modules.subagents in pi-toolkit.json directly, then reopen; Esc to exit",
   "module.subagents.pool.loadErrorTitle": "Failed to load the effective tier config",
   "module.subagents.pool.loadErrorHint": "Fix the config chain (e.g. the file PI_SUBAGENTS_CONFIG points to) and reopen; Esc to exit",
-  // ── 工单 44：状态 widget 与状态通知的状态语汇（显示层文案；状态机只出码）──
+
   "module.subagents.widget.status.starting": "starting…",
   "module.subagents.widget.status.running": "running",
   "module.subagents.widget.status.active": "active",
   "module.subagents.widget.status.waiting": "waiting",
   "module.subagents.widget.status.stalled": "stalled",
-  // ── 工单 45：存活三态文案（判定在 status.ts，这里只落显示词）──
+
   "module.subagents.widget.stale.toolRunning": "tool still running {duration} (no new output)",
   "module.subagents.widget.stale.noActivity": "no new activity {duration} (last: {last})",
   "module.subagents.widget.stalled.evidence": "stalled {duration} (snapshot and session both silent)",
@@ -89,6 +84,9 @@ const EN = {
   "module.subagents.widget.detail.paren": " ({label})",
   "module.subagents.widget.aggregate.title": "Subagent status",
   "module.subagents.widget.aggregate.overflow": "+{count} more running.",
+  "module.subagents.widget.aggregate.updates": "{count} updates",
+  "module.subagents.widget.batch.title": "Sub-agent batch",
+  "module.subagents.widget.batch.results": "{count} results",
   "module.subagents.widget.result.completed": "completed",
   "module.subagents.widget.result.cancelled": "cancelled",
   "module.subagents.widget.result.failed": "failed",
@@ -97,6 +95,7 @@ const EN = {
   "module.subagents.widget.result.failedExit": "failed (exit {code})",
   "module.subagents.widget.result.late": "(late delivery after detached wait)",
   "module.subagents.widget.result.tools": "{count} tools",
+  "module.subagents.widget.question.asks": "asks a question",
   "module.subagents.tool.subagent_models.display": "Read available models",
   "module.subagents.tool.spawn_agent.display": "Spawn subagent",
   "module.subagents.tool.wait_agent.display": "Wait for subagent",
@@ -205,7 +204,7 @@ const ZH_CN: typeof EN = {
   "module.subagents.tier.thinking.unset": "模型默认",
   "module.subagents.route.label": "tier 路由状态",
   "module.subagents.route.description": "六级配置链解析出的 tier 路由（只读）",
-  // ── 工单 47：候选池编辑器文案 ──
+
   "module.subagents.pool.add": "＋ 添加模型",
   "module.subagents.pool.thinking": "思考 {level}",
   "module.subagents.pool.replaceTitle": "替换 {tier} 的候选",
@@ -214,11 +213,11 @@ const ZH_CN: typeof EN = {
   "module.subagents.pool.lastCandidate": "档内最后一个候选不能删除（清空档位请直接编辑配置文件）",
   "module.subagents.pool.deleteArmed": "Enter 确认删除 · Esc 取消",
   "module.subagents.pool.hint": "  ↑↓ 选择 · ←→ 思考等级 · Shift+↑↓ 排序 · Enter 换/加 · Ctrl+D 删除 · Esc 退出",
-  // ── 工单 09：选择器凭据折叠与思考后缀文案 ──
+
   "module.subagents.pool.showUnauthenticated": "展开未认证模型（{count}）",
   "module.subagents.pool.unauthTitle": "{title} · 未认证模型",
   "module.subagents.pool.levelTitle": "{model} · 思考等级",
-  // ── 工单 05：单一读口显示与接管文案 ──
+
   "module.subagents.pool.source": "生效自 {source}",
   "module.subagents.pool.thinkingSource": "思考等级生效自 {source}",
   "module.subagents.pool.takeover": "接管本档（把生效候选池写入本层）",
@@ -249,6 +248,9 @@ const ZH_CN: typeof EN = {
   "module.subagents.widget.detail.paren": "（{label}）",
   "module.subagents.widget.aggregate.title": "子代理状态",
   "module.subagents.widget.aggregate.overflow": "+{count} more 运行中。",
+  "module.subagents.widget.aggregate.updates": "{count} 条更新",
+  "module.subagents.widget.batch.title": "子代理批次",
+  "module.subagents.widget.batch.results": "{count} 条结果",
   "module.subagents.widget.result.completed": "已完成",
   "module.subagents.widget.result.cancelled": "已取消",
   "module.subagents.widget.result.failed": "已失败",
@@ -257,6 +259,7 @@ const ZH_CN: typeof EN = {
   "module.subagents.widget.result.failedExit": "失败（退出码 {code}）",
   "module.subagents.widget.result.late": "（脱离等待后的迟到结果）",
   "module.subagents.widget.result.tools": "{count} 个工具",
+  "module.subagents.widget.question.asks": "发起提问",
   "module.subagents.tool.subagent_models.display": "读取可用模型",
   "module.subagents.tool.spawn_agent.display": "派发子代理",
   "module.subagents.tool.wait_agent.display": "等待子代理",
@@ -365,7 +368,7 @@ const ZH_TW: typeof EN = {
   "module.subagents.tier.thinking.unset": "模型預設",
   "module.subagents.route.label": "tier 路由狀態",
   "module.subagents.route.description": "六級設定鏈解析出的 tier 路由（僅供檢視）",
-  // ── 工單 47：候選池編輯器文案 ──
+
   "module.subagents.pool.add": "＋ 新增模型",
   "module.subagents.pool.thinking": "思考 {level}",
   "module.subagents.pool.replaceTitle": "替換 {tier} 的候選",
@@ -374,11 +377,11 @@ const ZH_TW: typeof EN = {
   "module.subagents.pool.lastCandidate": "檔內最後一個候選不能刪除（清空檔位請直接編輯設定檔）",
   "module.subagents.pool.deleteArmed": "Enter 確認刪除 · Esc 取消",
   "module.subagents.pool.hint": "  ↑↓ 選擇 · ←→ 思考等級 · Shift+↑↓ 排序 · Enter 換/加 · Ctrl+D 刪除 · Esc 退出",
-  // ── 工单 09：选择器凭据折叠与思考后缀文案 ──
+
   "module.subagents.pool.showUnauthenticated": "展開未認證模型（{count}）",
   "module.subagents.pool.unauthTitle": "{title} · 未認證模型",
   "module.subagents.pool.levelTitle": "{model} · 思考等級",
-  // ── 工单 05：单一读口显示与接管文案 ──
+
   "module.subagents.pool.source": "生效自 {source}",
   "module.subagents.pool.thinkingSource": "思考等級生效自 {source}",
   "module.subagents.pool.takeover": "接管本檔（把生效候選池寫入本層）",
@@ -409,6 +412,9 @@ const ZH_TW: typeof EN = {
   "module.subagents.widget.detail.paren": "（{label}）",
   "module.subagents.widget.aggregate.title": "子代理狀態",
   "module.subagents.widget.aggregate.overflow": "+{count} more 執行中。",
+  "module.subagents.widget.aggregate.updates": "{count} 條更新",
+  "module.subagents.widget.batch.title": "子代理批次",
+  "module.subagents.widget.batch.results": "{count} 條結果",
   "module.subagents.widget.result.completed": "已完成",
   "module.subagents.widget.result.cancelled": "已取消",
   "module.subagents.widget.result.failed": "已失敗",
@@ -417,6 +423,7 @@ const ZH_TW: typeof EN = {
   "module.subagents.widget.result.failedExit": "失敗（結束碼 {code}）",
   "module.subagents.widget.result.late": "（脫離等待後的遲到結果）",
   "module.subagents.widget.result.tools": "{count} 個工具",
+  "module.subagents.widget.question.asks": "發起提問",
   "module.subagents.tool.subagent_models.display": "讀取可用模型",
   "module.subagents.tool.spawn_agent.display": "派發子代理",
   "module.subagents.tool.wait_agent.display": "等待子代理",
@@ -488,19 +495,12 @@ const ZH_TW: typeof EN = {
   "module.subagents.tool.subagent_inspect.result.empty": "目前沒有執行中的子代理",
 };
 
-/** 本键表：全部模块键表在 modules/index.ts 聚合登记 */
 export const SUBAGENTS_MESSAGES = { en: EN, "zh-CN": ZH_CN, "zh-TW": ZH_TW } satisfies MessageTables;
 
-/** 模块内使用的键类型（kit/module.ts 的契约字段已收窄为 string） */
 export type SubagentsMessageKey = keyof typeof EN;
 
-/** 模块内取词函数（键收窄到本模块键表）：宿主注入的 toolkit 译者与独立兜底都实现它 */
 export type SubagentsTranslate = (key: SubagentsMessageKey, vars?: MessageVars) => string;
 
-/**
- * 只读本模块键表的译者（工单 44）：不依赖 modules/index.ts 的全局登记，
- * 供独立 `-e` 装载（子进程里没有宿主，全局键表从未登记）与测试直接取三语文案。
- */
 export function subagentsTableTranslator(language: ResolvedLanguage): Translator {
   const table: Record<string, string> = SUBAGENTS_MESSAGES[language];
   return (key, vars) => formatMessage(table[key], key, vars);

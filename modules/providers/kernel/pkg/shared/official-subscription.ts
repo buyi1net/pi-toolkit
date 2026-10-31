@@ -1,5 +1,3 @@
-// 官方订阅查询只处理协议与响应；OAuth 凭据从哪里读取由宿主适配器决定。
-
 import type { ProviderUsage, QuotaWindow } from './provider-contracts.ts';
 
 function numberValue(value: unknown): number | null {

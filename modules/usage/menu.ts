@@ -1,10 +1,3 @@
-// 模型与用量面板的用户入口与面板视图（工单 28）。
-//
-// 入口是子代理组的一行菜单（`usage.panel`）：进去是一页只读面板，展示
-// 当前会话 / 今日 / 本周 / 历史四个时间窗口、候选模型状态与代理/任务排行。
-// 数据全部来自 `usage.snapshot` 句柄，面板不解析任何 TUI 文本，也不直接读磁盘。
-// 余额/额度/健康状态未知时按“未知”展示，不显示成 0。
-
 import { Container, getKeybindings, Text, type SettingItem } from "@earendil-works/pi-tui";
 import type { Translator } from "../../i18n/index.ts";
 import type { MenuTheme } from "../../kit/menu/theme.ts";
@@ -20,7 +13,6 @@ import {
 } from "./api.ts";
 import type { UsageMessageKey } from "./messages/index.ts";
 
-/** 分组页里的入口行 id */
 export const USAGE_MENU_ITEM_ID = "usage.panel";
 
 const HEALTH_KEYS: Readonly<Record<string, UsageMessageKey>> = {
@@ -38,7 +30,6 @@ const OUTCOME_KEYS: Readonly<Record<string, UsageMessageKey>> = {
   cancelled: "module.usage.panel.outcome.cancelled",
 };
 
-/** 继承原因细分 → 面板文案键（工单 08；词汇表见 subagents 路由快照模块）。 */
 const INHERITANCE_CAUSE_KEYS: Readonly<Record<string, UsageMessageKey>> = {
   "pool-unconfigured": "module.usage.panel.routing.cause.pool-unconfigured",
   "hard-blocked": "module.usage.panel.routing.cause.hard-blocked",
@@ -47,7 +38,6 @@ const INHERITANCE_CAUSE_KEYS: Readonly<Record<string, UsageMessageKey>> = {
   unclassified: "module.usage.panel.routing.cause.unclassified",
 };
 
-/** Token 数量的紧凑显示：1234 → "1.2k" */
 export function formatTokenCount(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return "0";
   if (value < 1000) return String(Math.round(value));
@@ -85,7 +75,7 @@ function balanceText(model: UsageModelView, t: Translator): string {
 function quotaText(model: UsageModelView, t: Translator): string {
   if (model.quota == null) return t("module.usage.panel.unknown");
   if (model.quota.length === 0) return t("module.usage.panel.quotaNone");
-  // 额度窗口取剩余百分比最低的那个：最紧的约束对用户最有用
+
   const tightest = model.quota.reduce((a, b) => (b.remainingPercent < a.remainingPercent ? b : a));
   return t("module.usage.panel.quotaKnown", {
     label: tightest.label,
@@ -98,11 +88,6 @@ function outcomeLabel(outcome: string, t: Translator): string {
   return key ? t(key) : outcome;
 }
 
-/**
- * 路由标签（工单 08）：继承运行显示「继承父会话 + 原因」；按池运行按
- * 降级口径显示首选/降级；显式声明模型如实标注；旧记录（缺来源字段）
- * 维持工单 28 的降级口径（未知不伪装）。
- */
 function routingLabel(
   record: Pick<UsageRecord, "downgraded" | "modelSource" | "inheritanceCause">,
   t: Translator,
@@ -134,7 +119,6 @@ function rankSection(headerKey: UsageMessageKey, buckets: readonly UsageBreakdow
   ];
 }
 
-/** 面板正文（纯函数，供组件与自测共用）：四窗口 + 候选模型 + 代理/任务排行。 */
 export function buildUsagePanelReport(view: UsageSnapshotView, t: Translator): string {
   const lines: string[] = [];
   const windows: Array<[keyof UsageSnapshotView["windows"], UsageMessageKey]> = [
@@ -211,7 +195,6 @@ export interface UsagePanelOptions {
   readonly onDone: () => void;
 }
 
-/** 只读面板：打开时读一次快照，r 触发刷新后重读，Esc 返回上级菜单。 */
 export class UsagePanel extends Container {
   private readonly options: UsagePanelOptions;
   private readonly text: Text;
@@ -268,7 +251,6 @@ function usageMenuSummary(context: ModuleMenuContext): string {
   });
 }
 
-/** 模块的菜单行：一行入口，进去是模型与用量面板 */
 export function buildUsageMenuItems(context: ModuleMenuContext): readonly SettingItem[] {
   const t = context.t;
   return [

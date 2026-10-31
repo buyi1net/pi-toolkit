@@ -1,19 +1,3 @@
-// 视觉配置子菜单（工单 46 起在一级「模型与用量」分组下作为入口行，页内含模块开关）：
-// 页面行：
-//   视觉辅助     —— 模块总开关（工单 46 从一级收进页内；取值经统一改动入口落盘）
-//   视觉模型     —— SelectList 选 auto / off / 具体模型；改模型前先跑真实图片探测，通过才写盘
-//   项目层提示   —— 受信任项目层提供了路由时出现（只读）：菜单显示与写盘目标均为全局值
-//   刷新模型目录 —— 重读 Pi 的模型目录（不联网），成功后候选列表与目录版本号都刷新
-//   运行自检     —— 对当前生效路由发一张探测图（原向导 T 键的等价物），结果进诊断缓存
-//   路由状态     —— 只读展示全局路由
-//
-// 菜单只画界面：路由解析、合并、写盘、描述与缓存协议都在 facade.ts；菜单运行态接口只有
-// 「取门面快照」（snapshot）与「保存补丁」（save）两个动作。
-//
-// 原 setup.ts 里必须保留的业务流程都落在下面这些可单测的函数上：
-//   discoverCandidates / routePatchFor / saveRouteSelection / runVisionSelfCheck / refreshVisionCatalogue
-// Esc 取消长任务靠 startCancellable 的 AbortController；探测常量在 vision-probe.ts。
-
 import {
   type ExtensionContext,
   type ModelRegistry,
@@ -47,16 +31,13 @@ import {
 import { selectAutomaticPiVisionModel, testPiVisionModel } from "./pi-model-backend.ts";
 import { VISION_PROBE_EXPECTED, VISION_PROBE_IMAGE } from "./vision-probe.ts";
 
-/** 分组页里的入口行 id */
 export const VISION_MENU_ITEM_ID = "vision.settings";
 
-/** 模块开关字段（工单 46）：菜单的开关行与 schema 同源（开关行收进视觉配置页） */
 export const VISION_ENABLED_FIELD = enabledField(
   "module.vision.enabled.label",
   "module.vision.enabled.description",
 );
 
-/** 页内模块开关行 id（schema 行语义，走统一改动入口） */
 const ROW_ENABLED = "vision.enabled";
 
 const ROW_MODEL = "vision.settings.model";
@@ -67,10 +48,9 @@ const ROW_ROUTE = "vision.settings.route";
 
 const VALUE_AUTO = "auto";
 const VALUE_OFF = "off";
-/** 模型取值编码：provider + NUL + modelId；provider / modelId 里不会出现 NUL */
+
 const MODEL_VALUE_SEPARATOR = "\u0000";
 
-/** 菜单需要的模型注册表能力（取 ModelRegistry 的子集，方便 headless 自测塞 stub） */
 export type VisionMenuRegistry = Pick<
   ModelRegistry,
   | "getAll"
@@ -88,15 +68,14 @@ export interface VisionSelection {
 }
 
 export interface VisionCandidate extends VisionSelection {
-  /** 该供应商已配置认证；仅用于排序与候选描述 */
+
   readonly authenticated: boolean;
 }
 
-/** 菜单运行态接口（两个动作）：取门面快照、保存补丁 */
 export interface VisionMenuRuntime {
-  /** 取门面快照：菜单渲染与自检缓存需要的全部当前值 */
+
   snapshot(): VisionRouteSnapshot;
-  /** 保存补丁：路由只写全局层并重读合并；目录刷新与自检结果只更新缓存协议 */
+
   save(patch: VisionFacadePatch, options?: VisionSaveOptions): Promise<VisionRouteSnapshot>;
 }
 
@@ -107,10 +86,6 @@ function describeError(error: unknown): string {
 function singleLine(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
-
-// ─────────────────────────────────────────────────────────────
-// 纯逻辑：候选发现、取值编码、写盘补丁、诊断缓存键
-// ─────────────────────────────────────────────────────────────
 
 export function candidateKey(candidate: VisionSelection): string {
   return `${candidate.provider}${MODEL_VALUE_SEPARATOR}${candidate.modelId}`;
@@ -128,7 +103,6 @@ export function parseModelValue(value: string): VisionSelection | undefined {
   return provider && modelId ? { provider, modelId } : undefined;
 }
 
-/** 候选 = 模型目录里声明支持 image 且当前可用的模型；已认证的排前面，其余按 provider/model 排序 */
 export function discoverCandidates(registry: VisionMenuRegistry): VisionCandidate[] {
   const candidates: VisionCandidate[] = [];
   const seen = new Set<string>();
@@ -151,7 +125,6 @@ export function candidateKeys(candidates: readonly VisionCandidate[]): string {
   return candidates.map((candidate) => candidateKey(candidate)).join("|");
 }
 
-/** 保存前重扫目录用的比较：只比 provider/model 联合键 */
 export function sameCandidates(
   left: readonly VisionCandidate[],
   right: readonly VisionCandidate[],
@@ -167,7 +140,6 @@ export function routeSelectionValue(route: VisionRouteConfig): string {
   return VALUE_AUTO;
 }
 
-/** 选择器取值 → 路由补丁。auto 写 null 白名单，off 写空白名单，固定模型写 fixedModel */
 export function routePatchFor(value: string): Partial<VisionRouteConfig> | undefined {
   if (value === VALUE_AUTO) return { mode: "automatic", allowedModels: null };
   if (value === VALUE_OFF) return { mode: "automatic", allowedModels: [] };
@@ -181,7 +153,6 @@ export function routePatchFor(value: string): Partial<VisionRouteConfig> | undef
     : undefined;
 }
 
-/** 当前路由实际会调用的模型；off 返回 undefined，auto 走 Pi 的自动选择规则 */
 export function resolveRouteCandidate(
   route: VisionRouteConfig,
   registry: VisionMenuRegistry,
@@ -199,7 +170,6 @@ export function resolveRouteCandidate(
   return selection ? { provider: selection.provider, modelId: selection.modelId } : undefined;
 }
 
-/** 诊断缓存键：目录版本 + 当前选择 + 候选清单 + 会话当前模型 */
 export function diagnosticCacheKey(options: {
   readonly generation: number;
   readonly route: VisionRouteConfig;
@@ -223,7 +193,6 @@ export interface ProbeOutcome {
   readonly text: string;
 }
 
-/** 真实图片探测：发 6 格彩色格子图，6 格过 5 格判通过 */
 export async function probeVisionModel(
   registry: VisionMenuRegistry,
   selection: VisionSelection,
@@ -241,7 +210,6 @@ export interface SaveRouteResult {
   readonly reason?: string;
 }
 
-/** 保存路由：先重扫目录，候选变了就中止；路由补丁交给门面（只写全局层），由门面重读并刷新视觉链 */
 export async function saveRouteSelection(options: {
   readonly value: string;
   readonly openedWith: readonly VisionCandidate[];
@@ -269,7 +237,6 @@ export interface SelfCheckResult {
   readonly cached: boolean;
 }
 
-/** 运行自检：对当前生效路由发探测图，命中诊断缓存时直接回放，不重复请求 */
 export async function runVisionSelfCheck(options: {
   readonly t: Translator;
   readonly registry: VisionMenuRegistry;
@@ -336,7 +303,6 @@ export interface RefreshResult {
   readonly reason?: string;
 }
 
-/** 重读 Pi 的模型目录（不联网）；provider 报错时把细节带出来 */
 export async function refreshVisionCatalogue(
   registry: VisionMenuRegistry,
   signal?: AbortSignal,
@@ -357,10 +323,6 @@ export async function refreshVisionCatalogue(
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// UI：取消控制器 + 状态面板 + 模型选择器 + 主面板
-// ─────────────────────────────────────────────────────────────
-
 type StatusColor = "dim" | "warning" | "success" | "error";
 type StatusSetter = (text: string, color: StatusColor, running?: boolean) => void;
 
@@ -370,7 +332,6 @@ interface Cancellable {
   dispose(): void;
 }
 
-/** 自己的 AbortController，并把会话的 ctx.signal 一起接进来；Esc / 卸载时都从这里断路 */
 function startCancellable(parent: AbortSignal | undefined): Cancellable {
   const controller = new AbortController();
   const forward = (): void => controller.abort(parent?.reason);
@@ -399,7 +360,6 @@ export interface VisionStatusPanelOptions extends PanelEnv {
   readonly run: (signal: AbortSignal, setStatus: StatusSetter) => Promise<void>;
 }
 
-/** 一次异步动作的展示面板：运行中显示进度，结束后显示结果，Esc 取消或返回 */
 export class VisionStatusPanel extends Container {
   private readonly options: VisionStatusPanelOptions;
   private readonly controller: Cancellable;
@@ -471,7 +431,6 @@ export interface VisionModelPickerOptions extends PanelEnv {
   readonly onDone: (value?: string) => void;
 }
 
-/** 视觉模型选择器：SelectList 形态、输入即过滤；选具体模型先探测，auto 直接写盘 */
 export class VisionModelPicker extends Container {
   private readonly options: VisionModelPickerOptions;
   private readonly initialValue: string;
@@ -481,7 +440,7 @@ export class VisionModelPicker extends Container {
   private listChildIndex = 0;
   private readonly controller: Cancellable;
   private token = 0;
-  /** picking：选择列表；busy：探测/保存中（Esc 取消）；settled：结果显示中（Esc 返回） */
+
   private phase: "picking" | "busy" | "settled" = "picking";
 
   constructor(options: VisionModelPickerOptions) {
@@ -507,7 +466,7 @@ export class VisionModelPicker extends Container {
 
   handleInput(data: string): void {
     if (this.phase === "picking") {
-      // 导航键交给列表，其余输入进搜索框过滤（pi 原生 SelectSubmenu 同款分流）
+
       const kb = getKeybindings();
       const isNav =
         kb.matches(data, "tui.select.up") ||
@@ -538,7 +497,6 @@ export class VisionModelPicker extends Container {
     this.controller.abort(new DOMException("Disposed", "AbortError"));
   }
 
-  /** 建列表（重建过滤结果时也走这里，保证选中/取消挂钩一致） */
   private buildList(items: readonly SelectItem[]): SelectList {
     const list = new SelectList([...items], Math.min(items.length, 10), this.options.theme.select);
     list.onSelect = (item) => {
@@ -686,13 +644,12 @@ export class VisionModelPicker extends Container {
 
 export interface VisionPanelOptions extends PanelEnv {
   readonly onDone: (value: string) => void;
-  /** 页内模块开关行（工单 46）：由 buildVisionMenuItems 预构造后传入 */
+
   readonly enabledItem?: SettingItem;
-  /** 开关行取值变化经它走统一改动入口（onChange → applyMenuChange）落盘并提示重载 */
+
   readonly onFieldChange?: (id: string, value: string) => void;
 }
 
-/** 视觉配置页：SettingsList 默认开搜索、无标题行（搜索栏即页头，工单 46），子菜单各自负责自己的异步动作 */
 export class VisionPanel extends Container {
   private readonly options: VisionPanelOptions;
   private list: I18nSettingsList | undefined;
@@ -722,7 +679,6 @@ export class VisionPanel extends Container {
     this.list?.handleInput(data);
   }
 
-  /** 行显示回滚入口（与 SettingsPanel.updateValue 同名契约）：委托内层列表 */
   updateValue(id: string, newValue: string): void {
     this.list?.updateValue(id, newValue);
   }
@@ -769,7 +725,7 @@ export class VisionPanel extends Container {
       },
     );
     if (snapshot.projectLayer) {
-      // 决策 7：项目层提供了路由就提示（不预设值与全局一定不同），菜单仍显示与写盘全局值
+
       items.push({
         id: ROW_PROJECT_OVERRIDE,
         label: t("module.vision.projectOverride.label"),
@@ -851,7 +807,6 @@ export class VisionPanel extends Container {
   }
 }
 
-/** 模块的菜单行：一行入口，进去是视觉配置页（页内首行是模块开关，项目层提供路由时多一行提示） */
 export function buildVisionMenuItems(
   context: ModuleMenuContext,
   runtime: VisionMenuRuntime,

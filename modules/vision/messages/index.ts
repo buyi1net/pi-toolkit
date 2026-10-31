@@ -1,8 +1,3 @@
-// vision 模块三语键表（自包含：本模块的文案只在这里；模块目录拿走则这些文案一起消失）。
-// 框架级键（command/menu/group/problem/language/common/hint/notify）在 i18n/messages.ts。
-// 三语（en / zh-CN / zh-TW）必须同时补齐：ZH_CN / ZH_TW 以 typeof EN 断言，缺键/多键 typecheck 报错；
-// 三语键集合相等与无未翻译值由 tests/pi-toolkit/i18n-messages.test.ts 兜底。
-
 import type { MessageTables } from "../../../i18n/index.ts";
 
 const EN = {
@@ -71,6 +66,7 @@ const EN = {
   "module.vision.queryEmpty": "The vision question must not be empty.",
   "module.vision.queryNoImage": "This session has no recent screenshot to ask about; call computer_screenshot first.",
   "module.vision.queryFailed": "The auxiliary vision model could not answer this targeted question reliably; do not guess image content.",
+  "module.vision.queryModelSupportsImages": "The active model already accepts images; vision_query is only for text-only models.",
 } satisfies Record<string, string>;
 
 const ZH_CN: typeof EN = {
@@ -139,6 +135,8 @@ const ZH_CN: typeof EN = {
   "module.vision.queryEmpty": "视觉询问不能为空。",
   "module.vision.queryNoImage": "当前会话没有可供视觉询问的最近截图，请先调用 computer_screenshot。",
   "module.vision.queryFailed": "辅助视觉模型未能可靠回答本次定向问题，禁止根据图片内容猜测。",
+  "module.vision.queryModelSupportsImages": "当前模型已经支持图片输入，vision_query 仅供纯文本模型使用。",
+
 };
 
 const ZH_TW: typeof EN = {
@@ -207,10 +205,10 @@ const ZH_TW: typeof EN = {
   "module.vision.queryEmpty": "視覺詢問不能為空。",
   "module.vision.queryNoImage": "目前工作階段沒有可供視覺詢問的最近截圖，請先呼叫 computer_screenshot。",
   "module.vision.queryFailed": "輔助視覺模型未能可靠回答本次指定問題，禁止依圖片內容猜測。",
+  "module.vision.queryModelSupportsImages": "目前模型已支援圖片輸入，vision_query 僅供純文字模型使用。",
+
 };
 
-/** 本键表：全部模块键表在 modules/index.ts 聚合登记 */
 export const VISION_MESSAGES = { en: EN, "zh-CN": ZH_CN, "zh-TW": ZH_TW } satisfies MessageTables;
 
-/** 模块内使用的键类型（kit/module.ts 的契约字段已收窄为 string） */
 export type VisionMessageKey = keyof typeof EN;

@@ -1,12 +1,3 @@
-// 菜单行构造：一级菜单（问题行 + 各模块顶层行，按 MODULE_GROUPS 顺序排列）与共享二级页内容（模块行集合）。
-// 设计约定：SettingsList 一行只接受一个字符串，所以取值选择器回传"显示文案"，
-// 这里用同一份 i18n 选项表把文案映射回规范化取值（见 fieldValueFromLabel / languageFromLabel），
-// 因此语言切换后菜单重建即刷新全部显示，无需额外的显示态。
-// 短选项行（布尔与枚举 schema 字段）带 values 数组，回车/空格就地循环切换（pi 原生设置同款）：
-// 显示文案 → 规范化取值的反查与整行落盘由列表的统一改动入口（onChange）承担。
-// 一级结构：问题行 → 每组模块的顶层行（topLevel 钩子或默认规则）；
-// 需要专用编辑器的模块由 topLevel 入口行打开二级页，页内行集合由 pageId 聚合（buildPageItems）。
-
 import type { SettingItem } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ToolkitConfig } from "../config.ts";
@@ -37,7 +28,6 @@ import { ChoicePicker } from "./panels.ts";
 import type { MenuTheme } from "./theme.ts";
 import type { ModuleMenuContext } from "../module.ts";
 
-/** 语言行的 id */
 export const ID_LANGUAGE = "language";
 
 export interface MenuState {
@@ -52,25 +42,24 @@ export interface MenuState {
 export interface MenuBuildContext {
   readonly t: Translator;
   readonly theme: MenuTheme;
-  /** 打开菜单时的扩展上下文；模块自绘子菜单需要与宿主交互时用它 */
+
   readonly context: ExtensionContext;
-  /** pi 的配置目录：模块自写盘时用 */
+
   readonly agentDir: string;
   getState(): MenuState;
   getModuleConfig(moduleId: string): ModuleConfigRecord;
-  /** 顶层统一改动入口（id 与显示文案） */
+
   onChange(id: string, value: string): void;
-  /** 异步动作结束后请宿主重绘 */
+
   requestRender(): void;
-  /** 结构化配置写入事务（工单 19）：模块菜单把补丁写进自己的配置节，重绘请求由菜单层注入 */
+
   saveModuleConfig(moduleId: string, patch: ModuleConfigRecord, hooks?: ConfigWriteHooks): Promise<void>;
-  /** 自绘短选项行的就地切换注册（见 RowChangeEntry）：模块构造行时调用 */
+
   registerRowChange(id: string, entry: RowChangeEntry): void;
-  /** 重建整棵菜单：语言切换后用它刷新全部文案 */
+
   refresh(selectId?: string): void;
 }
 
-/** 一个取值的规范化代码与本地化文案 */
 export interface FieldOption {
   readonly code: string;
   readonly label: string;
@@ -81,7 +70,6 @@ function enumValueLabel(t: Translator, field: ConfigField, value: string): strin
   return key ? t(key) : value;
 }
 
-/** 字段的可选值：boolean 为 开/关，枚举取 schema 声明的 values */
 export function fieldOptions(t: Translator, field: ConfigField): FieldOption[] {
   if (isBooleanField(field)) {
     return [
@@ -96,7 +84,6 @@ function fieldCode(current: ModuleConfigScalar | undefined): string | undefined 
   return current === undefined ? undefined : String(current);
 }
 
-/** 当前值在菜单里显示的本地化文案 */
 export function fieldDisplayValue(
   t: Translator,
   field: ConfigField,
@@ -107,7 +94,6 @@ export function fieldDisplayValue(
   return option?.label ?? code ?? "";
 }
 
-/** 选择器回传的显示文案 → 规范化取值；匹配不上返回 undefined */
 export function fieldValueFromLabel(
   t: Translator,
   field: ConfigField,
@@ -117,7 +103,6 @@ export function fieldValueFromLabel(
   return option ? normalizeConfigValue(field, option.code) : undefined;
 }
 
-/** 语言选择项：四个设置加各自本地化文案 */
 export function languageOptions(t: Translator): { setting: LanguageSetting; label: string }[] {
   return LANGUAGE_SETTINGS.map((setting) => ({ setting, label: t(languageLabelKey(setting)) }));
 }
@@ -144,7 +129,6 @@ export function buildTopLevelItems(build: MenuBuildContext): SettingItem[] {
   return items;
 }
 
-/** 模块在一级的行：topLevel 钩子优先，缺省按默认规则（schema 字段行 + menuItems 入口行） */
 function moduleTopItems(build: MenuBuildContext, definition: ModuleDefinition): SettingItem[] {
   if (definition.topLevel) {
     return [...definition.topLevel(moduleMenuContext(build, definition))];
@@ -152,7 +136,6 @@ function moduleTopItems(build: MenuBuildContext, definition: ModuleDefinition): 
   return moduleItems(build, definition);
 }
 
-/** 构造传给模块钩子的菜单上下文（menuItems / topLevel 共用） */
 export function moduleMenuContext(
   build: MenuBuildContext,
   definition: ModuleDefinition,
@@ -174,7 +157,6 @@ export function moduleMenuContext(
   };
 }
 
-/** 共享二级页行集合：页主模块的行在前，其余同 pageId 模块按装配顺序追加 */
 export function buildPageItems(
   build: MenuBuildContext,
   pageId: string,
@@ -240,13 +222,6 @@ function moduleItems(build: MenuBuildContext, definition: ModuleDefinition): Set
   return items;
 }
 
-/**
- * schema 字段行的通用构造（骨架自动行与模块 topLevel 钩子共用）：
- * 全部 schema 字段都按就地切换构造（布尔 → 开/关，枚举 → schema 声明的 values），
- * 不做长度或类型筛选；行带 values 数组，回车/空格就地循环切换（pi 原生设置同款），
- * 取值经列表的统一改动入口（onChange）反查落盘；当前值在内部规范化（非法取值回落默认值），
- * label / description 缺省从字段键取。
- */
 export function schemaFieldRow(options: {
   readonly t: Translator;
   readonly id: string;

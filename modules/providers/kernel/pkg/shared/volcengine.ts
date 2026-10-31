@@ -1,7 +1,3 @@
-// 火山方舟 Agent Plan / Coding Plan 控制面查询。
-// 协议与签名规则移植自 cc-switch 0b5da51 coding_plan.rs；它使用 AK/SK，
-// 不能复用推理接口的 Bearer Key。
-
 import { createHash, createHmac } from 'node:crypto';
 import type { QuotaInfo, QuotaWindow } from './provider-contracts.ts';
 

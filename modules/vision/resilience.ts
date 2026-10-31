@@ -1,7 +1,3 @@
-// 视觉后端失败分类与熔断。
-// 思路移植自 dsh-vision-router/lib/vision-resilience.js(MIT),按 pi 扩展环境精简:
-// 保留"分类 → 决定换后端还是熔断 → 本轮全失败短路"三层,去掉凭证指纹与多会话 scope。
-
 export type FailureKind =
   | "AUTH"
   | "RATE_LIMIT"
@@ -17,7 +13,6 @@ export interface BackendFailure {
   retryAfterMs?: number;
 }
 
-// 分类正则沿用 dsh 调教过的集合与顺序:先确定性失败,后环境性失败
 const AUTH_PATTERNS = [/\b401\b/, /\b403\b/, /unauthorized/i, /invalid api[ -]?key/i, /forbidden/i, /authentication/i];
 const RATE_LIMIT_PATTERNS = [/\b429\b/, /rate.?limit/i, /too many requests/i];
 const TIMEOUT_PATTERNS = [/abort/i, /timeout/i, /etimedout/i, /timed ?out/i, /deadline exceeded/i];
@@ -36,7 +31,6 @@ const KIND_BY_PATTERN: Array<[FailureKind, RegExp[]]> = [
   ["QUOTA", QUOTA_PATTERNS],
 ];
 
-/** HTTP 状态码优先于报错文本分类。 */
 export function kindForStatus(status: number | undefined): FailureKind | undefined {
   if (status === 401 || status === 403) return "AUTH";
   if (status === 429) return "RATE_LIMIT";
@@ -55,7 +49,6 @@ export function classifyFailure(error: { status?: number; message: string; retry
   return { kind, retryAfterMs: error.retryAfterMs };
 }
 
-/** per-backend 熔断器:认证类熔断 10 分钟,限频按 Retry-After 冷却。 */
 const AUTH_TRIP_MS = 10 * 60 * 1000;
 const DEFAULT_RATE_COOLDOWN_MS = 60 * 1000;
 
@@ -86,8 +79,7 @@ export class VisionCircuit {
       hit.cooldownUntil = Math.max(hit.cooldownUntil ?? 0, now + cooldown);
       return;
     }
-    // INVALID_REQUEST / TIMEOUT / SERVER / NETWORK / OTHER 不熔断：
-    // 调用方可能修正图片、参数或请求体后再次使用同一后端。
+
   }
 
   clear(id: string): void {
@@ -95,7 +87,6 @@ export class VisionCircuit {
   }
 }
 
-/** 本轮失败记忆:全部后端都失败后,后续调用不再碰网络。 */
 export class TurnMemory {
   private turn = 0;
   private failedAll = false;
@@ -145,7 +136,6 @@ const CODE_FOR_ONLY_KIND: Partial<Record<FailureKind, string>> = {
   TIMEOUT: "VISION_TIMEOUT",
 };
 
-/** 组结构化失败 JSON:工具描述里的 FAILURE SEMANTICS 承诺的就是这个形状。 */
 export function buildFailureJson(kinds: FailureKind[], attempted: string[]): string {
   const set = new Set(kinds);
   const correctable = set.has("INVALID_REQUEST");

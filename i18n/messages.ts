@@ -1,21 +1,9 @@
-// 框架级三语键表：引擎/根层/kit 与菜单框架共用的键（command/menu/group/problem/language/common/hint/notify）。
-// 模块自己的文案不在这里——各模块 messages/ 自带键表，modules/index.ts 聚合登记。
-// 三语（en / zh-CN / zh-TW）必须同时补齐：ZH_CN / ZH_TW 以 typeof EN 断言，缺键/多键 typecheck 报错；
-// 三语键集合相等与无未翻译值由 tests/pi-toolkit/i18n-messages.test.ts 兜底。
-
-// 归属规则（工单 09 定案）：被 kit 或根层消费的框架级键在本表；仅被模块消费的键进模块 messages/。
-// 当前菜单框架的键（hint/group/common/language 等）全部落在本表；
-// 若将来出现只被 kit/menu 自己消费、且不属于上述前缀的新键，再建 kit/menu/messages.ts，不塞进本表。
-
 import type { ResolvedLanguage } from "./engine.ts";
 
-/** 一种语言下的键表：键 → 文案模板 */
 export type MessageTable = Record<string, string>;
 
-/** 键表全集：三语各一份（模块自带的 messages/ 也用这个形状） */
 export type MessageTables = Record<ResolvedLanguage, MessageTable>;
 
-/** 占位符取值：{name} 由 Translator 替换 */
 export type MessageVars = Record<string, string | number>;
 
 const EN = {
@@ -27,7 +15,7 @@ const EN = {
   "group.subagents": "Subagents",
   "problem.config": "Config file problem",
   "problem.module": "Module failed to load",
-  /** {label}：{source} — {detail} */
+
   "problem.summary": "{label}: {source} — {detail}",
   "language.label": "Language",
   "language.description": "Language used by the pi-toolkit menus",
@@ -124,8 +112,6 @@ const ZH_TW: typeof EN = {
   "notify.nonInteractive": "/pi-toolkit 只能在 pi TUI 中使用；本次沒有變更設定",
 };
 
-/** 框架级键表：引擎/根层/kit 共用的文案都在这里，模块键表由 modules/index.ts 聚合登记 */
 export const FRAMEWORK_MESSAGES = { en: EN, "zh-CN": ZH_CN, "zh-TW": ZH_TW } satisfies MessageTables;
 
-/** 框架级键类型：kit/根层自己的数据结构用它做局部 keyof 校验（模块键类型在各自 messages/ 里） */
 export type FrameworkMessageKey = keyof typeof EN;

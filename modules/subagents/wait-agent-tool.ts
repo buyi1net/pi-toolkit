@@ -1,11 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { createParentUpdateQueue, type ParentSessionUpdate } from "./parent-update-queue.ts";
 import type { RuntimeRegistry } from "./registry.ts";
 import type { SubagentsTranslate } from "./messages/index.ts";
+import { compactRenderText, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 
-/** wait_agent 的公开时限边界；工具 schema 与运行时校验共用这组值。 */
 export const WAIT_AGENT_DEFAULT_TIMEOUT_MS = 30_000;
 export const WAIT_AGENT_MIN_TIMEOUT_MS = 1_000;
 export const WAIT_AGENT_MAX_TIMEOUT_MS = 120_000;
@@ -13,7 +13,7 @@ export const WAIT_AGENT_MAX_TIMEOUT_MS = 120_000;
 export interface WaitAgentToolDeps {
   readonly getArtifactDir: (sessionDir: string, sessionId: string) => string;
   readonly registry: RuntimeRegistry;
-  /** 测试接缝；生产默认短轮询以观察 watcher 写入的持久化队列。 */
+
   readonly pollIntervalMs?: number;
   readonly t?: SubagentsTranslate;
 }
@@ -40,7 +40,7 @@ function result(value: WaitAgentResult, details: Record<string, unknown> = {}) {
 }
 
 function projectUpdate(update: ParentSessionUpdate): NonNullable<WaitAgentResult["update"]> {
-  // final_text 属于独立宿主回注投影，不能随 terminal 摘要经 wait_agent 返回。
+
   return {
     update_id: update.update_id,
     update_seq: update.update_seq,
@@ -52,19 +52,8 @@ function projectUpdate(update: ParentSessionUpdate): NonNullable<WaitAgentResult
   };
 }
 
-function compactRenderText(value: unknown): string {
-  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
-}
-
 function collapsedRenderText(value: unknown, maxWidth: number): string {
   return truncateToWidth(compactRenderText(value), maxWidth, "…");
-}
-
-function updateTone(status: string): "success" | "error" | "warning" | "toolOutput" {
-  if (status === "completed") return "success";
-  if (status === "failed") return "error";
-  if (status === "interrupted") return "warning";
-  return "toolOutput";
 }
 
 function waitStatusText(status: string, t?: SubagentsTranslate): string {
@@ -134,11 +123,11 @@ function waitForUpdate(
   });
 }
 
-/** 注册只等待当前父会话更新队列的 Codex v2 wait_agent 工具。 */
 export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps): void {
   pi.registerTool({
     name: "wait_agent",
     label: "Wait Agent",
+    renderShell: "self",
     description:
       "Wait for the next update in the current parent session queue. " +
       "This does not take a target list and a timeout never cancels a sub-agent. " +
@@ -152,38 +141,48 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
         maximum: WAIT_AGENT_MAX_TIMEOUT_MS,
       })),
     }),
-    renderCall(_args, theme) {
-      return new Text(
-        theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.wait_agent.display") ?? "Wait for subagent")),
-        0,
-        0,
+    renderCall(_args, theme, context) {
+      return renderToolCardCall(
+        { title: deps.t?.("module.subagents.tool.wait_agent.display") ?? "Wait for subagent" },
+        theme,
+        context,
       );
     },
-    renderResult(result, options, theme) {
+    renderResult(result, options, theme, context) {
       const details = result.details as Partial<WaitAgentResult> & {
         code?: unknown;
       } | undefined;
       const update = details?.update;
       if (!update) {
         const message = waitNoUpdateMessage(details ?? {}, deps.t);
-        const tone = details?.code === "cancelled" ? "warning" : "toolOutput";
-        return new Text(theme.fg(tone, options.expanded ? message : collapsedRenderText(message, 48)), 0, 0);
+        return renderToolCardResult(
+          { title: deps.t?.("module.subagents.tool.wait_agent.display") ?? "Wait for subagent", status: options.expanded ? message : collapsedRenderText(message, 48) },
+          theme,
+          options,
+          context,
+        );
       }
       const fullTaskName = compactRenderText(update.task_name) || "subagent";
-      const fullSummary = compactRenderText(update.summary);
       const taskName = options.expanded ? fullTaskName : collapsedRenderText(fullTaskName, 20);
       const statusCode = compactRenderText(update.status) || "unknown";
       const status = waitStatusText(statusCode, deps.t);
-      const summary = options.expanded ? fullSummary : collapsedRenderText(fullSummary, 28);
-      const headline = `${taskName} — ${status}${summary ? `: ${summary}` : ""}`;
-      const line = theme.fg(updateTone(statusCode), headline);
-      if (!options.expanded) return new Text(line, 0, 0);
+      const summary = options.expanded ? compactRenderText(update.summary) : collapsedRenderText(update.summary, 28);
       const metadata = [
         `kind: ${compactRenderText(update.kind)}`,
         `agent: ${compactRenderText(update.agent_id)}`,
         `update: ${compactRenderText(update.update_id)}`,
-      ].join("\n");
-      return new Text(`${line}\n${theme.fg("dim", metadata)}`, 0, 0);
+      ];
+      return renderToolCardResult(
+        {
+          title: deps.t?.("module.subagents.tool.wait_agent.display") ?? "Wait for subagent",
+          object: taskName,
+          status: `${status}${summary ? `: ${summary}` : ""}`,
+          details: metadata,
+        },
+        theme,
+        options,
+        context,
+      );
     },
     async execute(_toolCallId, raw, signal, _onUpdate, ctx: ExtensionContext) {
       const requested = (raw as { timeout_ms?: unknown } | undefined)?.timeout_ms;

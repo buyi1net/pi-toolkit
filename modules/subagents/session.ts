@@ -37,7 +37,6 @@ export interface MessageEntry extends SessionEntry {
 
 export type SeededSubagentSessionMode = "lineage-only" | "fork";
 
-/** 当前新建 loadout 的版本;缺少该字段的快照按 legacy 兼容路径处理。 */
 export const SUBAGENT_LOADOUT_VERSION = 2;
 
 function getForkContentLines(parentSessionFile: string): string[] {
@@ -53,7 +52,7 @@ function getForkContentLines(parentSessionFile: string): string[] {
         break;
       }
     } catch {
-      // ignore malformed lines
+
     }
   }
 
@@ -88,100 +87,59 @@ export function seedSubagentSessionFile(params: {
   writeFileSync(params.childSessionFile, lines.join("\n") + "\n", "utf8");
 }
 
-/**
- * A snapshot of everything needed to reconstruct a subagent's sandbox when its
- * session is later resumed via `subagent_message({ sessionId })`.
- *
- * Written next to the session file as `<sessionFile>.loadout.json` at spawn
- * time. Resume replays this exact snapshot so the reincarnated process gets the
- * the same tool restriction, model, identity, and spawn whitelist,
- * cwd, and config dir it originally ran with. Pi's normal extension
- * discovery remains enabled during resume, just as it is at launch.
- * Storing the resolved loadout (rather than re-deriving from the agent `.md`
- * by name) keeps
- * resume faithful even if the agent definition is later edited, moved, or
- * deleted.
- */
 export interface SubagentLoadout {
-  /** 新 spawn 写入的版本标记;旧快照缺少该字段,保留 legacy resume 兼容。 */
+
   snapshotVersion?: number;
-  /** 新旧协议接缝；旧快照缺省为 legacy-v1。 */
+
   protocol?: SubagentProtocol;
-  /** Agent profile name (for PI_SUBAGENT_AGENT); null for agentless spawns. */
+
   agent: string | null;
-  /** The `--tools` allowlist string, or null when the spawn was unrestricted. */
+
   toolAllowlist: string | null;
-  /** Model id (without thinking suffix), or null to use the session default. */
+
   model: string | null;
-  /** 完整宿主执行身份；公开协议使用模型名称或 provider/model。 */
+
   modelIdentity?: { provider: string; id: string; api: string; baseUrl: string } | null;
-  /** Resolved pane surface for nested Herdr/tmux resume. */
+
   surfaceKind?: "herdr" | "tmux";
-  /** Thinking level appended to the model as `model:level`, or null. */
+
   thinking: string | null;
-  /** Spawn 显式指定的思考等级,优先于 frontmatter thinking 与 model 自带后缀。 */
+
   thinkingOverride?: string | null;
-  /**
-   * 档位解析出的默认思考等级（工单 23，spawn 时快照）。覆盖链低于
-   * frontmatter thinking、高于模型自带 ":level" 后缀；仅作记录与 resume
-   * 重放，不影响已在 thinkingOverride/thinking 里确定的更高优先级。
-   */
+
   tierThinking?: string | null;
-  /**
-   * fallback 继承的父会话思考等级（工单 06）：池未配置/全池状态阻断时按
-   * 计划写入（ADR 0006 决策 7：继承路径把父会话等级作为显式参数传给子
-   * 进程），位于覆盖链最顶层。resume 与拼 argv 按同一链重放；旧快照缺省
-   * 为 null，行为不变。
-   */
+
   parentThinking?: string | null;
-  /**
-   * 本次 spawn 的路由快照（工单 06）：候选池、首选、实际选中、跳过候选
-   * 及原因、继承原因、生效层来源、生效思考等级及其来源。resume/recover
-   * 重建运行态与所有展示面的唯一数据源；旧快照缺省为 null 按现状降级。
-   */
+
   routing?: LoadoutRoutingSnapshot | null;
-  /** How the identity text was applied: append/replace, or null. */
+
   systemPromptMode: "append" | "replace" | null;
-  /** The system-prompt/identity text, only when it lived in the system prompt. */
+
   identity: string | null;
-  /** Agents this subagent was allowed to spawn (for PI_SUBAGENT_ALLOWED). */
+
   spawnable: string[] | null;
-  /** Whether the agent auto-exits (informational; resume forces autonomous). */
+
   autoExit: boolean;
-  /** Working directory the subagent ran in, or null. */
+
   cwd: string | null;
-  /** PI_CODING_AGENT_DIR the subagent resolved config/extensions from, or null. */
+
   agentDir: string | null;
-  /**
-   * 请求的模型档位(归一化 fast/balanced/deep),仅作记录;launch 已把 tier
-   * 解析成具体 model 存入 model 字段,resume 一律用具体 model,不随配置漂移。
-   */
+
   tier?: ModelTier | null;
-  /** 仅用于展示和结果聚合的并行分组标签;resume 时随原快照继承。 */
+
   cohortId?: string;
-  /**
-   * 持久团队成员标记(member: true spawn):resume/dependsOn 跨 turn 判定
-   * 用——member 无进程级终态,不可作为 dependsOn 目标;旧快照缺省为 false。
-   */
+
   member?: boolean | null;
 }
 
-/** Path of the loadout sidecar written next to a subagent session file. */
 export function loadoutSidecarPath(sessionFile: string): string {
   return `${sessionFile}.loadout.json`;
 }
 
-/**
- * loadout 实际生效的思考等级（工单 27）：与 applySandboxToParts 拼 argv
- * 的覆盖链同一口径（工单 06 起含 parentThinking 顶层，实现收在
- * routing-snapshot.ts 的 resolveAppliedThinking，三处不漂移）。
- * 状态行展示与运行态登记共用本函数，不各自另算一套。
- */
 export function appliedLoadoutThinking(loadout: SubagentLoadout): string | null {
   return resolveAppliedThinking(loadout).level;
 }
 
-/** Persist a subagent's resolved sandbox loadout beside its session file. */
 export function writeSubagentLoadout(sessionFile: string, loadout: SubagentLoadout): void {
   try {
     writeFileSync(loadoutSidecarPath(sessionFile), JSON.stringify(loadout), "utf8");
@@ -191,7 +149,6 @@ export function writeSubagentLoadout(sessionFile: string, loadout: SubagentLoado
   }
 }
 
-/** Read a subagent's loadout snapshot, or null if absent/unparseable. */
 export function readSubagentLoadout(sessionFile: string): SubagentLoadout | null {
   try {
     const p = loadoutSidecarPath(sessionFile);
@@ -204,27 +161,15 @@ export function readSubagentLoadout(sessionFile: string): SubagentLoadout | null
   }
 }
 
-// ── 父侧锚定的 loadout 快照(resume 授权单一真源)──────────────────────
-//
-// 信任模型(诚实边界):子代理与扩展宿主运行在同一用户下,任何同用户进程
-// 原则上都写得了双方的目录——锚定快照不提供绝对隔离。它提供的是一致性
-// 交叉校验:子代理可写的 session sidecar(`.loadout.json`)与父侧锚定
-// 副本必须逐字段一致,resume 才放行;以锚定副本为运行配置。篡改者必须
-// 同时一致地改写两份独立位置(tree)的副本才能扩权——这堵死了“只改
-// session sidecar 即可扩权”的廉价路径,并让篡改可检测(不静默放宽)。
-
-/** 父侧锚定副本:内容同 SubagentLoadout,额外记录被锚定的 session 路径。 */
 export interface AnchoredSubagentLoadout extends SubagentLoadout {
-  /** 被锚定的子代理 session 文件绝对路径(containment 精确匹配基准)。 */
+
   sessionFile: string;
 }
 
-/** 锚定副本存放目录(父会话 artifactDir 下,父进程控制)。 */
 export function anchoredLoadoutPath(artifactDir: string, sessionFile: string): string {
   return join(artifactDir, "loadouts", `${basename(sessionFile)}.loadout.json`);
 }
 
-/** 在父会话 artifactDir 写入锚定副本;返回写入路径。 */
 export function writeAnchoredLoadout(
   artifactDir: string,
   sessionFile: string,
@@ -240,7 +185,6 @@ export function writeAnchoredLoadout(
   return path;
 }
 
-/** 读取锚定副本;缺失/损坏返回 null,由调用方按父 registry 的 anchored 标记决定是否拒绝 legacy fallback。 */
 export function readAnchoredLoadout(
   artifactDir: string,
   sessionFile: string,
@@ -258,11 +202,6 @@ export function readAnchoredLoadout(
   }
 }
 
-/**
- * 比较 session sidecar 与锚定副本的安全相关字段,返回不一致的字段名列表。
- * 这些字段共同决定 resume 时的授权面(工具白名单、繁衍白名单、身份、
- * 模型、agentDir、cwd、member 标记):任何被改动都视为篡改/损坏。
- */
 const LOADOUT_SECURITY_FIELDS = [
   "snapshotVersion",
   "protocol",
@@ -274,8 +213,7 @@ const LOADOUT_SECURITY_FIELDS = [
   "thinking",
   "thinkingOverride",
   "tierThinking",
-  // 工单 06：parentThinking 是覆盖链顶层、直接决定子进程 --model 参数的
-  // 生效思考等级，锚定副本与 sidecar 的漂移必须可检测。
+
   "parentThinking",
   "systemPromptMode",
   "identity",
@@ -323,38 +261,23 @@ export function diffSubagentLoadouts(
   return diffs;
 }
 
-// ── Name registry ────────────────────────────────────────────────────────────
-// Each spawner session (the top-level pi session, or a worker that spawns its
-// own children) gets a registry mapping a subagent's display name to the
-// session file it ran in. Names are unique per spawner session and persist on
-// disk, so `subagent_message({ name })` can steer a running subagent or resume
-// a finished one by the same handle — even across a pi restart. The registry
-// lives in the spawner's own artifact dir, which is directly addressable from
-// the spawner's session id (no sessions-tree scan, so resume stays fast).
-
 export interface NameRegistryEntry {
-  /** Absolute path to the subagent's session .jsonl file. */
+
   sessionFile: string;
-  /** Canonical session header id (kept for display/lineage). */
+
   sessionId: string | null;
-  /** 仅用于展示和结果聚合的并行分组标签。 */
+
   cohortId?: string;
-  /**
-   * True when the parent wrote an anchored loadout for this spawn. This marker
-   * lives in the parent registry so deleting the anchor cannot silently turn a
-   * new snapshot into a legacy resume.
-   */
+
   anchored?: boolean;
 }
 
 export type NameRegistry = Record<string, NameRegistryEntry>;
 
-/** Path of the name registry for a given spawner session's artifact dir. */
 export function nameRegistryPath(artifactDir: string): string {
   return join(artifactDir, "subagent-registry.json");
 }
 
-/** Read a spawner session's name registry, or {} if absent/corrupt. */
 export function readNameRegistry(artifactDir: string): NameRegistry {
   try {
     const p = nameRegistryPath(artifactDir);
@@ -367,16 +290,6 @@ export function readNameRegistry(artifactDir: string): NameRegistry {
   }
 }
 
-/**
- * Register (or overwrite) a name → session mapping for a spawner session.
- * Writes atomically (temp file + rename) so a concurrent reader never sees a
- * partial registry.
- */
-// 同一进程内的串行化队列:并发 spawn 的 registerName 是 read-modify-write,
-// 无队列时后写会覆盖先写,导致某个名字无法 resume。
-
-// 注:registerName 是全同步函数(无 await),JS 单线程下天然串行,并行 spawn
-// 不会造成 read-modify-write 交错覆盖(2026-08-30 审查复核结论)。
 export function registerName(
   artifactDir: string,
   name: string,
@@ -391,13 +304,11 @@ export function registerName(
     writeFileSync(tmp, JSON.stringify(registry, null, 2), "utf8");
     renameSync(tmp, p);
   } catch (error) {
-    // Best-effort: a failed registration only means resume-by-name won't find
-    // this subagent later; it never breaks the spawn itself.
+
     debugLog(`Could not register subagent name ${name}`, error);
   }
 }
 
-/** Resolve a name to its registry entry within a spawner session, or null. */
 export function resolveNameInRegistry(
   artifactDir: string,
   name: string,
@@ -414,28 +325,11 @@ function readEntries(sessionFile: string): SessionEntry[] {
     .map((line) => JSON.parse(line) as SessionEntry);
 }
 
-/**
- * Return the id of the last entry in the session file (current branch point / leaf).
- */
 export function getLeafId(sessionFile: string): string | null {
   const entries = readEntries(sessionFile);
   return entries.length > 0 ? entries[entries.length - 1].id : null;
 }
 
-/**
- * Read the canonical session id from a session file's header.
- *
- * pi's `--session <id>` flag resolves against this header `id` (exact match,
- * then prefix), NOT the filename — so this is the value to hand back to the
- * orchestrator for follow-ups.
- */
-/**
- * Read only the first line of a file without loading the whole thing into
- * memory. Session files grow to many MB, but the header we need is always the
- * first JSON line, so reading a small prefix keeps header lookups cheap — this
- * is what makes scanning a large session tree fast enough to avoid blocking the
- * event loop. Returns the first line (sans trailing newline), or null.
- */
 function readFirstLine(path: string, maxBytes = 65536): string | null {
   let fd: number | undefined;
   try {
@@ -443,7 +337,7 @@ function readFirstLine(path: string, maxBytes = 65536): string | null {
     const buf = Buffer.allocUnsafe(maxBytes);
     const bytes = readSync(fd, buf, 0, maxBytes, 0);
     if (bytes <= 0) return null;
-    const nl = buf.indexOf(0x0a); // '\n'
+    const nl = buf.indexOf(0x0a);
     const end = nl === -1 || nl >= bytes ? bytes : nl;
     return buf.toString("utf8", 0, end);
   } catch {
@@ -474,30 +368,11 @@ function readHeaderId(sessionFile: string): string | null {
   }
 }
 
-/**
- * Resolve a session id (or id prefix) to a session file path by scanning every
- * `*.jsonl` under `sessionsRoot` and matching the header `id`. Mirrors pi's own
- * resolution order: exact match first, then prefix match. Most recently
- * modified file wins on ties. Returns null when nothing matches.
- */
-/**
- * In-process index of session id → session file, per sessions root.
- *
- * Resolving a session id naively walks every `.jsonl` under the sessions tree
- * and reads each header. With a few thousand sessions that is thousands of
- * synchronous open/read/stat syscalls — on the extension host's single thread
- * that blocks the entire terminal UI for many seconds (measured ~67s on a
- * 2010-file tree). To avoid that, we build the index once per root and cache
- * it; subsequent lookups are O(1). The cache is validated cheaply (a directory
- * listing plus statSync-only mtime checks) on every call, so new sessions are
- * picked up without re-reading unchanged headers and without ever freezing the
- * UI again.
- */
 interface SessionIndex {
   idToFile: Map<string, { path: string; mtime: number }>;
-  /** file path → mtime when indexed (staleness detection). */
+
   files: Map<string, number>;
-  /** top-level dir signature used to detect newly added cwd dirs. */
+
   topSig: string;
 }
 const sessionIndexCache = new Map<string, SessionIndex>();
@@ -528,7 +403,6 @@ function topLevelSignature(root: string): string {
   return parts.join("|");
 }
 
-/** Recursively index new/changed .jsonl files under dir into idx. */
 function indexDir(dir: string, idx: SessionIndex): void {
   let entries: import("node:fs").Dirent[];
   try {
@@ -548,8 +422,8 @@ function indexDir(dir: string, idx: SessionIndex): void {
         continue;
       }
       const known = idx.files.get(full);
-      if (known !== undefined && known === mtime) continue; // unchanged
-      const id = readHeaderId(full); // only read headers for new/changed files
+      if (known !== undefined && known === mtime) continue;
+      const id = readHeaderId(full);
       idx.files.set(full, mtime);
       if (!id) continue;
       const prev = idx.idToFile.get(id);
@@ -566,12 +440,12 @@ function getSessionIndex(sessionsRoot: string): SessionIndex {
   if (!idx) {
     idx = { idToFile: new Map(), files: new Map(), topSig: sig };
     sessionIndexCache.set(sessionsRoot, idx);
-    indexDir(sessionsRoot, idx); // first build: full scan, once per process
+    indexDir(sessionsRoot, idx);
   } else if (idx.topSig !== sig) {
     idx.topSig = sig;
-    indexDir(sessionsRoot, idx); // a cwd dir was added/changed: incremental rescan
+    indexDir(sessionsRoot, idx);
   } else {
-    indexDir(sessionsRoot, idx); // cheap: stats files, reads only new/changed headers
+    indexDir(sessionsRoot, idx);
   }
   return idx;
 }
@@ -586,12 +460,10 @@ function lookupSessionIndex(
   idx: { idToFile: Map<string, { path: string; mtime: number }> },
   sessionId: string,
 ): string | null {
-  // Exact match first.
+
   const exact = idx.idToFile.get(sessionId);
   if (exact && existsSync(exact.path)) return exact.path;
 
-  // Prefix match: most recently modified wins (ids are unique in practice, so
-  // this is only a convenience for hand-typed short prefixes).
   let best: { path: string; mtime: number } | null = null;
   for (const [id, rec] of idx.idToFile) {
     if (!id.startsWith(sessionId)) continue;
@@ -601,37 +473,21 @@ function lookupSessionIndex(
   return best ? best.path : null;
 }
 
-/**
- * Async variant used by the interactive resume path. Index building/refresh is
- * synchronous I/O, which can take many seconds on a cold OS page cache with a
- * few thousand sessions; running it synchronously would block the extension
- * host's single thread and freeze the terminal UI. Deferring to a macrotask
- * keeps the event loop responsive. The heavy work only happens on the first
- * resolution per process (and incrementally thereafter); warm lookups are ~50ms.
- */
 export async function resolveSessionFileByIdAsync(
   sessionId: string,
   sessionsRoot: string,
 ): Promise<string | null> {
   if (!sessionId || !existsSync(sessionsRoot)) return null;
-  // Let the event loop breathe (and the UI repaint) before the sync scan.
+
   await new Promise<void>((r) => setImmediate(r));
   const idx = getSessionIndex(sessionsRoot);
   return lookupSessionIndex(idx, sessionId);
 }
 
-/** Test hook: drop the cached session index so tests start clean. */
 export function resetSessionIndexCache(): void {
   sessionIndexCache.clear();
 }
 
-/**
- * Count the number of entry lines in a session file without parsing each line
- * into an object. Used by the resume path, which only needs the *count* of
- * pre-existing entries (so it can later slice out the new ones). Parsing every
- * line of a large resumed transcript synchronously at resume time would block
- * the UI; counting newlines is dramatically cheaper.
- */
 export function countSessionEntryLines(sessionFile: string): number {
   let fd = -1;
   try {
@@ -680,20 +536,13 @@ export async function getNewEntriesAsync(sessionFile: string, afterLine: number)
   return parseSessionLines(await readFile(sessionFile, "utf8"), afterLine);
 }
 
-/** 最后一个有意义的 assistant 回合及其终态错误。 */
 export interface LastAssistantOutcome {
-  /** 最后回复中的文本;错误回合也可能带部分文本。 */
+
   summary: string | null;
-  /** stopReason=error 时的原始错误;没有字段时使用明确的兜底文案。 */
+
   errorMessage: string | null;
 }
 
-/**
- * 读取最后一个 assistant 回合的结构化结果。
- *
- * 错误回合必须先于文本摘要被识别:provider 在生成部分文本后仍可能以
- * stopReason=error 结束,不能因为存在部分文本就把失败上游当作成功。
- */
 export function findLastAssistantOutcome(entries: SessionEntry[]): LastAssistantOutcome {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
@@ -727,15 +576,10 @@ export function findLastAssistantOutcome(entries: SessionEntry[]): LastAssistant
   return { summary: null, errorMessage: null };
 }
 
-/** 保留历史调用方的文本接口;错误回合的兼容摘要格式不变。 */
 export function findLastAssistantMessage(entries: SessionEntry[]): string | null {
   return findLastAssistantOutcome(entries).summary;
 }
 
-/**
- * Append a branch_summary entry to the session file.
- * Returns the new entry's id.
- */
 export function appendBranchSummary(
   sessionFile: string,
   branchPointId: string,
@@ -755,10 +599,6 @@ export function appendBranchSummary(
   return id;
 }
 
-/**
- * Copy the session file to destDir for parallel worker isolation.
- * Returns the path of the copy.
- */
 export function copySessionFile(sessionFile: string, destDir: string): string {
   const id = randomBytes(4).toString("hex");
   const dest = join(destDir, `subagent-${id}.jsonl`);
@@ -766,10 +606,6 @@ export function copySessionFile(sessionFile: string, destDir: string): string {
   return dest;
 }
 
-/**
- * Read new entries from sourceFile (after afterLine), append them to targetFile.
- * Returns the appended entries.
- */
 export function mergeNewEntries(
   sourceFile: string,
   targetFile: string,
@@ -785,23 +621,21 @@ export function mergeNewEntries(
 export interface SessionStats {
   model: string | null;
   toolCount: number;
-  /** Cumulative token usage across every independently billed entry (Pi 1.3.0): assistant turns, toolResult usage, standalone usage entries, compaction / branch summary usage. */
+
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
-  /** Current context size: the last assistant turn's totalTokens. */
+
   contextTokens: number;
-  /** Cumulative cost in USD across every independently billed entry. */
+
   cost: number;
 }
 
-/** 会话 entry 里有限数值字段的提取：非有限值按 0 处理（手写/损坏文件不炸统计）。 */
 function usageNum(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-/** 把一份 usage 累进 stats：只加用量与费用，不碰 context token 口径。 */
 function accumulateUsage(stats: SessionStats, usage: Record<string, unknown>): void {
   stats.inputTokens += usageNum(usage.input);
   stats.outputTokens += usageNum(usage.output);
@@ -811,29 +645,16 @@ function accumulateUsage(stats: SessionStats, usage: Record<string, unknown>): v
   if (cost && typeof cost === "object") stats.cost += usageNum((cost as Record<string, unknown>).total);
 }
 
-/** entry 顶层的 usage 字段（usage / compaction / branch_summary entry；对象时返回）。 */
 function entryUsage(entry: SessionEntry): Record<string, unknown> | undefined {
   const usage = (entry as { usage?: unknown }).usage;
   return usage && typeof usage === "object" ? (usage as Record<string, unknown>) : undefined;
 }
 
-/** message entry 里挂在 message 上的 usage 字段（assistant / toolResult；对象时返回）。 */
 function messageUsage(msg: MessageEntry["message"]): Record<string, unknown> | undefined {
   const usage = (msg as { usage?: unknown }).usage;
   return usage && typeof usage === "object" ? (usage as Record<string, unknown>) : undefined;
 }
 
-/**
- * Parse a completed subagent session JSONL into aggregate stats for display:
- * model, tool-call count, cumulative token usage + cost, and current context
- * size. Cumulative usage fields follow the Pi 1.3.0 session-stats scope: every
- * independently billed entry counts once — assistant turns, toolResult usage,
- * standalone `usage` entries (e.g. cache warming), and compaction / branch
- * summary summary-generation usage. The context size stays the last assistant
- * turn's `totalTokens` (the live context window occupancy); non-assistant
- * entries never override it. Unknown entry types are skipped. Returns null if
- * the file can't be read.
- */
 function summarizeEntries(entries: SessionEntry[]): SessionStats {
   const stats: SessionStats = {
     model: null,
@@ -852,9 +673,7 @@ function summarizeEntries(entries: SessionEntry[]): SessionStats {
       if (typeof modelId === "string" && modelId) stats.model = modelId;
       continue;
     }
-    // 独立计费但不是 assistant 回合的 entry（Pi 1.3.0）：usage entry（cache
-    // warming 等模型调用）、compaction / branch summary 的摘要生成调用。
-    // 累计用量与费用各一次，但不参与 context token 与 toolCount 口径。
+
     if (entry.type === "usage" || entry.type === "compaction" || entry.type === "branch_summary") {
       const usage = entryUsage(entry);
       if (usage) accumulateUsage(stats, usage);
@@ -863,7 +682,7 @@ function summarizeEntries(entries: SessionEntry[]): SessionStats {
     if (entry.type !== "message") continue;
     const msg = (entry as MessageEntry).message;
     if (msg.role === "toolResult") {
-      // 嵌套模型工具的调用费：usage 挂在结果消息上，独立计费一次。
+
       const usage = messageUsage(msg);
       if (usage) accumulateUsage(stats, usage);
       continue;

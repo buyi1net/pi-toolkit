@@ -1,14 +1,8 @@
-// status 模块数据源：项目运行时探测（从 tui/status/ 整体迁入，工单 11）。
-//
-// 版本命令探测、目录指纹缓存与刷新控制器都归数据模块；`status.workspace` 快照里
-// 的 runtime 段由本文件的控制器提供。重绘节奏归 tui（工单 18）：控制器不持重绘回调，
-// 数据变化由快照内容比较带出变更序号，tui 心跳按序号变化重绘。
-
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 const CACHE_LIMIT = 32;
-// 暂时不可用的版本命令需要恢复机会，也不能在密集刷新时反复启动进程。
+
 const VERSION_RETRY_MS = 30_000;
 const RUNTIME_ENV_KEYS = [
 	"PATH",
@@ -187,7 +181,6 @@ async function readVersion(
 	}
 }
 
-// 缓存与查询适配器一起归调用方持有，避免新会话或新适配器沿用旧结果。
 export function createRuntimeStatusDetector(
 	queryVersion: RuntimeVersionQuery,
 	env: Readonly<Record<string, string | undefined>> = process.env,
@@ -251,7 +244,6 @@ export class RuntimeStatusController {
 		this.debounceMs = debounceMs;
 	}
 
-	/** 开始查询；数据变化由 `status.workspace` 快照的变更序号带出，控制器不触发重绘 */
 	connect(): void {
 		if (this.disposed) return;
 		this.requestRefresh(0);

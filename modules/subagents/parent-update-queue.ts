@@ -2,10 +2,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
-/** 父会话更新的三种可观察类型。 */
 export type ParentUpdateKind = "message" | "status" | "terminal";
 
-/** 队列中持久化的单条更新；字段名与 wait_agent 的公开投影一致。 */
 export interface ParentSessionUpdate {
   agent_id: string;
   task_name: string;
@@ -14,9 +12,9 @@ export interface ParentSessionUpdate {
   summary: string;
   update_id: string;
   update_seq: number;
-  /** 终态摘要与最终正文回注共用的稳定传输幂等键。 */
+
   delivery_id: string;
-  /** 终态完整正文的可选存储投影；不会改变摘要更新本身。 */
+
   final_text?: string;
 }
 
@@ -26,9 +24,9 @@ export interface ParentUpdateInput {
   kind: ParentUpdateKind;
   status: string;
   summary: string;
-  /** 重试同一逻辑事件时必须复用；省略则生成新的逻辑事件。 */
+
   update_id?: string;
-  /** 只有终态更新可以携带最终正文。 */
+
   final_text?: string;
 }
 
@@ -39,7 +37,7 @@ export interface ParentUpdateQueueState {
   updates: ParentSessionUpdate[];
   deliveries: Record<string, string>;
   wait_owner: string | null;
-  /** lease 到期后允许重载后的新 owner 接管，避免宿主崩溃永久锁死。 */
+
   wait_owner_expires_at: number | null;
 }
 
@@ -49,23 +47,23 @@ export interface WaitInProgressError extends Error {
 }
 
 export interface ParentUpdateQueue {
-  /** 追加一条逻辑事件；重复结构化键返回已有事件，不消耗新序号。 */
+
   publish(input: ParentUpdateInput): ParentSessionUpdate;
-  /** 取出游标后的第一条更新；不会推进游标，适合取出/确认之间可重载的等待接缝。 */
+
   peek(): ParentSessionUpdate | null;
-  /** 确认已经回报的更新并推进持久化游标；重复确认幂等。兼容旧的一参调用。 */
+
   acknowledge(agent_id: string, update_id?: string): boolean;
-  /** 当前消费位置和序号均从磁盘重新读取。 */
+
   reload(): void;
-  /** 当前队列的只读快照。 */
+
   snapshot(): ParentUpdateQueueState;
-  /** 为同一代理的同一逻辑回注取稳定 delivery_id；重载和重试都复用。兼容旧的一参调用。 */
+
   deliveryId(agent_id: string, update_id?: string): string | null;
-  /** 建立父会话唯一未完成等待接缝；过期 owner 可被新调用接管。 */
+
   beginWait(owner?: string, leaseMs?: number): string;
-  /** 释放等待接缝；仅持有者可释放。 */
+
   endWait(token: string): boolean;
-  /** 明确等待是否被占用。 */
+
   isWaiting(): boolean;
 }
 
@@ -169,7 +167,7 @@ export function createParentUpdateQueue(paths: ParentUpdateQueuePaths | string):
         : undefined;
       if (existing) {
         if (input.kind !== "terminal" || input.final_text == null || existing.final_text === input.final_text) return { ...existing };
-        // 同一个终态逻辑事件允许迟到补齐正文，但不得改动序号或 delivery_id。
+
         existing.final_text = input.final_text;
         persist();
         return { ...existing };
@@ -207,7 +205,7 @@ export function createParentUpdateQueue(paths: ParentUpdateQueuePaths | string):
       const update_id = requestedUpdateId ?? agent_id;
       const update = state.updates.find((item) => legacyCall ? item.update_id === update_id : item.agent_id === agent_id && item.update_id === update_id);
       if (!update || update.update_seq <= state.cursor) return !!update;
-      // 只允许按序确认，避免跳过尚未返回的更新。
+
       const next = state.updates.find((item) => item.update_seq > state.cursor);
       if (!next || next.update_seq !== update.update_seq) return false;
       state.cursor = update.update_seq;
@@ -245,7 +243,6 @@ export function createParentUpdateQueue(paths: ParentUpdateQueuePaths | string):
   };
 }
 
-/** 事件生产接缝：生命周期实现只需调用对应方法，不重复编排序号和幂等。 */
 export interface ParentUpdateProducers {
   spawnStatus(input: Omit<ParentUpdateInput, "kind">): ParentSessionUpdate;
   message(input: Omit<ParentUpdateInput, "kind">): ParentSessionUpdate;

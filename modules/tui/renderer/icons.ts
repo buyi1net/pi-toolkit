@@ -3,10 +3,6 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 export type IconMode = "auto" | "nerd" | "unicode" | "ascii";
 export type ResolvedIconMode = Exclude<IconMode, "auto">;
 
-/**
- * 组件只依赖语义键，不感知当前字体模式，也不自行选择字形。
- * 新状态段需要图标时必须先在这里增加语义，再同时补齐三套 glyph。
- */
 export interface IconGlyphs {
 	readonly brand: string;
 	readonly project: string;
@@ -115,7 +111,6 @@ const ASCII_GLYPHS: IconGlyphs = Object.freeze({
 	behind: "v",
 });
 
-/** 为状态栏左侧图标预留两列，再追加一列文字间距。 */
 export function formatLeadingIcon(glyph: string): string {
 	return `${glyph}${" ".repeat(Math.max(1, 3 - visibleWidth(glyph)))}`;
 }

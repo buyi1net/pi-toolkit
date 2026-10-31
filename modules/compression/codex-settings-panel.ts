@@ -1,22 +1,3 @@
-// Codex 模式管理页（工单 02，菜单重构后）：设置页里的 ROW_CODEX_MANAGEMENT 打开它。
-//
-// 页内两块（规格「Codex 模式专有化与向导式管理」）：
-// - 官方订阅：对全部可用模型跑一遍能力探测器，命中的官方 OpenAI / Codex OAuth 链路
-//   模型自动纳入 Codex（Remote V2），不需要显式规则；这是模块启用时的固有行为，
-//   不再有独立的自动检测开关；
-// - 手动添加：modelRules 里 mode=codex 的显式规则，覆盖中转站与自定义模型。已手动
-//   添加的官方模型只在「手动添加」出现，不在「官方订阅」重复列出。
-// - 「添加模型」：从 ModelRegistry.getAvailable()（用户已配置且认证可用）里勾选，
-//   写入完整身份 provider / model / api / baseUrl。选择器加完一个不关闭：从候选里
-//   去掉刚加的那条、搜索词原样保留，Esc 才退出，方便连续添加同类模型。
-//
-// 空列表与探测器失败都不静默：没有任何已认证可用模型时给出原因与下一步；取不到
-// 认证信息时不落盘并说明要先修凭据；非官方链路（中转站 / 自定义路径）照常添加，
-// 显式规则是用户的正当手段。
-//
-// 选模型的既有能力直接复用 rules-editor.ts（discoverCompressionCandidates /
-// ruleRowValue），写盘走 kit 配置事务（modelRulesPatch 写前校验）。
-
 import {
   getKeybindings,
   truncateToWidth,
@@ -49,40 +30,30 @@ import {
 import { normalizeCompressionToken } from "./strategy.ts";
 import type { CompressionModelRule } from "./api.ts";
 
-/** 设置页里的入口行 id（由 buildCompressionSettingsRows 插在模块专属行之前） */
 export const ROW_CODEX_MANAGEMENT = "compression.codexManagement";
-/** 页内「官方订阅」分组标题行 id（纯展示行，不响应回车） */
+
 export const ROW_CODEX_OFFICIAL_HEADER = "compression.codex.officialHeader";
-/** 页内「手动添加」分组标题行 id（纯展示行，不响应回车） */
+
 export const ROW_CODEX_MANUAL_HEADER = "compression.codex.manualHeader";
-/** 页内的「添加模型」行 id */
+
 export const ROW_CODEX_ADD = "compression.codex.add";
-/** 页内空列表说明行 id（纯展示行，不响应回车） */
+
 export const ROW_CODEX_EMPTY = "compression.codex.empty";
 
 const MAX_VISIBLE = 10;
 
-/** 官方订阅模型行的行 id（下标按探测器命中的顺序） */
 export function codexOfficialRowId(index: number): string {
   return `compression.codex.official.${index}`;
 }
 
-/** 页内已添加模型的行 id（下标按 mode=codex 过滤后的顺序） */
 export function codexRuleRowId(index: number): string {
   return `compression.codex.rule.${index}`;
 }
 
-/** Codex 规则（受支持模型列表的唯一数据真相：modelRules 里 mode=codex 的条目） */
 export function codexRules(settings: { modelRules: readonly CompressionModelRule[] }): readonly CompressionModelRule[] {
   return settings.modelRules.filter((rule) => rule.mode === "codex");
 }
 
-/**
- * 官方订阅模型：对全部可用模型跑纯判定探测器，命中的官方链路模型自动纳入 Codex。
- * 已手动添加（有 codex 规则）的官方模型剔除，只在「手动添加」出现。
- * 注册表缺失（宿主或测试环境未提供）时返回空列表，不抛错——与 settings-panel
- * 的 readCodexCapability 同一防御姿态。
- */
 export function officialCodexModels(
   registry: Pick<ExtensionContext["modelRegistry"], "getAvailable" | "getProvider"> | undefined,
   rules: readonly CompressionModelRule[],
@@ -106,7 +77,6 @@ export function officialCodexModels(
   });
 }
 
-/** 入口行的值位：官方 N · 手动 M */
 export function codexManagementValue(
   section: ModuleConfigRecord,
   officialCount: number,
@@ -119,23 +89,16 @@ export function codexManagementValue(
   });
 }
 
-/** 能力判定结果的显示文案：原因文案 + 判定细节（实际 host / path / 原值）；设置页的会话覆盖拒绝提示同用 */
 export function codexCapabilityLabel(capability: CodexCapability, t: Translator): string {
   const label = t(`module.compression.codex.capability.${capability.reason}`);
   return capability.detail === undefined || capability.detail === "" ? label : `${label} · ${capability.detail}`;
 }
 
-/** 规则的完整身份描述（api · baseUrl）：规则列表里区分同名模型的不同中转站 */
 function ruleIdentityText(rule: CompressionModelRule): string | undefined {
   const parts = [rule.api, rule.baseUrl].filter((part): part is string => part !== undefined && part !== "");
   return parts.length === 0 ? undefined : parts.join(" · ");
 }
 
-/**
- * 候选模型的 Codex 规则（完整身份）：provider / model 必带，api 与 baseUrl 来自
- * 模型目录（目录没有声明的可选字段不落空键）。显式规则是用户的正当手段，不因
- * 探测器判否而拒绝写入。
- */
 export function codexRuleFromCandidate(candidate: CompressionModelCandidate): CompressionModelRule {
   return {
     provider: candidate.provider,
@@ -146,7 +109,6 @@ export function codexRuleFromCandidate(candidate: CompressionModelCandidate): Co
   };
 }
 
-/** 该候选是否已有 codex 规则（只比 provider/model：带约束的旧规则同样算重复，避免同名两条） */
 function hasCodexRule(
   rules: readonly CompressionModelRule[],
   candidate: CompressionModelCandidate,
@@ -161,19 +123,14 @@ function hasCodexRule(
 
 export interface CodexManagementRowsOptions {
   readonly t: Translator;
-  /** 本模块配置节（实时；modelRules 的取值来源） */
+
   readonly section: ModuleConfigRecord;
-  /** 官方订阅模型（探测器命中的官方链路模型，已剔除手动添加的） */
+
   readonly officialModels: readonly CompressionModelCandidate[];
-  /** 「添加模型」选择器工厂（面板注入：需要模型注册表与写盘链路） */
+
   readonly openAddPicker: (done: (value?: string) => void) => Component;
 }
 
-/**
- * 页内行集合（纯函数：面板与测试共用同一份结构定义）：
- * 官方订阅分组（探测器命中）→ 手动添加分组（显式规则）→ 添加模型。
- * 两组都为空时给一行说明。
- */
 export function buildCodexManagementRows(options: CodexManagementRowsOptions): SettingItem[] {
   const { t } = options;
   const { settings } = readCompressionSettings(options.section);
@@ -227,7 +184,6 @@ export function buildCodexManagementRows(options: CodexManagementRowsOptions): S
   return rows;
 }
 
-/** 设置页里的入口行：值位是官方数 + 手动数；描述位仅在有配置问题时显示 */
 export function buildCodexManagementRow(context: ModuleMenuContext): SettingItem {
   const t = context.t;
   const { settings, problems } = readCompressionSettings(context.getConfig());
@@ -254,11 +210,11 @@ export function buildCodexManagementRow(context: ModuleMenuContext): SettingItem
 export interface CodexManagementPanelOptions {
   readonly t: Translator;
   readonly theme: MenuTheme;
-  /** 打开面板时的扩展上下文：模型注册表（可用模型与鉴权）与失败提示走它 */
+
   readonly context: ExtensionContext;
   readonly saveConfig: (patch: ModuleConfigRecord, hooks?: ConfigWriteHooks) => Promise<void>;
   readonly requestRender: () => void;
-  /** 读本模块配置节（实时，盘上真相） */
+
   readonly getSection: () => ModuleConfigRecord;
   readonly onDone: (value?: string) => void;
 }
@@ -267,10 +223,6 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/**
- * Codex 模式管理页：内嵌 i18n 设置列表，行集合按配置实时重建。
- * Esc 返回设置页；添加成功后选择器不关闭（removeOption 去掉已选项，搜索词保留）。
- */
 export class CodexManagementPanel implements Component {
   private readonly options: CodexManagementPanelOptions;
   private list: I18nSettingsList | undefined;
@@ -297,30 +249,25 @@ export class CodexManagementPanel implements Component {
     return this.list?.handleMouse(event);
   }
 
-  /** 行显示回滚入口（与 I18nSettingsList.updateValue 同名契约）：委托内层列表 */
   updateValue(id: string, newValue: string): void {
     this.list?.updateValue(id, newValue);
   }
 
-  /** 行 id 序列（自测用）：结构断言走这里 */
   rowIds(): string[] {
     return this.items.map((item) => item.id);
   }
 
-  /** 把光标移到指定行（找不到返回 false）；自测与外部定位用 */
   selectRow(id: string): boolean {
     if (!this.items.some((item) => item.id === id)) return false;
     this.list?.selectItem(id);
     return true;
   }
 
-  /** 官方订阅模型（探测器命中，已剔除手动添加）：行集与入口值位共用一个数据源 */
   private officialModels(): readonly CompressionModelCandidate[] {
     const { settings } = readCompressionSettings(this.options.getSection());
     return officialCodexModels(this.options.context.modelRegistry, settings.modelRules);
   }
 
-  /** 行集合重建：配置变了就整份换掉（添加成功后刷新入口行值位） */
   rebuildItems(selectId?: string): void {
     this.items = buildCodexManagementRows({
       t: this.options.t,
@@ -334,8 +281,7 @@ export class CodexManagementPanel implements Component {
       theme: this.options.theme.settings,
       t: this.options.t,
       enableSearch: true,
-      // 本页已无就地切换行（自动检测开关已移除），所有行都是只读展示或子菜单入口，
-      // 不会触发行值变更；保留空实现满足列表的构造契约。
+
       onChange: (_id, _value) => {},
       onCancel: () => this.close(),
     });
@@ -352,12 +298,6 @@ export class CodexManagementPanel implements Component {
     if (this.options.context.hasUI) this.options.context.ui.notify(message, level);
   }
 
-  /**
-   * 开「添加模型」选择器：候选取用户已配置且认证可用的模型（getAvailable）。
-   * 一个都没有时明确给原因与下一步（提示 + 页内说明组件），不留一个空选择器。
-   * 候选不带 description（不显示"host 不是官方域名…"的长提示），只留干净的 provider/model。
-   * 添加成功后选择器不关闭：removeOption 去掉已选项、搜索词保留，Esc 才退出。
-   */
   private openAddPicker(done: (value?: string) => void): Component {
     const t = this.options.t;
     const registry = this.options.context.modelRegistry;
@@ -390,12 +330,6 @@ export class CodexManagementPanel implements Component {
     return picker;
   }
 
-  /**
-   * 选定后的写盘：先确认该模型的身份可用（认证不可用时只提示、不写），再按完整
-   * 身份追加 codex 规则。重复规则按 provider/model 判定（同名模型不重复落键）。
-   * 添加成功后不关闭选择器：removeOption 去掉已选项、搜索词原样保留，用户可连续
-   * 添加同类模型；Esc 才退出（onCancel → rebuildItems 刷新手动添加列表与入口值位）。
-   */
   private async applyAdd(
     candidate: CompressionModelCandidate,
     available: readonly CodexCapabilityModel[],
@@ -429,12 +363,11 @@ export class CodexManagementPanel implements Component {
       this.notify(t("notify.saveFailed", { reason: describeError(error) }), "error");
       return;
     }
-    // 添加成功：从选择器去掉已选项，保持打开（搜索词保留），不重建列表（避免关选择器）
+
     picker.removeOption(identity);
   }
 }
 
-/** 说明页（空列表等情形）：标题 + 自动换行的说明 + 返回提示，Esc/Enter 关闭 */
 class CodexNoticePanel implements Component {
   private readonly options: {
     readonly t: Translator;

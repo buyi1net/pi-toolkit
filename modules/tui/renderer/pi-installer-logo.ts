@@ -1,12 +1,3 @@
-/**
- * Pi 官方安装器 Logo 动画的 TypeScript 适配。
- *
- * 坐标、方块落位顺序、闪烁阶段和时序均对应 pi.dev/install.sh 中的
- * pi_logo_animation；这里只把安装器的 8×9 方格裁剪为横幅使用的 6×4 小尺寸，
- * 每个方格仍保持安装器原始的两个终端字符宽度。
- * 来源：https://pi.dev/install.sh
- */
-
 export type PiLogoColor = "panel" | "cyan" | "red" | "green" | "orange" | "white" | "flash";
 export type PiInstallerLogoFrame = readonly (readonly PiLogoColor[])[];
 
@@ -17,7 +8,7 @@ export interface PiInstallerLogoAnimationFrame {
 
 const SOURCE_WIDTH = 8;
 const SOURCE_HEIGHT = 9;
-// 安装器的源网格按 x=1..8 绘制；裁剪 x=2..7 以去掉左侧空列。
+
 const CROP_LEFT = 1;
 const CROP_TOP = 3;
 const CROP_WIDTH = 6;
@@ -190,5 +181,5 @@ function frameWidth(frame: PiInstallerLogoFrame): number {
 export const PI_INSTALLER_LOGO_ANIMATION = animationFrames;
 export const PI_INSTALLER_LOGO_FRAMES = animationFrames.map(({ frame }) => frame);
 export const PI_INSTALLER_LOGO_DURATIONS_MS = animationFrames.map(({ durationMs }) => durationMs);
-// 按完整动画的最大实际占用宽度固定右侧锚点，避免动画帧之间文字跳动。
+
 export const PI_INSTALLER_LOGO_WIDTH = Math.max(...PI_INSTALLER_LOGO_FRAMES.map(frameWidth));

@@ -10,12 +10,6 @@ import {
 	type PiLogoColor,
 } from "./pi-installer-logo.ts";
 
-/**
- * 基于 amosblomqvist/pi-config 的 custom-header.ts 思路改造：
- * 用 Pi 公开的 Header 组件绘制启动横幅，并保留本项目的宽度与主题适配。
- * 参考：https://github.com/amosblomqvist/pi-config/blob/main/extensions/custom-header.ts
- */
-
 const BANNER_MIN_WIDTH = 32;
 const BANNER_GAP = 1;
 const BANNER_PADDING_X = 1;
@@ -75,7 +69,7 @@ function renderLogoFrame(frame: PiInstallerLogoFrame, theme: Theme): string[] {
 			const color = LOGO_THEME_COLORS[cell];
 			if (color !== runColor && run) flush();
 			runColor = color;
-			// 对应官方安装器的 panel_cell="  " 与各色 cell="██"。
+
 			run += cell === "panel" ? "  " : "██";
 		}
 		flush();

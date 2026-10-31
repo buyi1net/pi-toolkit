@@ -1,16 +1,3 @@
-// 模型压缩二级设置页（工单 01 骨架 + 工单 05 会话覆盖与全局默认两值枚举）：一级菜单
-// 唯一入口行打开的设置页。
-//
-// 设计口径（规格「二级面板状态机与动态重构机制」）：
-// - 行集合每次重建：`enabled === false` 时只剩总开关一行；`enabled === true` 时按规格
-//   最终行序渲染——总开关 → 当前会话覆盖 → 全局默认模式 → Codex 模式管理入口 →
-//   ACP 管理入口 → 工具行；
-// - 磁盘配置写盘时序（enabled / defaultMode）：先 await saveConfig，
-//   成功才重建行集 + 请求重绘；失败提示错误、把行显示回滚成保存前的值，面板结构
-//   保持原样（不重建）；
-// - 当前会话覆盖是纯内存状态（session-override.ts）：切换只重建行集 + 重绘，不写盘、
-//   不进配置事务；当前模型不具备 Codex 资格时隐藏 Codex 档位，运行期复核失败时静默摘掉该档位。
-
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SettingItem, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import type { Translator } from "../../i18n/index.ts";
@@ -41,27 +28,19 @@ import {
 } from "./codex/capability.ts";
 import { isSessionCompressionOverride } from "./session-override.ts";
 
-/** 一级菜单唯一入口行 id（topLevel 钩子返回这一行） */
 export const COMPRESSION_SETTINGS_ROW_ID = "compression.settings";
 
-/** 面板内的模块总开关行 id：沿用 schema 字段 id，落盘与显示回滚都走同一条链 */
 export const ROW_ENABLED = "compression.enabled";
 
-/** 当前会话压缩模式行 id（工单 05）：纯内存行，不落盘 */
 export const ROW_SESSION_OVERRIDE = "compression.sessionOverride";
-/** 全局默认压缩模式行 id（工单 05）：两值枚举的就地切换行 */
+
 export const ROW_DEFAULT_MODE = "compression.defaultMode";
 
-/** 模块总开关字段（与 schema 同源：面板行与落盘校验共用同一份定义） */
 const COMPRESSION_ENABLED_FIELD: ConfigField = enabledField(
   "module.compression.enabled.label",
   "module.compression.enabled.description",
 );
 
-/**
- * 全局默认压缩模式字段（工单 05）：两值枚举，Codex 只能经模型规则或当前会话覆盖
- * 进入。schema（index.ts）与设置页共用这一份定义，两处取值不会分叉。
- */
 export const COMPRESSION_DEFAULT_MODE_FIELD: ConfigField = {
   default: "native",
   values: [...DEFAULT_COMPRESSION_MODES],
@@ -73,10 +52,6 @@ export const COMPRESSION_DEFAULT_MODE_FIELD: ConfigField = {
   },
 };
 
-/**
- * 当前会话覆盖字段（工单 05）：不是配置字段，只借同一套枚举行机制做显示与文案反查
- * （schemaFieldRow / fieldValueFromLabel），因此四值与三语文案不必另写一份。
- */
 const SESSION_OVERRIDE_FIELD: ConfigField = {
   default: DEFAULT_SESSION_COMPRESSION_OVERRIDE,
   values: [...SESSION_COMPRESSION_OVERRIDES],
@@ -90,11 +65,6 @@ const SESSION_OVERRIDE_FIELD: ConfigField = {
   },
 };
 
-/**
- * 会话覆盖字段的可选项版本：Codex 不可用时从枚举里摘掉。原因不是「少一个选项好看」：
- * 枚举行的换档是「当前显示值的下一个」（pi-tui SettingsList），被拒的 Codex 挂在循环里
- * 会让用户永远转不出 acp——向后回不到 native，更回不到跟随全局。
- */
 function sessionOverrideField(codexAvailable: boolean): ConfigField {
   if (codexAvailable) return SESSION_OVERRIDE_FIELD;
   const labels = Object.entries(SESSION_OVERRIDE_FIELD.valueLabelKeys ?? {}).filter(
@@ -113,45 +83,35 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 全局默认模式在配置节里的字段名。 */
 const DEFAULT_MODE_FIELD = "defaultMode";
 
-/** 模块总开关的当前取值（非法/缺省按默认 true 处理，与装配器的解析口径一致） */
 export function compressionEnabledValue(section: ModuleConfigRecord): boolean {
   return section[ENABLED_FIELD] !== false;
 }
 
-/** 全局默认模式当前值（非法或缺失按 schema 默认 native；Codex 已不在枚举内） */
 function compressionDefaultModeValue(section: ModuleConfigRecord): DefaultCompressionMode {
   const normalized = normalizeConfigValue(COMPRESSION_DEFAULT_MODE_FIELD, section[DEFAULT_MODE_FIELD]);
   return normalized === "acp" ? "acp" : "native";
 }
 
-/** 一级入口行的值位文案：只有 开 / 关 两态（规格：一级不堆模式与诊断文本） */
 export function compressionEnabledLabel(section: ModuleConfigRecord, t: Translator): string {
   return t(compressionEnabledValue(section) ? "module.compression.settings.value.on" : "module.compression.settings.value.off");
 }
 
 export interface CompressionSettingsRowsOptions {
   readonly t: Translator;
-  /** 本模块配置节（实时；enabled 与两个全局字段的取值来源） */
+
   readonly section: ModuleConfigRecord;
-  /** 当前会话覆盖（内存态；缺省 = follow-global） */
+
   readonly sessionOverride?: SessionCompressionOverride;
-  /** Codex 档位是否进枚举（当前模型不具备资格或刚被拒时为 false；缺省 true） */
+
   readonly codexOverrideAvailable?: boolean;
-  /** 工单 02：Codex 模式管理入口行（排在模块专属行之前；关闭态整体不渲染） */
+
   readonly codexManagementRow?: SettingItem;
-  /** 模块专属行（ACP 管理入口 / 模型规则；关闭时整体收起不渲染） */
+
   readonly detailRows: readonly SettingItem[];
 }
 
-/**
- * 面板行集合（纯函数：面板与测试共用同一份结构定义）。
- * 总开关永远是第一行；关闭时到此为止——下方所有配置项一律隐藏。
- * 启用态按规格最终行序：总开关 → 当前会话覆盖 → 全局默认模式 →
- * Codex 模式管理 → ACP 管理入口 → 工具行。
- */
 export function buildCompressionSettingsRows(options: CompressionSettingsRowsOptions): SettingItem[] {
   const { t, section } = options;
   const rows: SettingItem[] = [
@@ -177,48 +137,41 @@ export function buildCompressionSettingsRows(options: CompressionSettingsRowsOpt
       current: section[DEFAULT_MODE_FIELD],
     }),
   );
-  // 工单 02 的 Codex 模式管理入口；工单 03 的 ACP 管理页与工单 07 的工具行随 detailRows
-  // （detailRows 自带 ACP 管理入口，恰好接在 Codex 入口之后）
+
   if (options.codexManagementRow) rows.push(options.codexManagementRow);
   rows.push(...options.detailRows);
   return rows;
 }
 
-/** 面板选项：写盘链路与重绘请求均由菜单层注入（面板不自己拥有事务） */
 export interface CompressionSettingsPanelOptions {
   readonly t: Translator;
   readonly theme: MenuTheme;
-  /** 打开面板时的扩展上下文：写盘失败提示走 ui.notify */
+
   readonly context: ExtensionContext;
-  /** 读本模块配置节（实时，盘上真相） */
+
   readonly getSection: () => ModuleConfigRecord;
-  /** 结构化配置写入事务（菜单层注入；补丁 → 落盘 → 重载 → 重生效 → 重绘） */
+
   readonly saveConfig: (patch: ModuleConfigRecord, hooks?: ConfigWriteHooks) => Promise<void>;
   readonly requestRender: () => void;
-  /** 模块专属行（模型规则 / ACP 高级设置） */
+
   readonly detailRows: () => readonly SettingItem[];
-  /** 工单 02：Codex 模式管理入口行（每次重建重读，值位跟随配置） */
+
   readonly codexManagementRow: () => SettingItem;
-  /** 当前模型的 Codex 档位是否可用；缺省保持纯行构造的兼容行为 */
+
   readonly codexOverrideAvailable?: boolean;
-  /** 工单 05：当前会话覆盖读口（内存态） */
+
   readonly readSessionOverride: () => SessionCompressionOverride;
-  /** 工单 05：当前会话覆盖写口（只改内存，不经过配置事务） */
+
   readonly writeSessionOverride: (next: SessionCompressionOverride) => void;
-  /** 关闭面板：回传当前一级行值位文案（没变时回传当前值即可） */
+
   readonly onDone: (value?: string) => void;
 }
 
-/**
- * 模型压缩设置页：内嵌 i18n 设置列表，行集合按配置与内存覆盖实时重建。
- * Esc 返回一级菜单；磁盘值行就地切换后先写盘，写盘成功才重建结构；
- * 当前会话覆盖行只改内存，重建结构但不写盘。
- */
 export class CompressionSettingsPanel {
   private readonly options: CompressionSettingsPanelOptions;
   private list: I18nSettingsList | undefined;
   private items: readonly SettingItem[] = [];
-  /** 本次面板里 Codex 资格复核失败：从枚举里摘掉，避免用户再次选到无效档位 */
+
   private codexOverrideRejected = false;
 
   constructor(options: CompressionSettingsPanelOptions) {
@@ -242,28 +195,24 @@ export class CompressionSettingsPanel {
     return this.list?.handleMouse(event);
   }
 
-  /** 行显示回滚入口（与 I18nSettingsList.updateValue 同名契约）：委托内层列表 */
   updateValue(id: string, newValue: string): void {
     this.list?.updateValue(id, newValue);
   }
 
-  /** 行 id 序列（自测用）：结构断言走这里 */
   rowIds(): string[] {
     return this.items.map((item) => item.id);
   }
 
-  /** 把光标移到指定行（找不到返回 false）；自测与外部定位用 */
   selectRow(id: string): boolean {
     if (!this.items.some((item) => item.id === id)) return false;
     this.list?.selectItem(id);
     return true;
   }
 
-  /** 行集合重建：配置或会话覆盖变了就整份换掉（关闭时只剩总开关一行） */
   rebuildItems(selectId?: string): void {
     let sessionOverride = this.options.readSessionOverride();
     if (sessionOverride === "codex" && this.options.codexOverrideAvailable === false) {
-      // 模型切到不具备 Codex 资格的会话时，清掉已经失效的会话覆盖，避免显示一个不存在的档位。
+
       this.options.writeSessionOverride(DEFAULT_SESSION_COMPRESSION_OVERRIDE);
       sessionOverride = DEFAULT_SESSION_COMPRESSION_OVERRIDE;
     }
@@ -295,11 +244,6 @@ export class CompressionSettingsPanel {
     this.options.onDone(compressionEnabledLabel(this.options.getSection(), this.options.t));
   }
 
-  /**
-   * 改动分发：会话覆盖只改内存；两个磁盘行（总开关 / 默认模式）
-   * 走「先 await saveConfig，成功才重建结构」的同一份时序。没列出的行会被静默
-   * return，而原生列表已乐观更新显示——表现为「改了没保存」，新增行必须补分支。
-   */
   private async handleChange(id: string, value: string): Promise<void> {
     if (id === ROW_ENABLED) {
       await this.saveDiskRow(id, ENABLED_FIELD, COMPRESSION_ENABLED_FIELD, this.currentEnabled(), value);
@@ -320,10 +264,6 @@ export class CompressionSettingsPanel {
     }
   }
 
-  /**
-   * 磁盘配置行的写盘时序（规格「更新时序」）：先保存，成功重建结构；失败提示错误并
-   * 恢复前值，面板结构不动。重建时把光标留在同一行，用户能接着改。
-   */
   private async saveDiskRow(
     id: string,
     key: string,
@@ -349,11 +289,6 @@ export class CompressionSettingsPanel {
     this.options.requestRender();
   }
 
-  /**
-   * 当前会话覆盖的就地切换（规格「会话级覆盖」）：不写盘、不进配置事务，改完只
-   * 重建行集与重绘。选 codex 时先做当前模型资格复核；不满足则静默摘掉 Codex 档位，
-   * 不改变当前覆盖值，不向用户弹出重复的拒绝提示。
-   */
   private async applySessionOverride(value: string): Promise<void> {
     const t = this.options.t;
     const previous = fieldDisplayValue(t, SESSION_OVERRIDE_FIELD, this.options.readSessionOverride());
@@ -366,7 +301,7 @@ export class CompressionSettingsPanel {
       const available = await this.codexOverrideAvailableForCurrentModel();
       if (!available) {
         this.codexOverrideRejected = true;
-        // 重建而不是就地回滚：当前覆盖值保持不变，Codex 档位从循环中摘掉
+
         this.rebuildItems(ROW_SESSION_OVERRIDE);
         this.options.requestRender();
         return;
@@ -377,7 +312,6 @@ export class CompressionSettingsPanel {
     this.options.requestRender();
   }
 
-  /** 当前模型的 Codex 资格复核：不具备资格时只影响菜单枚举，不产生用户提示 */
   private async codexOverrideAvailableForCurrentModel(): Promise<boolean> {
     const model = this.options.context.model;
     if (!model) return false;
@@ -385,11 +319,6 @@ export class CompressionSettingsPanel {
     return capability.capable;
   }
 
-  /** 资格探测：有模型注册表时走带鉴权的完整探测（与 Codex 管理页同口径）；宿主没提供
-   * 注册表时退回纯地址判定（不取 auth，不抛错）。口径按官方链路（codex/capability.ts）：
-   * 中转站即便声明 openai-responses 也不放行——服务端 checkpoint 只有官方链路可靠；
-   * 这类模型要 Codex 请走显式规则（Codex 管理页添加），那条路径属 `explicit` 来源。
-   */
   private async readCodexCapability(
     model: NonNullable<ExtensionContext["model"]>,
   ): Promise<CodexCapability> {
@@ -404,7 +333,6 @@ export class CompressionSettingsPanel {
     return readModelCodexCapability(registry, model);
   }
 
-  /** 总开关当前取值：与行显示的归一口径一致（缺失按默认 true） */
   private currentEnabled(): ModuleConfigScalar {
     return compressionEnabledValue(this.options.getSection());
   }

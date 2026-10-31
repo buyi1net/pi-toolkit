@@ -8,7 +8,7 @@ import type { RuntimeRegistry } from "./registry.ts";
 import type { SubagentsTranslate } from "./messages/index.ts";
 
 export interface TeamDispatchToolDeps {
-  /** 运行态登记表(member 查找与在线判定)。 */
+
   registry: RuntimeRegistry;
   getArtifactDir: (sessionDir: string, sessionId: string) => string;
   rosterPath: (artifactDir: string) => string;
@@ -29,17 +29,6 @@ interface DispatchContext {
   };
 }
 
-/**
- * `team_dispatch`:向持久团队成员(member: true)派发下一轮任务。
- *
- * 约束(最小 MVP,诚实边界):
- * - 只允许本会话登记的成员;非 member 名字直接拒绝(不隐式升级)。
- * - 每个成员同一时间至多一个在途轮次;在途时明确报 busy。
- * - 投递即返回 ack(经 RPC steer:运行中排队/空闲开新 run);轮次结果由
- *   父侧 round watcher 在 .round 结束信号后恰好回注一次。
- * - offline 成员不伪称在线:明确提示重启(subagent member: true)或显式
- *   resume(subagent_message,一次性任务语义)。
- */
 export function registerTeamDispatchTool(pi: ExtensionAPI, deps: TeamDispatchToolDeps): void {
   pi.registerTool({
     name: "team_dispatch",
@@ -106,7 +95,7 @@ export function registerTeamDispatchTool(pi: ExtensionAPI, deps: TeamDispatchToo
         (running) => running.member === true && running.name === name,
       );
       if (!member) {
-        // 不在本进程运行态:查 roster 给出诚实提示(offline/未知)。
+
         const sessionFile = ctx?.sessionManager?.getSessionFile?.();
         let rosterEntry: RosterMember | null = null;
         if (sessionFile) {
@@ -166,9 +155,6 @@ export function registerTeamDispatchTool(pi: ExtensionAPI, deps: TeamDispatchToo
         };
       }
 
-      // 轮次关联 nonce:baseline 先于投递记录(派单消息进入会话之后才会出
-      // 现),steer 文本带 marker;父侧 round watcher 在 .round 认领时用它区分
-      // 本次派单轮与交错的自发轮(见 index.ts watchMemberRound)。
       const roundEntryBaseline = deps.countSessionEntryLines(member.sessionFile);
       const roundId = randomUUID();
       try {

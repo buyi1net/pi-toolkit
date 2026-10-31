@@ -1,13 +1,9 @@
-// pi-toolkit 最小服务注册表。
-// 模块把自己的能力注册成命名句柄（如 vision.query-latest、ui.provider-balance），
-// 其它模块按名字查询。本工单只做存取，不含任何联动逻辑。
-
 export interface ServiceRegistry {
-  /** 注册句柄；名字重复视为装配期错误，直接抛出 */
+
   register<T>(name: string, service: T): void;
   get<T>(name: string): T | undefined;
   has(name: string): boolean;
-  /** 已注册的名字，按注册顺序 */
+
   names(): readonly string[];
 }
 

@@ -1,5 +1,3 @@
-// pi-toolkit 状态中枢：持有配置、语言、服务注册表与已装配模块，向菜单层提供读写入口。
-
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { assembleModules, resolveModuleConfig, type ActiveModule } from "./assembler.ts";
 import { getToolkitConfigPath, loadToolkitConfig, type ToolkitConfig } from "./config.ts";
@@ -22,16 +20,16 @@ import { createServiceRegistry, type ServiceRegistry } from "./services.ts";
 
 export interface ToolkitProblem {
   readonly kind: "config" | "module";
-  /** 配置文件路径或模块 id */
+
   readonly source: string;
-  /** 原始错误说明，直接展示在菜单问题行里 */
+
   readonly detail: string;
 }
 
 export interface Toolkit {
   readonly configPath: string;
   readonly services: ServiceRegistry;
-  /** 已通过 enabled 开关并成功注册的模块 */
+
   readonly modules: readonly ActiveModule[];
   readonly problems: readonly ToolkitProblem[];
   getConfig(): ToolkitConfig;
@@ -40,12 +38,12 @@ export interface Toolkit {
   getTranslator(): Translator;
   getModuleDefinitions(): readonly ModuleDefinition[];
   getModuleDefinition(moduleId: string): ModuleDefinition | undefined;
-  /** 实时解析的本模块配置（schema 默认值 + 磁盘取值） */
+
   getModuleConfig(moduleId: string): ModuleConfigRecord;
-  /** 重新从磁盘读整份配置，刷新内存副本（保存事务落盘后由事务调用） */
+
   reloadConfig(): Promise<void>;
   setLanguage(value: string): Promise<LanguageSetting>;
-  /** 写单个模块字段并持久化，返回规范化后的值（只接受 schema 声明的字段） */
+
   setModuleField(moduleId: string, field: string, value: ModuleConfigScalar): Promise<ModuleConfigScalar>;
 }
 
@@ -71,7 +69,7 @@ export async function createToolkit(options: CreateToolkitOptions): Promise<Tool
   }));
 
   const services = createServiceRegistry();
-  // 译者读的是实时语言，语言切换后菜单重建即可刷新全部文案。
+
   const translator = createTranslator(() => resolveLanguage(config.language));
 
   const getModuleDefinition = (moduleId: string): ModuleDefinition | undefined =>
@@ -86,10 +84,8 @@ export async function createToolkit(options: CreateToolkitOptions): Promise<Tool
     config = (await loadToolkitConfig(configPath)).config;
   };
 
-  // 结构化配置写入事务（工单 19）：落盘与内存刷新只从 kit 出去，模块侧只给补丁与 reapply
   const configTransaction = createConfigTransaction({ configPath, reload: reloadConfig });
 
-  /** 模块配置节补丁 → 事务（ModuleContext.saveConfig 的落点） */
   const saveModuleSection = async (
     moduleId: string,
     patch: ModuleConfigRecord,

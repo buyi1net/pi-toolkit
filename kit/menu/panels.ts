@@ -1,10 +1,3 @@
-// 菜单里的两种面板组件，都是 Container 子类内嵌 pi 原生列表组件（原生 WarningSettingsSubmenu 同款写法）：
-// - SettingsPanel：设置页（工单 46 起用于共享二级页），内嵌 I18nSettingsList，默认开搜索；
-//   搜索栏本身就是页头，不再渲染单独的标题行
-// - ChoicePicker：取值选择器，内嵌 SelectList；searchable 时加输入框过滤（照 pi 原生 SelectSubmenu 的写法）。
-//   它是取值器不是可搜索列表，标题行保留，否则用户不知道在改哪一项
-// Esc 都交给上层回传 done() 返回上级。
-
 import {
   Container,
   fuzzyFilter,
@@ -26,9 +19,9 @@ export interface SettingsPanelOptions {
   readonly theme: MenuTheme;
   readonly t: Translator;
   readonly onChange: (id: string, value: string) => void;
-  /** Esc：返回上级菜单 */
+
   readonly onClose: () => void;
-  /** 默认 true（工单 46：二级页统一搜索）；仅在明确要求关闭时传 false */
+
   readonly enableSearch?: boolean;
 }
 
@@ -53,7 +46,6 @@ export class SettingsPanel extends Container {
     this.list.handleInput(data);
   }
 
-  /** 行显示回滚入口（与 I18nSettingsList.updateValue 同名契约）：委托内层列表 */
   updateValue(id: string, newValue: string): void {
     this.list.updateValue(id, newValue);
   }
@@ -70,9 +62,9 @@ export interface ChoicePickerOptions {
   readonly options: readonly ChoiceOption[];
   readonly theme: MenuTheme;
   readonly t: Translator;
-  /** 长选项列表打开搜索框（输入即过滤）；短选项保持纯列表 */
+
   readonly searchable?: boolean;
-  /** 回传规范化取值与显示文案；由调用方决定如何回填父项 */
+
   readonly onSelect: (value: string, label: string) => void;
   readonly onCancel: () => void;
 }
@@ -118,7 +110,7 @@ export class ChoicePicker extends Container {
       this.list.handleInput(data);
       return;
     }
-    // 导航键交给列表，其余输入进搜索框过滤（pi 原生 SelectSubmenu 同款分流）
+
     const kb = getKeybindings();
     const isNav =
       kb.matches(data, "tui.select.up") ||
@@ -149,11 +141,6 @@ export class ChoicePicker extends Container {
     this.list = list;
   }
 
-  /**
-   * 移除一个已选选项并重建过滤结果（保留当前搜索词）：用于「添加成功后从列表去掉
-   * 已选项但选择器不关闭」的场景。搜索框的值不变，过滤结果随之更新。
-   * 移除不存在的 value 无副作用（过滤结果不变）。
-   */
   removeOption(value: string): void {
     const remaining = this.allItems.filter((item) => item.value !== value);
     if (remaining.length === this.allItems.length) return;

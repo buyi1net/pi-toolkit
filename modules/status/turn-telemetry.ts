@@ -1,10 +1,3 @@
-// status 模块数据源：回合遥测（tui/status/turn-telemetry.ts 的数据半，工单 11 切分）。
-//
-// 采集器、条目数据格式（custom entry 的 schema）与最近一次落盘快照归数据模块，
-// 由 `status.telemetry` 句柄透出；渲染半（registerTurnTelemetryRenderers /
-// formatTurnTelemetry）留在 tui/status/turn-telemetry.ts，复用本文件导出的
-// 条目类型、常量与解析函数（模块 api.ts 静态导出面）。
-
 import type {
 	AgentEndEvent,
 	AgentSettledEvent,
@@ -61,7 +54,6 @@ export interface TurnTelemetrySnapshot {
 	costUsd: number;
 }
 
-/** 当前 assistant 流式消息的实时速率；消息结束后由 tracker 清除。 */
 export interface TurnTelemetryLiveSnapshot {
 	tokensPerSecond: number | null;
 	outputTokens: number;
@@ -165,19 +157,17 @@ export class TurnTelemetryController {
 		this.tracker = new TurnTelemetryTracker(now);
 	}
 
-	/** 最近一次落盘的回合遥测（`status.telemetry` 句柄的快照面）；未产生过回合时 undefined */
 	getSnapshot(): TurnTelemetrySnapshot | undefined {
 		return this.latest;
 	}
 
-	/** 当前流式 assistant 消息的实时速率；没有正在生成的消息时返回 undefined。 */
 	getLiveSnapshot(): TurnTelemetryLiveSnapshot | undefined {
 		return this.tracker.getLiveSnapshot();
 	}
 
 	handle(event: Exclude<TurnTelemetryEvent, AgentSettledEvent> | AgentEndEvent): void {
 		const { getTimer, appendEntry } = this.dependencies;
-		// 耗时段独立于回复尾遥测开关，禁用采集仍需冻结并恢复本轮耗时。
+
 		if (event.type === "agent_end") {
 			const elapsedMs = getTimer()?.end();
 			if (elapsedMs !== undefined) {
@@ -185,15 +175,14 @@ export class TurnTelemetryController {
 			}
 			return;
 		}
-		// 当前流式速率只存在内存中，始终采集；isEnabled 只控制回合遥测落盘。
+
 		this.tracker.handle(event);
 		if (event.type === "agent_start") getTimer()?.start();
 	}
 
 	settle(event: AgentSettledEvent, mode: ExtensionContext["mode"]): void {
 		const { isEnabled, getTimer, appendEntry } = this.dependencies;
-		// agent_end 后宿主可能继续重试；settled 才是整次回复的落盘时机。
-		// 关闭历史遥测时仍执行 tracker.handle，只是不写入 custom entry。
+
 		const telemetry = this.tracker.handle(event);
 		if (!isEnabled()) return;
 		if (!telemetry) return;
@@ -204,7 +193,7 @@ export class TurnTelemetryController {
 	}
 
 	reset(): void {
-		// 计时器由装配层销毁；这里只清除尚未持久化的回复与快照，避免跨会话串账。
+
 		this.latest = undefined;
 		this.tracker.reset();
 	}
@@ -259,10 +248,6 @@ function aggregateTelemetry(
 	};
 }
 
-/**
- * 统计一次完整 Agent run。每个 LLM turn 从 turn_start 计到 assistant
- * message_end，工具执行夹在两个 turn 之间，因此不会污染 TPS。
- */
 export class TurnTelemetryTracker {
 	private readonly now: () => number;
 	private turn: TurnTiming | undefined;

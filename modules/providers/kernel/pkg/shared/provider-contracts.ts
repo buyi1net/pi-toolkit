@@ -25,7 +25,6 @@ export interface ProviderUsage {
 const QUERY_PROTOCOLS = ['sub2api', 'new-api', 'generic-balance', 'zenmux'] as const;
 export type RelayQueryProtocol = (typeof QUERY_PROTOCOLS)[number];
 
-/** 不猜中转接口；查询与推理地址不同源时须显式提供查询凭据，避免跨域复用推理 Key。 */
 export interface ProviderQueryConfig {
   id: string;
   displayName?: string;
@@ -55,7 +54,6 @@ export interface ProviderCredentials {
 
 type ProviderConfigRule = 'object' | 'array' | 'nonEmptyArray' | 'nonEmptyString' | 'choice';
 
-/** 不携带输入原文，避免宿主输出诊断时泄露凭据；宿主按规则码选择自己的文案。 */
 export class ProviderConfigValidationError extends Error {
 	readonly field: string;
 	readonly rule: ProviderConfigRule;
@@ -89,7 +87,6 @@ function requiredString(value: unknown, field: string, secret = false): string {
 	return parsed;
 }
 
-/** 缺省保留 undefined；普通字符串裁边，凭据原样保留，未知字段丢弃，以兼容既有配置。 */
 export function parseProviderQueries(value: unknown, field: string): ProviderQueryConfig[] | undefined {
 	if (value === undefined) return undefined;
 	if (!Array.isArray(value)) throw new ProviderConfigValidationError(field, 'array');
@@ -117,7 +114,6 @@ export function parseProviderQueries(value: unknown, field: string): ProviderQue
 	});
 }
 
-/** 缺省视为空凭据；仅校验显式配置的已知供应商，不要求同时配置所有供应商。 */
 export function parseProviderCredentials(value: unknown, field: string): ProviderCredentials {
 	const credentials = value === undefined ? {} : requireRecord(value, field);
 	const volcengine = credentials.volcengine === undefined
@@ -141,9 +137,8 @@ export function parseProviderCredentials(value: unknown, field: string): Provide
 	};
 }
 
-/** 查询入口的唯一凭据通道：调用方只交凭据，具体字段用不用由路由表按供应商决定。 */
 export interface ProviderQueryCredentials extends ProviderCredentials {
-  /** 主凭据：API Key 或 OAuth Access Token，按供应商协议充当对应角色 */
+
   token: string;
   accountId?: string;
   githubDomain?: string;

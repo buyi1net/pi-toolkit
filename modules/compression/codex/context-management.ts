@@ -13,13 +13,8 @@ export class ContextManagementProtocolError extends CodexCompactionProtocolError
   }
 }
 
-/** Context Management 请求中的服务端压缩阈值。 */
 export const CONTEXT_MANAGEMENT_THRESHOLD = 1024;
 
-/**
- * 只作用于这次维护请求的内容。它让 relay 返回可供后续继续工作的
- * handoff，同时明确禁止在维护请求中执行原任务或调用工具。
- */
 export const COMPACTION_MAINTENANCE_MESSAGE =
   "[PI_CONTEXT_COMPACTION_V1] This request is conversation maintenance only. " +
   "Preserve the original conversation goals, instructions, progress, and unfinished work for later continuation. " +
@@ -28,7 +23,6 @@ export const COMPACTION_MAINTENANCE_MESSAGE =
   "This maintenance instruction expires when this response completes. " +
   "On later requests, follow the original conversation instructions and continue any unfinished task, including tool use when needed.";
 
-/** Context Management 历史的硬上限，与 checkpoint 的持久化预算保持一致。 */
 export const CONTEXT_MANAGEMENT_HISTORY_BYTE_BUDGET = 8 * 1024 * 1024;
 export const CONTEXT_MANAGEMENT_HISTORY_TOKEN_BUDGET = 64_000;
 
@@ -59,11 +53,6 @@ function validateCompletedCheckpoint(value: unknown): JsonObject {
   return item;
 }
 
-/**
- * Context Management 允许 checkpoint 后保留 reasoning 或 assistant message。
- * 这里先校验它们的可回放结构；reasoning 的加密正文在最终发布前还要再次
- * 由 validateMaintenanceOutput 强制确认。
- */
 function validateObservedMaintenanceOutput(value: unknown): JsonObject {
   if (!isObject(value) || bytes(value) > MAX_COMPACTION_ITEM_BYTES) invalid("returned an invalid output item");
   if (value.status !== undefined && value.status !== "completed") invalid("returned incomplete output");
@@ -101,7 +90,6 @@ function validateObservedMaintenanceOutput(value: unknown): JsonObject {
   return structuredClone(value);
 }
 
-/** 只能发布带完整 encrypted_content 的 reasoning。 */
 export function validateMaintenanceOutput(value: unknown): JsonObject {
   const item = validateObservedMaintenanceOutput(value);
   if (
@@ -113,11 +101,6 @@ export function validateMaintenanceOutput(value: unknown): JsonObject {
   return item;
 }
 
-/**
- * 校验 Context Management 的完整 replacement history：第一个元素必须是
- * completed checkpoint，后续只能是可回放的 reasoning 或 assistant message，
- * 并且不能为了过预算静默截断后缀。
- */
 export function validateContextManagementHistory(
   history: readonly unknown[],
   options: {
@@ -138,10 +121,6 @@ export function validateContextManagementHistory(
   return [checkpoint, ...suffix];
 }
 
-/**
- * raw Responses SSE 的有序收集器。事件顺序是权威来源：新的 checkpoint
- * 会替换旧 checkpoint，但只保留它之后已经完成的 maintenance 输出。
- */
 export function createContextManagementCollector() {
   let history: JsonObject[] = [];
   let completed = false;
@@ -218,7 +197,7 @@ export function createContextManagementCollector() {
           completed = true;
         }
       } catch (error) {
-        // onPayload / raw stream callbacks 不能把异步异常直接泄漏给 provider。
+
         failure = error;
       }
     },

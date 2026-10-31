@@ -1,12 +1,3 @@
-// computer 模块的桥：工具层与原生 helper 进程之间的 JSON-lines 通道（工单 04）。
-//
-// 职责边界：本文件只做通道本身，即编解码、版本协商、调用串行与超时、崩溃重启、进程回收；
-// 不解析业务命令（P1 起命令形状按 docs/pi-computer/桥协议-v1.md 登记）。
-// helper 的启动命令由调用方注入：P0 没有原生层，测试注入假 helper；真实二进制的查找规则留到 P1。
-//
-// 生命周期约定：谁创建谁回收。dispose() 杀 helper，进程退出钩子兜底，宿主退出不留孤儿进程。
-// 协议口径（信封、版本号、超时语义、崩溃语义）以 docs/pi-computer/桥协议-v1.md 为准。
-
 import { spawn, type ChildProcess } from "node:child_process";
 import {
   BACKGROUND_INPUT_LEVELS,
@@ -39,23 +30,19 @@ import {
   type ComputerResult,
 } from "./contract.ts";
 
-/** 线上协议版本：信封 protocolVersion 字段的取值，v1 固定为 1 */
 export const BRIDGE_PROTOCOL_VERSION = 1;
 
-/** 单次调用的默认超时；P0 取参考实现（pi-computer-use-injaneity 的 windows helper）的 15 秒 */
 export const DEFAULT_BRIDGE_CALL_TIMEOUT_MS = 15_000;
 
-/** 握手命令名：版本核对、helper 元信息与能力快照都从它拿 */
 export const BRIDGE_HANDSHAKE_COMMAND = "hello";
 
-/** stderr 只进崩溃诊断，最多留这么多字符，防止流式日志把内存吃穿 */
 const STDERR_TAIL_CHARS = 500;
 
 export interface BridgeLaunchSpec {
   readonly command: string;
   readonly args?: readonly string[];
   readonly cwd?: string;
-  /** 追加并覆盖宿主环境变量；不设置时继承 process.env */
+
   readonly env?: Readonly<Record<string, string>>;
 }
 
@@ -66,7 +53,7 @@ export interface BridgeHelperInfo {
 }
 
 export interface BridgeHandshake {
-  /** 协商成功后的版本号；ComputerStatusData.bridge.protocolVersion 是字符串，这里直接给字符串 "1" */
+
   readonly protocolVersion: string;
   readonly helper: BridgeHelperInfo;
   readonly capabilities: ComputerCapabilities;
@@ -74,36 +61,26 @@ export interface BridgeHandshake {
 
 export interface ComputerBridgeOptions {
   readonly launch: BridgeLaunchSpec;
-  /**
-   * 单次调用（含握手）的超时上限，计时从请求写出开始。
-   * 超时判 bridge_timeout 并杀掉 helper，下次调用重新启动。
-   */
+
   readonly callTimeoutMs?: number;
 }
 
 export interface ComputerBridge {
-  /** 协商成功的协议版本字符串；未握手成功时为 null */
+
   readonly protocolVersion: string | null;
   readonly ready: boolean;
-  /** 握手缓存（helper 元信息与能力）；未握手成功时为 null */
+
   readonly handshake: BridgeHandshake | null;
-  /**
-   * 只触发帮助进程启动与握手，不额外发业务命令；幂等，已就绪时直接成功。
-   * 能力探测（computer_status）用它：读能力不该顺带跑一条业务调用。
-   */
+
   ensureReady(): Promise<ComputerResult<true>>;
   call<T = unknown>(cmd: string, args?: Readonly<Record<string, unknown>>): Promise<ComputerResult<T>>;
-  /** 幂等；关闭后 call 一律返回 bridge_unavailable，且不再启动 helper */
+
   dispose(): void;
 }
 
-// ---------------------------------------------------------------------------
-// 信封与编解码（协议规范第 2 节；纯函数，可单独测）
-// ---------------------------------------------------------------------------
-
 export interface BridgeRequest {
   readonly protocolVersion: number;
-  /** 请求内唯一，形如 req_1、req_2 */
+
   readonly id: string;
   readonly cmd: string;
   readonly args: Record<string, unknown>;
@@ -130,7 +107,6 @@ export function encodeBridgeRequest(request: BridgeRequest): string {
   return `${JSON.stringify(request)}\n`;
 }
 
-/** helper 侧读请求的形态校验；TS 侧只编码请求，这个方向主要给测试与协议对照用 */
 export function decodeBridgeRequest(line: string): DecodedBridgeRequest {
   let parsed: unknown;
   try {
@@ -158,10 +134,6 @@ export function decodeBridgeRequest(line: string): DecodedBridgeRequest {
   return { kind: "request", request: { protocolVersion, id, cmd, args: args as Record<string, unknown> } };
 }
 
-/**
- * 解一行响应；只判形态，不判 id 归属（归属由通道按当前在途调用匹配）。
- * 版本不匹配单独成一类：信封合法但协议对不上，错误信息里要能同时看到两侧版本。
- */
 export function decodeBridgeLine(
   line: string,
   expectedProtocolVersion: number = BRIDGE_PROTOCOL_VERSION,
@@ -207,10 +179,6 @@ export function decodeBridgeLine(
   return { kind: "response", response: { protocolVersion, id, ok: false, error: { code, message } } };
 }
 
-// ---------------------------------------------------------------------------
-// 通道实现
-// ---------------------------------------------------------------------------
-
 interface PendingCall {
   readonly id: string;
   settle(result: ComputerResult<unknown>): void;
@@ -228,7 +196,6 @@ function isComputerErrorCode(value: string): value is ComputerErrorCode {
   return (COMPUTER_ERROR_CODES as readonly string[]).includes(value);
 }
 
-/** helper 的错误码在契约里认识就原样保留，不认识统一归 action_failed，原始码进 detail */
 function mapHelperError(error: { readonly code?: string; readonly message?: string } | undefined): ComputerError {
   if (error?.code !== undefined && isComputerErrorCode(error.code)) {
     return error.message === undefined ? { code: error.code } : { code: error.code, detail: error.message };
@@ -246,26 +213,19 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 取值域校验：字符串且在允许取值里才通过（platform、coordinateMode、backgroundInput、权限状态共用） */
 function parseDomain<T extends string>(value: unknown, allowed: readonly string[]): T | undefined {
   return typeof value === "string" && allowed.includes(value) ? (value as T) : undefined;
 }
 
-/** 非空字符串校验（证据版本、目标标识这类文本不能是空串） */
 function parseText(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-/** 对象校验：数组与 null 都不算对象（快照里的嵌套结构共用） */
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   return value as Record<string, unknown>;
 }
 
-/**
- * 取值域数组校验：每项都在允许取值里；`minLength` 用于「必须有内容」的语义校验。
- * 不允许空串与表外值，未验证清单允许空数组（全验完时它就是空的）。
- */
 function parseDomainList<T extends string>(value: unknown, allowed: readonly string[], minLength = 0): T[] | undefined {
   if (!Array.isArray(value) || value.length < minLength) return undefined;
   const parsed: T[] = [];
@@ -277,7 +237,6 @@ function parseDomainList<T extends string>(value: unknown, allowed: readonly str
   return parsed;
 }
 
-/** 验证过的/未验证的窗口类型对（windowTypes 与 eventTypes 同形） */
 function parseVerifiedPair<T extends string>(
   value: unknown,
   allowed: readonly string[],
@@ -302,7 +261,7 @@ function parseBackgroundPointerApp(value: unknown): ComputerBackgroundPointerApp
   if (kind === undefined) return undefined;
   const verifiedBy = parseText(record.verifiedBy);
   if (verifiedBy === undefined) return undefined;
-  // 空 eventTypes 与「有到达证据的目标才进表」的语义矛盾，判畸形；windowTypes 同理
+
   const windowTypes = parseDomainList<ComputerBackgroundPointerWindowType>(record.windowTypes, BACKGROUND_POINTER_WINDOW_TYPES, 1);
   if (windowTypes === undefined) return undefined;
   const eventTypes = parseDomainList<ComputerBackgroundPointerEventType>(record.eventTypes, BACKGROUND_POINTER_EVENT_TYPES, 1);
@@ -332,10 +291,6 @@ function parseBackgroundPointerCoordinate(value: unknown): ComputerBackgroundPoi
   return { condition, requiresSnapshot: record.requiresSnapshot, verifiedCases, unverifiedCases };
 }
 
-/**
- * 后台指针的结构化限制（工单 47）：缺字段原样返回 undefined（旧 helper 兼容，不判畸形），
- * 报了就必须合法，否则整份能力快照判畸形。未知键忽略，与 parseCapabilities 的既有口径一致。
- */
 function parseBackgroundPointerLimits(value: unknown): ComputerBackgroundPointerLimits | undefined {
   const record = asRecord(value);
   if (record === undefined) return undefined;
@@ -378,10 +333,6 @@ function parseBackgroundPointerLimits(value: unknown): ComputerBackgroundPointer
   };
 }
 
-/**
- * 能力快照的字段级校验（工单 13）：类型与取值域都对着 contract.ts 的 ComputerCapabilities 查，
- * 未知字段忽略；必填字段缺失或越界一律判 undefined，由调用方按 bridge_unavailable 处理，不把垃圾当能力用。
- */
 function parseCapabilities(value: unknown): ComputerCapabilities | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
@@ -395,13 +346,13 @@ function parseCapabilities(value: unknown): ComputerCapabilities | undefined {
   if (coordinateMode === undefined) return undefined;
   const backgroundInput = parseDomain<ComputerBackgroundInput>(record.backgroundInput, BACKGROUND_INPUT_LEVELS);
   if (backgroundInput === undefined) return undefined;
-  // 旧 helper 没有独立后台指针字段时按 none 兼容；缺字段不能继承后台键盘能力。
+
   const backgroundPointer =
     record.backgroundPointer === undefined
       ? "none"
       : parseDomain<ComputerBackgroundInput>(record.backgroundPointer, BACKGROUND_INPUT_LEVELS);
   if (backgroundPointer === undefined) return undefined;
-  // 结构只在 helper 报出来时校验：缺失不判畸形（旧 helper 兼容），报出来就必须合法
+
   const backgroundPointerLimits = parseBackgroundPointerLimits(record.backgroundPointerLimits);
   if (backgroundPointerLimits === undefined && record.backgroundPointerLimits !== undefined) return undefined;
   const permissions = record.permissions;
@@ -423,15 +374,14 @@ function parseCapabilities(value: unknown): ComputerCapabilities | undefined {
     coordinateMode,
     backgroundInput,
     backgroundPointer,
-    // 缺省时不加这个键：旧 helper 的能力快照原样透传，不凭空造结构
+
     ...(backgroundPointerLimits !== undefined ? { backgroundPointerLimits } : {}),
-    // 循环按 COMPUTER_PERMISSIONS 逐个赋值，三个键必然齐备；Partial 只是循环赋值的类型代价
+
     permissions: parsedPermissions as Record<ComputerPermission, ComputerPermissionState>,
     limits: limits as readonly string[],
   };
 }
 
-/** 握手载荷来自进程边界，形态不对就拒绝，不把垃圾当能力用 */
 function parseHandshake(value: unknown): BridgeHandshake | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
@@ -452,7 +402,6 @@ function parseHandshake(value: unknown): BridgeHandshake | undefined {
   };
 }
 
-/** pipe 运行时是带 unref 的 Socket；类型上只声明成可选的 unref，宿主退出不被 helper 拖住 */
 function unrefStream(stream: unknown): void {
   (stream as { unref?: () => void } | null | undefined)?.unref?.();
 }
@@ -466,7 +415,7 @@ class Bridge implements ComputerBridge {
   private stderrTail = "";
   private sequence = 0;
   private pending?: PendingCall;
-  /** 调用队列：默认串行，后来的等前面的结算（无论成败）再跑 */
+
   private queue: Promise<unknown> = Promise.resolve();
   private disposed = false;
   private handshakeValue: BridgeHandshake | null = null;
@@ -526,7 +475,6 @@ class Bridge implements ComputerBridge {
     return await this.exchange<T>(cmd, args);
   }
 
-  /** 惰性启动：没有活着的 helper 就起一个并完成 hello 握手；崩溃或超时后的下次调用走同一条路 */
   private async ensureHelper(): Promise<ComputerResult<true>> {
     if (this.child !== undefined) return okResult(true);
     const spawned = await this.spawnHelper();
@@ -583,9 +531,9 @@ class Bridge implements ComputerBridge {
     child.stderr?.on("data", (chunk: string) => {
       this.stderrTail = `${this.stderrTail}${chunk}`.slice(-STDERR_TAIL_CHARS);
     });
-    // 用 close 而不是 exit：exit 可能早于管道里最后一行响应到达，会把已经写出的应答误判成崩溃
+
     child.on("close", (code, signal) => this.onChildClosed(child, code, signal));
-    // 常驻 helper 不拖住宿主的事件循环；宿主退出时的回收由进程钩子负责
+
     child.unref();
     unrefStream(child.stdin);
     unrefStream(child.stdout);
@@ -612,7 +560,7 @@ class Bridge implements ComputerBridge {
       this.killHelper();
       return;
     }
-    // 只认当前在途调用的 id；乱序或迟到的行不打扰其他调用
+
     if (decoded.kind === "response" && decoded.response.id !== pending.id) return;
     if (decoded.kind === "version_mismatch") {
       if (decoded.id !== pending.id) return;
@@ -652,7 +600,7 @@ class Bridge implements ComputerBridge {
       this.pending = pending;
       timer = setTimeout(() => {
         settle(failResult("bridge_timeout", `helper 在 ${this.callTimeoutMs}ms 内没有响应命令 ${cmd}`));
-        // 超时按 helper 卡死处理：杀掉它就杜绝悬挂进程，下次调用重新启动
+
         this.killHelper();
       }, this.callTimeoutMs);
       stdin.write(encodeBridgeRequest(request), (error) => {
@@ -684,16 +632,16 @@ class Bridge implements ComputerBridge {
     child.stdin?.destroy();
     child.stdout?.destroy();
     child.stderr?.destroy();
-    // 桥不依赖 helper 优雅退出（P0 没有需要落盘的状态），两个信号立刻发出，保证不被卡死的子进程拖住
+
     try {
       child.kill("SIGTERM");
     } catch {
-      // 进程可能已经退出，忽略
+
     }
     try {
       child.kill("SIGKILL");
     } catch {
-      // 同上
+
     }
     child.unref();
   }

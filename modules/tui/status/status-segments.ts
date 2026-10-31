@@ -1,10 +1,3 @@
-// tui 渲染半：段位配色与格式化（工单 07 定案 5：整文件留在 tui 侧，实为渲染辅助）。
-//
-// 工单 11：回合计时器的状态与控制器（TurnTimerController / TurnTimerSnapshot /
-// TurnTimerState）已切到 modules/status/turn-timer.ts（数据半）。
-// 工单 20：段位类型与压缩循环统一迁到 segment-layout.ts（editor 与 footer 共用），
-// 本文件只保留各段的语义色与耗时格式化。
-
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { TurnTimerState } from "../../status/api.ts";
 
@@ -50,8 +43,6 @@ export function durationStatusColor(state: TurnTimerState): ThemeColor {
 	return "dim";
 }
 
-/** 四档全展示（s / m+s / h+m+s / d+h+m+s）：秒数永不省略，数字不补零；
- * 字段宽度不在此截断，由段位布局的压缩降级负责。 */
 export function formatElapsed(elapsedMs: number): string {
 	const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
 	const seconds = totalSeconds % 60;

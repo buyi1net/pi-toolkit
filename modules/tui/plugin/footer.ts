@@ -23,7 +23,6 @@ import type {
 	StatusAppearance,
 } from "./status-sources.ts";
 
-/** 会话快照缺省值：宿主会话管理器未就绪时的零值占位（结构与旧行为一致） */
 const EMPTY_SESSION_STATUS: SessionStatusSnapshot = Object.freeze({
 	sessionId: "",
 	inputTokens: 0,
@@ -35,7 +34,6 @@ const EMPTY_SESSION_STATUS: SessionStatusSnapshot = Object.freeze({
 	compactions: 0,
 });
 
-/** 生命周期钩子：卸载前的宿主过渡动作，不属于任何数据源，单独成组。 */
 export interface ProjectStatusFooterHooks {
 	beforeDispose?: () => void;
 }
@@ -57,9 +55,6 @@ export class ProjectStatusFooter implements Component {
 	private readonly getCompressionLabel: (compact: boolean) => string;
 	private disposed = false;
 
-	// 宿主回调参数（tui/theme/footerData）保持原位；其余入参按数据源分组，
-	// 缺省时回落到与旧位置参数一致的默认行为。段位设置每帧读取（getSettings），
-	// 菜单改预设后无需重装组件即可生效。
 	constructor(
 		_tui: TUI,
 		theme: Theme,
@@ -91,12 +86,12 @@ export class ProjectStatusFooter implements Component {
 	render(width: number): string[] {
 		const glyphs = this.getGlyphs();
 		const settings = this.getSettings();
-		// Pi 原生 Footer 直接占用整行，不额外增加左右内边距。
+
 		const contentWidth = Math.max(1, width);
-		// Footer 第一行只展示项目路径与 Git 状态；会话短码位于编辑框顶边右侧。
+
 		const projectLine = renderProjectStatusLine(
 			{
-				// 快照未接线时仍保留占位，保证 Footer 结构从首帧起定型。
+
 				...(this.getProjectStatus?.() ?? { cwd: this.cwd, branch: null }),
 				runtime: this.getRuntimeStatus?.(),
 				duration: this.getTimer(),
@@ -108,8 +103,7 @@ export class ProjectStatusFooter implements Component {
 			settings.footerPrimary,
 			false,
 		);
-		// 第二行沿用 Pi 原生 Footer 排版，保留实际上下文占用与压缩状态标签
-		// （标签两形态一起交给段位压缩循环，窄屏自动退到紧凑形态）。
+
 		const contextUsage = this.getContextUsage();
 		const usageSegments = buildEditorUsageSegments(
 			this.getSessionStatus(),

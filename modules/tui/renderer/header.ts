@@ -23,7 +23,7 @@ export class PiTuiHeader implements Component {
 		getTheme: () => Theme,
 		getGlyphs: () => IconGlyphs,
 		requestRender: () => void = () => {},
-		// 为保持与 setTimeout 一致，注入调度器也须延后调用，并返回取消函数。
+
 		scheduleTimeout = (callback: () => void, delayMs: number): (() => void) => {
 			const timer = setTimeout(callback, delayMs);
 			return () => clearTimeout(timer);
@@ -48,7 +48,7 @@ export class PiTuiHeader implements Component {
 	}
 
 	private stopAnimation(): void {
-		// 重绘回调可能同步 dispose，此时尚未安排下一帧，单靠取消定时器无法阻止续播。
+
 		this.animationStopped = true;
 		this.cancelAnimation?.();
 		this.cancelAnimation = undefined;

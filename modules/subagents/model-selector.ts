@@ -1,27 +1,3 @@
-// 模型候选选择器（工单 24）：在不依赖实时供应商状态的前提下，按用户配置
-// 顺序在档位候选池里选出实际模型。
-//
-// 选择管线（规格《模型编排》§5 的静态部分 + 工单 25 的运行状态边界 +
-// 工单 26 的降级重试边界）：
-//   档位候选池 → 排除本次 spawn 已失败候选（工单 26 降级重试）→ 能力
-//   标签过滤 → 思考等级兼容性过滤 → 排除硬阻断（额度不足/模型下线）与
-//   持续不稳定（工单 26 错误观测）→ 按用户配置顺序取首个存活候选
-//
-// 范围裁决（工单 24 vs 25-28）：运行时错误触发的降级重试（工单 26）、
-// TUI 展示与用量面板（工单 27-28）不在本层。工单 25 起选择器接受可选的
-// 运行状态表（ModelHealthMap，由 model-health.ts 推导）：只排除硬阻断
-// 判定（quota-blocked / offline）；unstable / unknown / unconfigured 不
-// 排除——状态未知绝不能让整个编排无条件停摆（ADR 0007 决策 4）。
-//
-// 诚实边界（与工单 23 的支持性核验同一条规则）：目录缺席、目录里查不到候选、
-// 或裸 id 跨供应商歧义时，一律无法核验——不虚构“支持”，也不假设“不支持”，
-// 候选原样保留交给子进程，实际生效值以子会话记录为准。只有目录里明确
-// 查得到的模型，其能力/等级取值才参与过滤。运行状态同理：状态表里没有
-// 的候选按未知处理，保留不排除。
-//
-// 依赖方向：本文件只依赖 routing.ts 的思考等级词汇表与 model-health.ts
-// 的判定词汇表（单向；routing.ts 不反向依赖本文件，编排由 startup.ts 完成）。
-
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { modelOwnThinkingSuffix, type ThinkingLevel } from "./routing.ts";
 import {
@@ -30,59 +6,42 @@ import {
   type ModelHealthMap,
 } from "./model-health.ts";
 
-/**
- * 模型目录条目形状：宿主 `ExtensionContext.modelRegistry`（pi-ai 的
- * `Model`）结构满足；测试注入 stub。`input`/`thinkingLevelMap` 在宿主
- * Model 上必有/可选，这里保持同一形状以便直接吃宿主目录。
- */
 export interface CatalogModel {
   provider: string;
   id: string;
-  /** 宿主执行 API；旧测试替身可省略。 */
+
   api?: string;
-  /** 宿主执行地址；旧测试替身可省略。 */
+
   baseUrl?: string;
-  /** 展示名称；缺省时使用模型 id。 */
+
   name?: string;
-  /** reasoning 能力：是否支持思考等级（非 reasoning 只有 off）。 */
+
   reasoning: boolean;
-  /** 思考等级映射；`null` 值表示该等级被显式排除。 */
+
   thinkingLevelMap?: Record<string, string | null>;
-  /** 输入模态：含 "image" 即具备视觉能力。 */
+
   input?: readonly ("text" | "image")[];
 }
 
-/** 模型目录的最小子集（宿主 modelRegistry 满足；测试注入 stub）。 */
 export type ModelCatalog = {
   getAvailable(): ReadonlyArray<CatalogModel>;
   getAll(): ReadonlyArray<CatalogModel>;
   hasConfiguredAuth?: (...args: any[]) => boolean;
 };
 
-/**
- * 能力标签词汇表（工单 24）：只收录宿主目录可核验的能力。规格提到的
- * "代码、工具调用"宿主没有 per-model 数据，不虚构标签；上下文长度等
- * 数值维度留给后续工单。
- */
 export const MODEL_CAPABILITIES = ["vision", "reasoning"] as const;
 
 export type ModelCapability = (typeof MODEL_CAPABILITIES)[number];
 
-/** 严格判定（校验入口用）：不做归一化。 */
 export function isModelCapability(value: string): value is ModelCapability {
   return (MODEL_CAPABILITIES as readonly string[]).includes(value);
 }
 
-/** 宽容归一（trim + 小写）；无法识别返回 null，调用方负责报错。 */
 export function normalizeModelCapability(input: string): ModelCapability | null {
   const value = input.trim().toLowerCase();
   return isModelCapability(value) ? value : null;
 }
 
-/**
- * 宿主 `@earendil-works/pi-ai` 是思考等级能力的唯一裁决方；非 reasoning 模型只有 off，
- * thinkingLevelMap[level] === null 显式排除，xhigh / max 仍由宿主映射决定。
- */
 export function supportedThinkingLevels(
   model: { reasoning: boolean; thinkingLevelMap?: Record<string, string | null> },
 ): readonly string[] {
@@ -105,15 +64,6 @@ function catalogReference(entry: CatalogModel, thinking: string | null): string 
   return `${entry.provider}/${entry.id}${thinking ? `:${thinking}` : ""}`;
 }
 
-/**
- * 把模型调用方给出的引用对齐到宿主目录中的完整 provider/model 路由。
- *
- * 目录里能唯一确认时返回规范引用；裸 id 跨供应商歧义、已知 provider 下
- * 的错误模型名、或把模型品牌写成 provider 时返回可操作的问题。provider
- * 与 model id 都不在当前目录中的自定义路由保留原样，由子进程继续按宿主
- * 扩展解析；若自定义 provider 复用了目录中已有的 model id，则仍提示使用
- * 精确路由，避免把品牌名误当 provider。
- */
 export function resolveKnownModelReference(
   modelRef: string,
   catalog: ModelCatalog,
@@ -180,16 +130,9 @@ export function resolveKnownModelReference(
     };
   }
 
-  // 目录没有这个 provider，可能是用户安装的自定义 provider；不要凭目录
-  // 不完整就阻断它。
   return null;
 }
 
-/**
- * 按引用（"provider/id"、裸 id，可带 ":level" 思考等级后缀）在目录里查
- * 模型。找不到或裸 id 跨供应商歧义时返回 null（无法核验），调用方跳过
- * 过滤而不是虚构支持性。
- */
 export function findCatalogModel(
   modelRef: string,
   catalog: ModelCatalog,
@@ -203,10 +146,6 @@ export function findCatalogModel(
   return bare.length === 1 ? bare[0] : null;
 }
 
-/**
- * 按引用给出目录里该模型支持的思考等级；查不到/歧义返回 null（无法核验），
- * 调用方跳过校验而不是虚构支持性。
- */
 export function resolveModelThinkingSupport(
   modelRef: string,
   catalog: ModelCatalog,
@@ -215,13 +154,6 @@ export function resolveModelThinkingSupport(
   return model ? supportedThinkingLevels(model) : null;
 }
 
-/**
- * 按引用核验模型是否具备全部要求的能力，返回缺失清单（工单 02）：目录里
- * 查得到该模型而它缺少某能力标签时返回非空清单；空数组 = 查得到且全部
- * 满足。查不到/裸 id 跨供应商歧义返回 null（无法核验），调用方跳过校验
- * 而不是虚构支持性——与 resolveModelThinkingSupport 同一条诚实边界，
- * 供启动链对显式 model / 档案 model 做与思考等级同一位置的最终核验。
- */
 export function modelMissingCapabilities(
   modelRef: string,
   required: readonly ModelCapability[],
@@ -232,90 +164,52 @@ export function modelMissingCapabilities(
   return required.filter((capability) => !entryHasCapability(entry, capability));
 }
 
-/** 单个候选被过滤掉的原因（结构化诊断信息的最小单位）。 */
 export interface ModelCandidateRejection {
-  /** 被过滤的候选引用（含 ":level" 后缀，原样）。 */
+
   readonly model: string;
-  /** 过滤维度：能力标签 / 思考等级 / 运行状态（工单 25）。 */
+
   readonly kind: "capability" | "thinking" | "status";
-  /** 人可读原因（错误文案直接拼这段）。 */
+
   readonly reason: string;
 }
 
-/**
- * 运行状态硬阻断类跳过原因的固定前缀（工单 08）：reason 文案里 verdict
- * 跟在其后（quota-blocked / offline）。展示层靠它从路由快照的 skipped
- * 里区分「额度/下线硬阻断」与其它跳过，不在各自入口复制字符串字面量。
- */
 export const STATUS_SKIP_REASON_PREFIX = "runtime status ";
-/** 持续不稳定跳过原因的固定前缀（工单 08，同上口径）。 */
+
 export const UNSTABLE_SKIP_REASON_PREFIX = "persistent provider instability, skipped";
-/** 降级重试排除原因的固定前缀（工单 08：细分继承原因时排除该类条目）。 */
+
 export const FAILOVER_EXCLUSION_REASON_PREFIX = "excluded by failover policy";
 
-/** 选择器输入：本次任务对候选的能力与思考等级要求。 */
 export interface ModelSelectionRequirements {
-  /** 要求候选具备的能力标签（通常来自 agent frontmatter 的 capabilities）。 */
+
   capabilities?: readonly ModelCapability[];
-  /**
-   * 思考等级要求：覆盖链上层已定值（任务显式 > 代理 frontmatter > 档位
-   * 默认，由调用方按规格 §4 合并后传入）。null/undefined 表示无等级
-   * 要求，此时仍按候选自带 ":level" 后缀核验（模型自身默认值）。
-   */
+
   thinking?: ThinkingLevel | null;
 }
 
-/** 选择成功：实际选中的候选与被跳过候选的诊断记录。 */
 export interface ModelCandidateSelection {
-  /** 实际选中的候选引用（含 ":level" 后缀，原样）。 */
+
   readonly model: string;
-  /** 选中候选在候选池中的位置（0 起；0 = 用户首选）。 */
+
   readonly rank: number;
-  /** 在它之前被过滤掉的候选及原因（顺序同候选池）。 */
+
   readonly skipped: readonly ModelCandidateRejection[];
 }
 
-/** 选择失败：全池候选都被过滤，附结构化诊断。 */
 export interface ModelSelectionFailure {
-  /** 完整候选池（用户配置顺序）。 */
+
   readonly pool: readonly string[];
-  /** 本次选择的要求（回放诊断用）。 */
+
   readonly requirements: ModelSelectionRequirements;
-  /** 每个候选被过滤的原因（顺序同候选池）。 */
+
   readonly rejections: readonly ModelCandidateRejection[];
 }
 
-/** 目录条目是否具备要求的能力（只对目录里查得到的条目调用）。 */
 function entryHasCapability(entry: CatalogModel, capability: ModelCapability): boolean {
   if (capability === "reasoning") return entry.reasoning === true;
-  // vision：宿主 Model 的 input 必含模态数组；条目缺 input 视为不可证
-  // 具备视觉（要求在场就必须可证，不能默认满足）。
+
   return entry.input?.includes("image") === true;
 }
 
-/**
- * 在有序候选池上执行静态选择（工单 24）+ 运行状态硬阻断过滤（工单 25）
- * + 降级重试排除（工单 26）：
- *
- * 0. 提供排除集（工单 26）时，本次 spawn 已失败过的候选（按基础引用，
- *    剥 ":level" 后缀匹配）被跳过——每个候选至多尝试一次，顺序不回绕；
- * 1. 默认按用户配置顺序取首个候选（首选在前）；
- * 2. 目录可核验时，缺任一要求能力标签的候选被跳过；
- * 3. 目录可核验时，不支持生效思考等级（要求值 ?? 候选自带后缀）的候选
- *    被跳过——这是工单 24 对工单 23 行为的演进：tier 路径从“直接拒绝”
- *    变为“换下一个候选”，显式 model 路径仍是直接拒绝（由 startup.ts 的
- *    支持性核验承担）；
- * 4. 工单 25：提供运行状态表时，判定为硬阻断（额度不足/模型下线）的候选
- *    被跳过；状态表里没有的候选按未知处理，保留（查询失败不停摆）；
- * 5. 工单 26：状态携带 signals.persistentlyUnstable（persistent 窗口内
- *    反复临时故障）的候选被跳过（规格 §5「持续过载不得继续选择」）；
- *    单次 unstable 仍不排除；
- * 6. 目录缺席/候选查不到：无法核验，候选保留（不虚构支持性）；
- * 7. 全池被过滤时返回结构化 failure，调用方拼可诊断错误。
- *
- * 纯函数：不读配置、不查余额、不发网络请求——运行状态表由调用方
- * （startup.ts 经 model-health.ts 网关）提前取好传入。
- */
 export function selectModelCandidate(
   pool: readonly string[],
   requirements: ModelSelectionRequirements,
@@ -328,8 +222,6 @@ export function selectModelCandidate(
   for (let rank = 0; rank < pool.length; rank += 1) {
     const candidate = pool[rank];
 
-    // 工单 26：本次 spawn 的降级重试排除——已失败候选不再入选（按基础
-    // 引用匹配，每个候选至多尝试一次，候选访问顺序不回绕）。
     if (exclude?.has(baseModelRef(candidate))) {
       skipped.push({
         model: candidate,
@@ -370,8 +262,6 @@ export function selectModelCandidate(
       }
     }
 
-    // 工单 25：只排除硬阻断（额度不足/模型下线）。状态表按基础引用（剥
-    // “:level” 后缀）查；查不到 = 状态未知 = 保留，绝不停摆。
     const status = health?.get(baseModelRef(candidate));
     if (status && isHardBlockedVerdict(status.verdict)) {
       skipped.push({
@@ -382,8 +272,6 @@ export function selectModelCandidate(
       continue;
     }
 
-    // 工单 26：持续不稳定（错误观测的 persistent 窗口内反复临时故障）按
-    // 规格 §5「持续过载不得继续选择」跳过；单次 unstable 不排除。
     if (status?.signals?.persistentlyUnstable === true) {
       skipped.push({
         model: candidate,
@@ -403,8 +291,6 @@ export function selectModelCandidate(
     },
   };
 }
-
-// ── 模型目录读口（工单 02）────────────────────────────────────────
 
 export type ModelDirectorySource = "current" | "pool:fast" | "pool:balanced" | "pool:flagship" | "catalog";
 export interface ModelIdentity { readonly provider: string; readonly id: string; readonly api: string; readonly baseUrl: string; }
@@ -458,7 +344,6 @@ export function projectModelDirectoryHealth(directory: ModelDirectory, health?: 
   };
 }
 
-/** 生成与 Pi /model 可选列表同源的模型目录；运行状态只作为展示事实。 */
 export function buildModelDirectory(input: ModelDirectoryInput): ModelDirectory {
   const isConfigured = (model: CatalogModel): boolean => input.modelRegistry.hasConfiguredAuth?.(model as unknown) ?? true;
   const registryModels = [...input.modelRegistry.getAvailable()].filter(isConfigured);
@@ -528,7 +413,6 @@ function referenceCandidate(entry: ModelDirectoryEntry): ModelDirectoryReference
   };
 }
 
-/** 在当前 /model 可用目录中解析模型 id、显示名称或完整 provider/id 路由。 */
 export function resolveDirectoryModelReference(
   directory: ModelDirectory,
   modelRef: string,

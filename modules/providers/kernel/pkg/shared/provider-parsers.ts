@@ -1,7 +1,3 @@
-// 供应商响应解析（纯函数，零 IO）。字段口径以 cc-switch 0b5da51 为基准，
-// Sub2API /v1/usage 另按 ApiKey 现场响应与 Sub2API 上游实现适配。
-// 解析器只由查询运行层按路由表绑定消费，不从 usage-core / usage-node 出口导出。
-
 import type { BalanceValue, ProviderUsage, QuotaInfo, QuotaWindow } from './provider-contracts.ts';
 
 export function numberValue(value: unknown): number | null {
@@ -74,8 +70,7 @@ export function parseKimiBalance(json: any, international = false): BalanceValue
 }
 
 export function parseKimiQuota(json: any): QuotaInfo | null {
-  // 官方接口当前返回裸对象；兼容网关包裹在 data 下的同一响应，
-  // 但不把普通余额响应误认为套餐额度。
+
   const payload = json?.data && (json.data.usage || json.data.limits) ? json.data : json;
   const windows: QuotaWindow[] = [];
   const detail = Array.isArray(payload?.limits)

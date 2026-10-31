@@ -1,13 +1,5 @@
-// 共享供应商目录。品牌收录与查询能力是两件事：目录负责识别和分组，
-// queryKind 只标记已经有确定协议实现的查询后端。
-//
-// 主目录以 cc-switch 0b5da510168914b251481654a568c3ffacd62cf4 的
-// Claude Code 77 个原始预设为固定快照，再通过 brandId 归并品牌；
-// ZenMux 来自同一提交的 coding_plan 实现。
-
 export type ProviderGroup = 'official' | 'relay';
 
-/** 内部维护分类；不参与 Pi 界面渲染。 */
 export type ProviderCategory = 'official' | 'major-relay' | 'small-relay' | 'unknown';
 export type MaintenancePriority = 'P0' | 'P1' | 'P2' | 'P3';
 export type ProviderQueryStatus = 'implemented' | 'recognition-only';
@@ -39,32 +31,31 @@ export type BuiltinQueryKind =
 	| 'novita'
 	| 'sub2api';
 
-/** 查询所需凭据来源；none 表示目前只有品牌识别，没有确定的查询协议。 */
 export type QueryAccess = 'api-key' | 'extra-credentials' | 'host-oauth' | 'generic' | 'none';
 
 export interface ProviderRoute {
-	/** 精确主机名；以 *. 开头时允许该域及其子域。 */
+
 	host: string;
-	/** 同一主机承载多个产品时，用路径前缀消歧。 */
+
 	pathPrefix?: string;
 }
 
 export interface ProviderCatalogEntry {
-	/** 路由/产品变体标识；同一品牌的国内站、国际站或套餐可以各自拥有独立条目。 */
+
 	id: string;
-	/** 去重后的品牌标识；界面和跨宿主统计以此为准。 */
+
 	brandId: string;
 	displayName: string;
 	group: ProviderGroup;
-	/** 内部维护字段；不得传入状态栏或 Header 的展示数据。 */
+
 	category: Exclude<ProviderCategory, 'unknown'>;
 	maintenancePriority: Exclude<MaintenancePriority, 'P3'>;
 	queryStatus: ProviderQueryStatus;
-	/** 仅描述站点、套餐或鉴权差异，不作为供应商品牌展示。 */
+
 	variant?: string;
-	/** cc-switch 中的原始预设名称；非预设查询后端为空。 */
+
 	presetName?: string;
-	/** 其它宿主中指向同一计费服务的预设名称。 */
+
 	aliases?: readonly string[];
 	routes: readonly ProviderRoute[];
 	queryAccess: QueryAccess;
@@ -80,7 +71,6 @@ export interface ProviderBrand {
 
 const route = (host: string, pathPrefix?: string): ProviderRoute => ({ host, pathPrefix });
 
-// 分类是维护者审核结果，不根据域名、价格或模型数量自动推断。
 const BRAND_METADATA = {
 	anthropic: { displayName: 'Anthropic', category: 'official' },
 	kimi: { displayName: 'Kimi', category: 'official' },
@@ -208,7 +198,7 @@ const PROVIDER_VARIANTS: readonly ProviderVariant[] = [
 	{ id: 'xiaomi-mimo-token-plan', brandId: 'xiaomi-mimo', presetName: 'Xiaomi MiMo Token Plan (China)', variant: 'Token Plan (China)', routes: [route('token-plan-cn.xiaomimimo.com')] },
 	{ id: 'aws-bedrock-aksk', brandId: 'aws-bedrock', presetName: 'AWS Bedrock (AKSK)', variant: 'AK/SK', routes: [route('bedrock-runtime.*.amazonaws.com')] },
 	{ id: 'aws-bedrock-api-key', brandId: 'aws-bedrock', presetName: 'AWS Bedrock (API Key)', variant: 'API Key', routes: [route('bedrock-runtime.*.amazonaws.com')] },
-	// cc-switch 其它宿主相对 Claude 目录新增的第一方服务。
+
 	{ id: 'openai', brandId: 'openai', routes: [route('api.openai.com')], queryAccess: 'host-oauth', aliases: ['OpenAI Official'] },
 	{ id: 'azure-openai', brandId: 'azure-openai', routes: [route('*.openai.azure.com')], aliases: ['Azure OpenAI'] },
 	{ id: 'tencent-hunyuan', brandId: 'tencent-hunyuan', routes: [route('tokenhub.tencentmaas.com')], aliases: ['Tencent Hunyuan'] },
@@ -261,12 +251,12 @@ const PROVIDER_VARIANTS: readonly ProviderVariant[] = [
 	{ id: 'nvidia', brandId: 'nvidia', presetName: 'Nvidia', routes: [route('integrate.api.nvidia.com')] },
 	{ id: 'pipellm', brandId: 'pipellm', presetName: 'PIPELLM', routes: [route('cc-api.pipellm.ai')] },
 	{ id: 'jiekou', brandId: 'jiekou', presetName: 'JieKou AI', routes: [route('api.jiekou.ai')] },
-	// 同一参考提交内有专用 Coding Plan 查询，但没有 Claude 预设。
+
 	{ id: 'zenmux', brandId: 'zenmux', routes: [route('*.zenmux.ai')] },
-	// cc-switch 其它宿主相对 Claude 目录新增的聚合/网关服务。
+
 	{ id: 'together-ai', brandId: 'together-ai', routes: [route('api.together.xyz')], aliases: ['Together AI'] },
 	{ id: 'new-api', brandId: 'new-api', routes: [], aliases: ['NewAPI'] },
-	// 自建 Sub2API 中转站，/v1/usage 余额查询走 sub2api 协议。
+
 	{ id: 'duiz', brandId: 'duiz', routes: [route('llm.duiz.net')], queryAccess: 'api-key', queryKind: 'sub2api' },
 ];
 
@@ -306,7 +296,7 @@ function createCatalog(variants: readonly ProviderVariant[]): {
 		brand.variants.push(entry);
 		return entry;
 	});
-	// ID 和别名共用查找入口，必须一起检查，避免任一条目遮住另一条目的 ID 或别名。
+
 	const names = new Map(ids);
 	for (const entry of entries) {
 		for (const alias of entry.aliases ?? []) {
@@ -350,7 +340,6 @@ function routeMatches(url: URL, candidate: ProviderRoute): boolean {
 	return path === prefix || path.startsWith(`${prefix}/`);
 }
 
-/** 路径更具体的规则优先，避免火山 Plan 被同主机的 Doubao 通用规则抢占。 */
 export function findProviderByUrl(baseUrl: string): ProviderCatalogEntry | null {
 	let url: URL;
 	try {

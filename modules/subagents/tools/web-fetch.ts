@@ -1,19 +1,6 @@
-/**
- * web_fetch 扩展：给声明了 `web_fetch` 工具的子代理提供 URL 抓取能力（工单 29）。
- *
- * 背景：researcher 等 profile 长期声明 web_fetch/web_search，但背书扩展被
- * 期望安装在 `<agentDir>/extensions/web-fetch/index.ts`——多数机器上从未
- * 存在，pi 又会静默丢弃 --tools 白名单里没有提供方的名字，子代理于是只剩
- * ask_question。本文件与 web-search.ts 一起作为模块捆绑的兜底实现，由
- * getToolExtensionPath 在用户未安装扩展时回退注入（-e 本文件）。
- *
- * 代理与网络：Node ≥ 24 的全局 fetch 只在 NODE_USE_ENV_PROXY=1 时才走
- * HTTP(S)_PROXY；启动事务在装载 web 工具时会为子进程设置该变量。
- * 旧 Node 上该变量是 no-op，fetch 直连（目标不可达时报清晰的 fetch 失败）。
- */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { compactRenderText, renderToolCardCall, renderToolCardResult, toolCardText } from "../../../kit/tool-card.ts";
 import { subagentsTableTranslator, type SubagentsTranslate } from "../messages/index.ts";
 import { assertFetchableUrl, htmlToText, urlForMessage } from "./web-html.ts";
 
@@ -21,9 +8,8 @@ export const BROWSER_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
   "Chrome/126.0.0.0 Safari/537.36";
 
-/** 单次抓取超时（毫秒）。 */
 export const FETCH_TIMEOUT_MS = 30_000;
-/** 返回给模型的最大字符数（约 15–20k token，防止单次抓取塞爆上下文）。 */
+
 export const MAX_CONTENT_CHARS = 60_000;
 
 const FETCH_HEADERS: Record<string, string> = {
@@ -32,15 +18,9 @@ const FETCH_HEADERS: Record<string, string> = {
   "accept-language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
 };
 
-/** 手动跟随的跳转上限（工单 32：每跳都要重跑 SSRF 校验）。 */
 const MAX_REDIRECTS = 5;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
-/**
- * 抓取并手动跟随跳转：`redirect: "follow"` 会把校验过的公网地址直接带到
- * 内网/回环目标上，因此逐跳用 assertFetchableUrl 重校验；跳转目标不合法
- * 当场拒绝，绝不发出那一跳的请求。
- */
 async function fetchFollowingRedirects(rawUrl: string): Promise<Response> {
   let currentUrl = rawUrl;
   for (let hop = 0; ; hop += 1) {
@@ -76,13 +56,12 @@ async function fetchFollowingRedirects(rawUrl: string): Promise<Response> {
         `web_fetch refused redirect target (${urlForMessage(currentUrl)} → ${urlForMessage(nextUrl)}): ${blocked}`,
       );
     }
-    // 未消费的重定向响应体会占住连接池，换下一跳前排空。
+
     await response.body?.cancel().catch(() => {});
     currentUrl = nextUrl;
   }
 }
 
-/** 抓单个 URL 并整理为模型可读文本（导出供测试与 web-search 复用语义）。 */
 export async function fetchUrlAsText(
   rawUrl: string,
   opts: { raw?: boolean } = {},
@@ -111,6 +90,12 @@ export async function fetchUrlAsText(
   );
 }
 
+function collapsedReason(text: string): string | undefined {
+  const compact = compactRenderText(text);
+  if (!compact) return undefined;
+  return compact.length > 48 ? `${compact.slice(0, 47)}…` : compact;
+}
+
 export default function webFetchExtension(pi: ExtensionAPI, t: SubagentsTranslate = subagentsTableTranslator("en")) {
   pi.registerTool({
     name: "web_fetch",
@@ -136,13 +121,33 @@ export default function webFetchExtension(pi: ExtensionAPI, t: SubagentsTranslat
         }),
       ),
     }),
-    renderCall(args, theme) {
+    renderShell: "self",
+    renderCall(args, theme, context) {
       const url = typeof args.url === "string" ? args.url.trim() : "(url)";
-      return new Text(
-        theme.fg("toolTitle", theme.bold(t("module.subagents.tool.web_fetch.display"))) +
-          " " + theme.fg("accent", url),
-        0,
-        0,
+      return renderToolCardCall(
+        { title: t("module.subagents.tool.web_fetch.display"), object: url || "(url)" },
+        theme,
+        context,
+      );
+    },
+    renderResult(result, options, theme, context) {
+      const details = (result.details ?? {}) as { url?: unknown };
+      const url =
+        (typeof details.url === "string" && details.url.trim()) ||
+        (typeof context?.args?.url === "string" && context.args.url.trim()) ||
+        "(url)";
+      const text = toolCardText(result);
+      const httpStatus = /^status: (\d{3})/m.exec(text)?.[1];
+      return renderToolCardResult(
+        {
+          title: t("module.subagents.tool.web_fetch.display"),
+          object: url,
+          status: context?.isError ? collapsedReason(text) : httpStatus ? `HTTP ${httpStatus}` : undefined,
+          details: options.expanded ? text.split("\n") : [],
+        },
+        theme,
+        options,
+        context,
       );
     },
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {

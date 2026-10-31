@@ -1,22 +1,7 @@
-// status 模块的段位设置与配置节（工单 11 从 tui/status/status-config.ts 整体迁入，
-// 并接管原先由 tui settings-config.ts 解析的 status 半）。
-//
-// 配置落点：pi-toolkit.json 的 `modules.status` 节（工单 07 定案 4：tui 节的
-// status.preset / status.segments 归属本模块；回复遥测的采集开关随遥测数据一起过来）：
-//   modules.status.preset     状态预设（minimal / default / full）
-//   modules.status.segments   段位顺序覆盖（数组或 null）
-//   modules.status.telemetry  是否记录回合遥测条目（默认开）
-// 写盘走 kit 的结构化配置写入事务（补丁 → 落盘 → 内存重载 → reapply）：
-// 深合并、剥敏感键与 0600 原子替换都在事务里。
-//
-// 对外导出面（模块 api.ts 的纯函数来源）：STATUS_PRESET_NAMES、STATUS_SEGMENT_IDS、
-// resolveStatusSettings 等；tui 侧只读解析结果，不自己读配置节。
-
 import type { ModuleConfigRecord } from "../../kit/module.ts";
 import type { ProjectStatusSegmentId } from "./project-status.ts";
 import type { EditorUsageSegmentId } from "./session-status.ts";
 
-/** 模块 id：同时是配置节名与菜单项 id 前缀 */
 export const STATUS_MODULE_ID = "status";
 export const STATUS_SECTION_LABEL = `modules.${STATUS_MODULE_ID}`;
 
@@ -118,10 +103,6 @@ export function resolveStatusSettings(
 	};
 }
 
-// ─────────────────────────────────────────────────────────────
-// 配置节解析与写入（原 tui settings-config.ts 的 status 半）
-// ─────────────────────────────────────────────────────────────
-
 export interface StatusSectionConfig {
 	preset: StatusPresetName;
 	segments: StatusSegmentId[] | null;
@@ -185,10 +166,6 @@ function readSegments(value: unknown, warnings: string[]): StatusSegmentId[] | n
 	return [...seen];
 }
 
-/**
- * 把 pi-toolkit.json 的 `modules.status` 节规范化成 StatusSectionConfig。
- * 逐字段校验：非法项记 warning 并回退默认值，绝不因单点配置错误拖垮整个模块。
- */
 export function readStatusSection(section: Record<string, unknown> | undefined): LoadedStatusSection {
 	const warnings: string[] = [];
 	const source = isRecord(section) ? section : {};
@@ -202,7 +179,6 @@ export function readStatusSection(section: Record<string, unknown> | undefined):
 	};
 }
 
-/** 配置节 + 环境变量 → 实际生效的段位设置（tui 侧经 `status.workspace` 句柄读它） */
 export function statusSettingsFromSection(
 	section: Record<string, unknown> | undefined,
 	env: Readonly<Record<string, string | undefined>> = process.env,
@@ -211,7 +187,6 @@ export function statusSettingsFromSection(
 	return resolveStatusSettings(env, { preset, segments });
 }
 
-/** 写盘补丁语义（工单 19）：段位 / 遥测更新 → `modules.status` 节补丁（校验在读路径） */
 export function statusSectionPatch(update: StatusSectionUpdate): ModuleConfigRecord {
 	return { ...update } as ModuleConfigRecord;
 }

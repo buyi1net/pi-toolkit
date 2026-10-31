@@ -35,7 +35,7 @@ export const SubagentParams = Type.Object({
   agent: Type.String({
     minLength: 1,
     description:
-      "Which agent to spawn (e.g. 'general-purpose' or 'explore'). This loads the agent's " + +
+      "Which agent to spawn (e.g. 'general-purpose' or 'explore'). This loads the agent's " +
       "fixed profile — its model, tool loadout, and system prompt. Must be one of the available agents.",
   }),
   task: Type.String({
@@ -132,7 +132,7 @@ export const SubagentParams = Type.Object({
         description:
           "Session retention for headless autonomous sub-agents after this call settles. 'auto' (default): delete this sub-agent's " +
           "session JSONL, .loadout.json, context task/system-prompt files and activity/runtime registration after a SUCCESSFUL terminal state; " +
-          "failed, cancelled or handed-off runs are preserved so you can resume them with subagent_message. 'preserve': always keep everything. " +
+          "failed, cancelled or handed-off runs are preserved so you can continue them with followup_task. 'preserve': always keep everything. " +
           "'discard': always delete after a terminal state (including failure/cancellation) — use when you know you will never resume. " +
           "Visible pane / demo sub-agents are ALWAYS preserved regardless of this parameter. Deletion happens only after the result has been " +
           "extracted and returned — it never affects the tool result.",
@@ -156,12 +156,12 @@ export const SubagentParams = Type.Object({
     Type.Boolean({
       description:
         "Spawn this sub-agent as a persistent TEAM MEMBER instead of a one-shot task. The call returns an immediate ack (no hard barrier): " +
-        "the member runs as a long-lived headless process, stays alive after each round, and receives follow-up rounds via team_dispatch. " +
+        "the member runs as a long-lived headless process, stays alive after each round, and receives follow-up rounds through the member runtime watcher. " +
         "Each round's result is delivered once as a steer message when it ends. Members may message each other (fire-and-forget team_send) only " +
         "along ACL edges declared in the agent profile's `peer-send`. Constraints (violations are refused): headless only (surface may not be " +
         "'pane'), retention is forced to 'preserve' (may not be 'discard'), no timeoutMs, no dependsOn, and interactive (demo) agents cannot be " +
-        "members. Members cannot be dependsOn targets (no process-level terminal state). Stopping a member requires subagent_stop; host session " +
-        "shutdown or /reload terminates members and marks them offline (session preserved for explicit resume).",
+        "members. Members cannot be dependsOn targets (no process-level terminal state). Stopping a member is handled by the member runtime and host session shutdown; " +
+        "offline sessions remain preserved for explicit resume.",
     }),
   ),
 });

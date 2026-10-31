@@ -3,14 +3,13 @@ import type {
 	TuiMainScreenRenderState,
 } from "@earendil-works/pi-tui";
 
-/** 终端输出抽象：测试可注入伪 TTY。 */
 export type VisibleScreenOutput = {
 	isTTY?: boolean;
 };
 
 export const CLEAR_VISIBLE_SCREEN = "\x1b[2J\x1b[H";
 export const DIRTY_RENDER_SUFFIX = "\x00";
-/** 过渡揭示的稳定等待：超过该时长没有新 Editor 帧即视为结构稳定。 */
+
 export const TRANSITION_SETTLE_MS = 32;
 
 export function isInteractiveLaunch(): boolean {
@@ -112,7 +111,7 @@ function forceRestoreClearedScreen(tui: TUI): void {
 	try {
 		tui.renderNow(true);
 	} catch {
-		// 强制重画已经是闪屏后的最后恢复路径。
+
 	}
 }
 
@@ -123,7 +122,6 @@ function captureStableMainScreenState(tui: TUI): TuiMainScreenRenderState | unde
 		const firstState = tui.captureRenderState();
 		if (!isSafeRenderState(tui, firstState)) return undefined;
 
-		// 连续两次同步渲染必须完全稳定，否则不能保证恢复范围。
 		tui.renderNow(false);
 		const state = tui.captureRenderState();
 		if (!isSafeRenderState(tui, state) || !hasStableRenderState(firstState, state)) {

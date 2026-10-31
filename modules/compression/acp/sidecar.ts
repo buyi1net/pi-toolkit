@@ -1,19 +1,3 @@
-// ACP sidecar 存取（工单 08）：<sessionFile>.acp.json 的原子写入、同会话并发
-// 保护与读取分类。
-//
-// 移植自 billion-context-pi 的 src/state.ts / contract.ts（MIT），按本仓口径裁剪：
-// - 原子写入：先写 `<file>.acp.tmp-<pid>-<seq>` 临时文件再 rename，读取方要么
-//   看到上一个完整文件要么看到下一个完整文件，永不读到撕裂写；
-// - 同会话并发保护：同一 sidecar 路径的写入经 promise 链串行化（后写的等
-//   先写的落盘完成），内存槽（缓存）与磁盘一致；
-// - 会话身份绑定：sidecar 顶层登记写入时的 session.id；运行态槽按
-//   「会话文件（无文件时退化为 session id）」键控，session_shutdown 释放；
-// - 版本策略：缺省版本号按 v1 解释（兼容上游 billion-context-pi 的 v1
-//   sidecar，可互相读取）；高于 ACP_SIDECAR_SCHEMA_VERSION 的文件按
-//   newer-schema 分类，读取侧明确失败，本实现不解释也不重写它；
-// - 损坏（不可解析/形状不对）按 corrupt 分类：由调用方（engine）走会话日志
-//   重建或明确失败，本层不静默给默认状态。
-
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createInitialState, type CompressionState } from "acp-kernel";
@@ -25,12 +9,11 @@ import {
   type AcpSidecarLoadResult,
 } from "./types.ts";
 
-/** 运行态槽：一个会话一份状态（含旁路诊断），键见 slotKeyOf */
 interface SidecarSlot {
   state: CompressionState;
-  /** sidecar 登记的写入会话 id（诊断；未落盘时缺席） */
+
   sessionId?: string;
-  /** 写入时的配置代际指纹（未携带时缺席） */
+
   configFingerprint?: string;
 }
 
@@ -38,22 +21,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** sidecar 路径：<sessionFile>.acp.json；无会话文件（内存会话）返回 null */
 export function acpSidecarPathFor(sessionFile: string | undefined): string | null {
   return sessionFile ? sessionFile + ACP_SIDECAR_SUFFIX : null;
 }
 
-/** 运行态槽键：优先会话文件（跨进程稳定），无文件时退化为会话 id */
 function slotKeyOf(sessionFile: string | undefined, sessionId: string): string {
   return sessionFile ? `file:${sessionFile}` : `session:${sessionId}`;
 }
 
-/** 读取的 state 形状校验：blocks 是数组、messageRefs 是对象才可用 */
 function looksLikeState(value: unknown): value is CompressionState {
   return isRecord(value) && Array.isArray((value as { blocks?: unknown }).blocks) && isRecord((value as { messageRefs?: unknown }).messageRefs);
 }
 
-/** 旧状态补齐新字段（内核新增字段缺席时用初始值填，不丢用户数据） */
 function mergeAcpState(parsed: CompressionState): CompressionState {
   const fresh = createInitialState();
   return {
@@ -71,7 +50,6 @@ function mergeAcpState(parsed: CompressionState): CompressionState {
   };
 }
 
-/** 解析 sidecar JSON：分类出 ok / corrupt / newer-schema（不抛出）；状态体在顶层 `state` 字段下 */
 function parseSidecar(raw: string): AcpSidecarLoadResult {
   let parsed: unknown;
   try {
@@ -106,15 +84,10 @@ function parseSidecar(raw: string): AcpSidecarLoadResult {
 
 export class AcpSidecarStore {
   private slots = new Map<string, SidecarSlot>();
-  /** 同 sidecar 路径的写入串行链（并发保护：后写的等先写的完成） */
+
   private writeChains = new Map<string, Promise<void>>();
   private tmpSequence = 0;
 
-  /**
-   * 读 sidecar 并落运行态槽。纯读取：missing/corrupt/newer-schema 不建槽、
-   * 不给默认状态（重建或失败由 engine 决定），已有槽时直接返回槽内状态
-   * （会话内热路径不重复读盘）。
-   */
   async load(sessionFile: string | undefined, sessionId: string): Promise<AcpSidecarLoadResult> {
     const key = slotKeyOf(sessionFile, sessionId);
     const cached = this.slots.get(key);
@@ -139,12 +112,6 @@ export class AcpSidecarStore {
     return parseSidecar(raw);
   }
 
-  /**
-   * 原子写 sidecar：tmp + rename，同路径写入串行化；内存槽同步更新。
-   * 无会话文件（内存会话）只更新内存槽——状态在进程内跨轮存活，但无落盘。
-   * configFingerprint（工单 11 配置代际）随载荷写入；缺省不写 config 字段。
-   * 写失败向上抛（commit 阶段失败由调用方报告持久化错误，不伪装成功）。
-   */
   async save(
     state: CompressionState,
     sessionFile: string | undefined,
@@ -186,26 +153,19 @@ export class AcpSidecarStore {
     await chained;
   }
 
-  /** 内存会话（无文件）也要能登记槽：stateFor 热路径与 save 共用 */
   bindInMemory(state: CompressionState, sessionId: string): void {
     this.slots.set(slotKeyOf(undefined, sessionId), { state });
   }
 
-  /** 当前槽内状态（未加载时 undefined；engine 的加载流程负责先 load） */
   peek(sessionFile: string | undefined, sessionId: string): CompressionState | undefined {
     return this.slots.get(slotKeyOf(sessionFile, sessionId))?.state;
   }
 
-  /** 会话结束：释放运行态槽（磁盘 sidecar 不动） */
   release(sessionFile: string | undefined, sessionId: string): void {
     this.slots.delete(slotKeyOf(sessionFile, sessionId));
   }
 }
 
-/**
- * sidecar 文件是否存在（工单 06 会话末补写判定）：无会话文件（内存会话）视为不存在。
- * 只看存在性，不读内容——内容是否最新由上层的状态签名判定。
- */
 export async function acpSidecarExists(sessionFile: string | undefined): Promise<boolean> {
   const file = acpSidecarPathFor(sessionFile);
   if (!file) return false;
@@ -217,12 +177,6 @@ export async function acpSidecarExists(sessionFile: string | undefined): Promise
   }
 }
 
-/**
- * 只读探测 sidecar 的压缩块数（工单 11 跨模式切换保护用）：文件缺失、损坏、
- * 版本不可解释或无会话文件时返回 undefined（不构成「活动私有状态」——损坏的
- * sidecar 由 ACP 自己的重建/失败路径处理，不阻断其它模式的压缩决策）。
- * 不建槽、不写盘，纯读取。
- */
 export async function readAcpSidecarBlockCount(sessionFile: string | undefined): Promise<number | undefined> {
   const file = acpSidecarPathFor(sessionFile);
   if (!file) return undefined;

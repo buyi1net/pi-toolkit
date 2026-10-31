@@ -42,7 +42,6 @@ function mergeSignals(signal: AbortSignal, other: AbortSignal | null | undefined
   return other ? AbortSignal.any([signal, other]) : signal;
 }
 
-/** 读取一个成功的 Responses SSE，并把原始事件交给 Context Management 收集器。 */
 async function collectSse(
   response: Response,
   collector: ReturnType<typeof createContextManagementCollector>,
@@ -115,11 +114,6 @@ async function collectSse(
   }
 }
 
-/**
- * 建立 Context Management adapter。工厂只返回这一条协议的实现，协调者
- * 在 mod.ts 之外注入 `{ "context-management": create...() }`，因此本实现
- * 不会把失败转成 responses/compact 或 Remote V2 的隐式回退。
- */
 export function createContextManagementAdapter(): CodexRemoteCompactionAdapter {
   return async function requestContextManagement(
     request: CodexRemoteCompactionRequest,
@@ -209,8 +203,7 @@ export function createContextManagementAdapter(): CodexRemoteCompactionAdapter {
           delete prepared.previous_response_id;
           return prepared;
         },
-        // Pi 1.3.0 的 StreamOptions 已类型化该回调；不支持它的 provider 适配器
-        // 不调用（下方 fetch tee 是同等观察的兼容路径）。
+
         onProviderStreamEvent,
       };
       const stream = request.provider.stream(request.model, providerTranscriptContext(request.context), streamOptions);
@@ -248,8 +241,7 @@ export function createContextManagementAdapter(): CodexRemoteCompactionAdapter {
         callbackEvents > 0
           ? callbackCollector.finish()
           : (() => {
-              // The fetch tee owns its collector so that provider callbacks and
-              // transport parsing cannot publish the same output twice.
+
               if (responseCollectors.length !== 1) {
                 throw new ContextManagementProtocolError(
                   `provider exposed ${responseCollectors.length} successful responses; expected exactly one`,

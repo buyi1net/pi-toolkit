@@ -1,11 +1,3 @@
-// tui 渲染半：会话遥测行（tokens / cache / context）的段位构造与渲染
-// （工单 11 从原 status/session-status.ts 切出）。
-//
-// 数据半（collectSessionStatus 与会话快照类型）已迁 modules/status/：本文件只从
-// status 模块静态导出面取类型，快照由 `status.session` 句柄提供。
-// 工单 20：压缩与单行组装改走 segment-layout.ts 的统一段位模块，本文件只负责
-// 把快照构造成段位（含 required 标记）。
-
 import type { ContextUsage, Theme } from "@earendil-works/pi-coding-agent";
 import type { EditorUsageSegmentId, SessionStatusSnapshot } from "../../status/api.ts";
 import { resolveGlyphs, type IconGlyphs } from "../renderer/icons.ts";
@@ -20,10 +12,6 @@ const DEFAULT_GLYPHS = resolveGlyphs("unicode");
 
 export type SessionStatusSegmentId = "session" | "tokens" | "cache" | "cost";
 
-/**
- * 压缩状态标签：内容来自 `compression.status` 句柄，使用 `Cmp:*` 形式表达当前
- * 实际压缩路径。标签在宽窄屏保持同一语义，且与 required 的上下文用量一起保留。
- */
 interface CompressionLabelText {
 	readonly text: string;
 	readonly compactText: string;
@@ -31,7 +19,6 @@ interface CompressionLabelText {
 
 const NO_COMPRESSION_LABEL: CompressionLabelText = Object.freeze({ text: "", compactText: "" });
 
-/** 与 status 模块数据半同口径的防负数/NaN 取值（两行小函数，不额外进 shared/） */
 function safeAmount(value: number): number {
 	return Number.isFinite(value) && value > 0 ? value : 0;
 }
@@ -133,7 +120,7 @@ export function buildEditorUsageSegments(
 		priority: 4,
 	};
 	const byId: Readonly<Record<EditorUsageSegmentId, StatusSegment>> = {
-		// tokens 与 cache 已合并为统计组，两个段 id 任一启用即显示
+
 		tokens: stats,
 		cache: stats,
 		context: {

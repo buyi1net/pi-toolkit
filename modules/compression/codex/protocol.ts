@@ -1,25 +1,7 @@
-// Codex 协议公共形状：opaque compaction item 的校验与 Responses payload 的
-// checkpoint marker 改写（工单 04 从上游 pi-codex-compact 提取的共享核心）。
-//
-// 上游对应：reference/Pi生态/pi-codex-compact/source/src/protocol.ts
-// （MIT，来源登记见 ../UPSTREAM.md）。本仓提取范围：isCompactionItem /
-// validateCompactionItem / rewriteCheckpointMarker / appendCompactionTrigger /
-// expandRemoteCompactionPayload / prepareRemoteCompactionPayload /
-// hasCheckpointMarker 与尺寸常量——即 checkpoint 核心与回放投影依赖的
-// payload 形状函数。SSE 收集（collectCompactionSse / collectCompactResponse）
-// 与 responses-compact 响应校验（validateCompactedResponse）归工单 05/06 的
-// 协议适配器，不在本文件。
-//
-// 工单 05/06/07 的协议适配器在本形状上工作：远端必须返回「恰好一个」
-// type=compaction 且 encrypted_content 非空的 item；marker 在 payload.input
-// 中恰好出现一次时才能被替换成 replacement history。
-
-/** JSON 对象形状（opaque 历史与 provider payload 的通用底层类型） */
 export type JsonObject = Record<string, unknown>;
 
 export const MAX_COMPACTION_ITEM_BYTES = 2 * 1024 * 1024;
 
-/** 协议级错误：响应不含合法 compaction item / payload 形状不符 / marker 数量异常 */
 export class CodexCompactionProtocolError extends Error {
   constructor(message: string) {
     super(message);
@@ -35,7 +17,6 @@ function byteLength(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), "utf8");
 }
 
-/** 远端 opaque compaction item 的形状：type=compaction 且 encrypted_content 非空 */
 export function isCompactionItem(value: unknown): value is JsonObject {
   return (
     isJsonObject(value) &&
@@ -45,7 +26,6 @@ export function isCompactionItem(value: unknown): value is JsonObject {
   );
 }
 
-/** 校验并克隆一个 opaque compaction item（超尺寸或形状不符抛协议错误） */
 export function validateCompactionItem(value: unknown, maxBytes = MAX_COMPACTION_ITEM_BYTES): JsonObject {
   if (!isCompactionItem(value)) {
     throw new CodexCompactionProtocolError("Remote response did not contain a valid compaction item");
@@ -66,11 +46,6 @@ function markerTextFromItem(item: unknown): string | undefined {
   return content.text;
 }
 
-/**
- * 把 provider payload 中恰好一个 checkpoint marker 消息替换成 replacement
- * history（工单 04/05/06/07 的 before_provider_request 回放改写）。marker 出现
- * 0 次或多次都视为协议异常——静默继续会让 opaque 历史丢失或重复注入。
- */
 export function rewriteCheckpointMarker(
   payload: unknown,
   marker: string,

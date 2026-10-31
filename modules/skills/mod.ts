@@ -10,5 +10,5 @@ export function registerSkills(context: ModuleContext): void {
     if (next !== undefined) registry = next;
   });
 
-  context.pi.registerTool(createSkillTool(() => registry, context.t("module.skills.tool.skill.label")));
+  context.pi.registerTool(createSkillTool(() => registry, context.t("module.skills.tool.skill.label"), context.t));
 }

@@ -1,4 +1,5 @@
-import { Text } from "@earendil-works/pi-tui";
+import type { Translator } from "../../i18n/index.ts";
+import { renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import type {
   AgentToolResult,
   Theme,
@@ -56,6 +57,7 @@ export type SkillRegistryGetter = () => SkillRegistry | undefined;
 export function createSkillTool(
   getRegistry: SkillRegistryGetter,
   label = "Skill",
+  t?: Translator,
 ): ToolDefinition<typeof skillParameters, SkillToolDetails> {
   return {
     name: "skill",
@@ -100,23 +102,28 @@ export function createSkillTool(
         },
       };
     },
-    renderCall(args: SkillToolParams, theme: Theme) {
-      const title = theme.fg("toolTitle", theme.bold("skill ")) + theme.fg("accent", args.skill);
-      const suffix = args.args ? ` ${theme.fg("dim", args.args)}` : "";
-      return new Text(title + suffix, 0, 0);
+    renderShell: "self",
+    renderCall(args: SkillToolParams, theme: Theme, context) {
+      const title = t?.("module.skills.tool.skill.display") ?? "skill";
+      return renderToolCardCall({ title, object: args.skill }, theme, context);
     },
     renderResult(
       result: AgentToolResult<SkillToolDetails>,
       options: ToolRenderResultOptions,
       theme: Theme,
+      context,
     ) {
       const textPart = result.content.find((part) => part.type === "text");
       const fullText = textPart && textPart.type === "text" ? textPart.text : "";
-      if (options.expanded) return new Text(fullText, 0, 0);
-      return new Text(
-        theme.fg("muted", `Skill loaded: ${result.details.name} (${result.details.lines} lines)`),
-        0,
-        0,
+      const status = t?.("module.skills.tool.skill.result.loaded", {
+        name: result.details.name,
+        lines: result.details.lines,
+      }) ?? `Skill loaded: ${result.details.name} (${result.details.lines} lines)`;
+      return renderToolCardResult(
+        { title: t?.("module.skills.tool.skill.display") ?? "skill", object: result.details.name, status, details: options.expanded ? fullText.split("\n") : [] },
+        theme,
+        options,
+        context,
       );
     },
   };

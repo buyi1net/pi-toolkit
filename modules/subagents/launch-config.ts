@@ -15,31 +15,16 @@ export const CODEX_V2_SPAWNING_TOOLS = [
   "subagent_models",
 ] as const;
 
-/** 模型可见的子代理繁衍工具白名单。 */
 export const SPAWNING_TOOLS = CODEX_V2_SPAWNING_TOOLS;
 
-/** 子代理进程继承的工具白名单固定使用 Codex v2 工具面。 */
 export function spawningToolsForProtocol(_protocol: SubagentProtocol): readonly string[] {
   return SPAWNING_TOOLS;
 }
 
-/** 成员间直信工具:仅 member spawn 注入白名单(注册在 subagent-done.ts)。 */
 export const TEAM_TOOLS = ["team_send"] as const;
 
-/**
- * Pi 1.3.0 `--tools` 里声明 MCP 工具的条目前缀（`mcp__<server>__<tool>` 或
- * `mcp__<server>__*`）。官方契约：只有条目以 mcp__ 开头时 `--tools` 才会
- * 过滤 MCP 工具；普通名称白名单不会移除 MCP（codemode/tool_search 仍可
- * 触达，见 pi-coding-agent docs/cli.md “MCP tools” 与 docs/mcp.md
- * “Control tool exposure”）。
- */
 export const MCP_TOOL_PREFIX = "mcp__";
 
-/**
- * 工单 05：最终 allowlist 中显式声明的 MCP server/tool pattern（原序去重）。
- * null（无 --tools）表示继承父会话的 MCP 能力，不产生角色级 MCP 声明；显式
- * allowlist 未声明 mcp__ 时才由启动接缝关闭 MCP。
- */
 export function declaredMcpTools(toolAllowlist: string | null | undefined): string[] {
   if (!toolAllowlist) return [];
   const seen = new Set<string>();
@@ -53,11 +38,6 @@ export function declaredMcpTools(toolAllowlist: string | null | undefined): stri
   return declared;
 }
 
-/**
- * 工单 05：MCP 能力门的可见权限说明（随 spawn 结果 details.mcp 展示）。
- * null 表示继承父会话；显式 allowlist 默认严格隔离，显式声明时列出声明
- * 的 pattern。文案是面向操作者的权限口径，不是模型提示。
- */
 export function describeMcpIsolation(toolAllowlist: string | null | undefined): string {
   if (toolAllowlist == null) {
     return "MCP: inherited from the parent session (no role-level MCP restriction)";
@@ -130,21 +110,11 @@ export function resolveEffectiveInteractive(
   return !(agentDefs?.autoExit ?? false);
 }
 
-/**
- * Resolve the lifecycle flag that is actually passed to the child process.
- * `interactive` and `auto-exit` describe the same boundary from opposite
- * directions, so an explicit value on either side must not leave the other
- * side undefined. In particular, `interactive: false` without
- * `auto-exit: true` must still terminate a headless child after its turn.
- */
 export function resolveEffectiveAutoExit(agentDefs: AgentDefaults | null): boolean {
   if (agentDefs?.interactive != null) return !agentDefs.interactive;
   return agentDefs?.autoExit ?? false;
 }
 
-/** Reject contradictory frontmatter instead of silently creating a hanging or
- * prematurely self-closing subagent. A valid pair is interactive=true,
- * auto-exit=false, or interactive=false, auto-exit=true. */
 export function validateAgentLifecycleConfig(agentDefs: AgentDefaults | null): string | null {
   if (
     agentDefs?.interactive != null &&
@@ -162,16 +132,6 @@ export function validateAgentLifecycleConfig(agentDefs: AgentDefaults | null): s
 
 export type SubagentSurfaceChoice = "headless" | "pane";
 
-/**
- * 表面选择(纯函数):
- *   - "pane":强制可见 pane(现有 herdr/tmux 路径,行为不变)。
- *   - "background":强制 headless——独立后台 pi 进程,不创建 pane。
- *     interactive(演示型)子代理必须拒绝:它们依赖用户在 pane 中操作,
- *     静默降级成 headless 或反过来静默建 pane 都是错的,直接报错返回。
- *   - "auto"(默认,兼容旧调用不传 surface):interactive → pane,自动任务 → headless。
- *
- * 返回 { choice } 或 { error }(error 为面向 tool result 的完整错误文本)。
- */
 export function resolveSurfaceChoice(
   surface: string | undefined,
   effectiveInteractive: boolean,
@@ -217,9 +177,6 @@ export function buildSubagentToolAllowlist(
   const spawningNames = new Set<string>(spawningToolsForProtocol(protocol));
   const teamNames = new Set<string>(TEAM_TOOLS);
 
-  // A profile cannot opt itself into delegation merely by putting a spawning
-  // tool in `tools`; the depth policy is the authority for the new spawn path.
-  // team_send remains a separate explicit member capability.
   const allow = new Set(
     requested.filter((tool) =>
       (grantSpawning || !spawningNames.has(tool)) && (grantTeamSend || !teamNames.has(tool)),
@@ -233,18 +190,10 @@ export function buildSubagentToolAllowlist(
   }
   if (requested.length > 0 || grantSpawning || grantTeamSend) allow.add("ask_question");
 
-  // null means "use Pi's normal defaults". An explicitly empty/forbidden
-  // list must remain an empty allowlist rather than widening back to defaults.
   if (allow.size === 0 && !hasExplicitTools && !grantSpawning && !grantTeamSend) return null;
   return [...allow].join(",");
 }
 
-/**
- * 工单 29：子进程装载了捆绑 web 工具（web_search/web_fetch）时，其全局
- * fetch 只有在 Node >= 24 且 NODE_USE_ENV_PROXY=1 时才走 HTTP(S)_PROXY；
- * 启动事务据此给子进程环境打上该变量。只看最终 allowlist（与子进程
- * 实际可见的工具同一口径），不重复解析 profile。
- */
 export function needsEnvProxyForTools(toolAllowlist: string | null | undefined): boolean {
   if (!toolAllowlist) return false;
   return /(^|,)\s*web_(search|fetch)\s*(,|$)/.test(toolAllowlist);

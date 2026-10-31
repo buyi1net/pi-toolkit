@@ -1,27 +1,3 @@
-// Codex `responses/compact` 协议适配器（工单 06）：移植自上游 pi-codex-compact
-// 的 remote-compact.ts（MIT，来源登记见 ../UPSTREAM.md）。
-//
-// 协议行为（对齐上游 + 本仓 owner/checkpoint 接缝）：
-// - 请求只发「与普通 Responses endpoint 同源的 compact endpoint」：用 provider
-//   实际要 fetch 的 URL 推导 `<responses-url>/compact`，路径必须以 /responses
-//   结尾（否则不是同源 Responses endpoint）、origin 不得漂移；
-// - 请求字段按 profile 过滤：codex-responses-v1 发 Codex 字段、openai-responses-v1
-//   发普通 OpenAI 字段；profile 不支持的字段不进入 compact 请求体（不静默发送）；
-// - compact endpoint 返回 JSON（非 SSE）：先校验 usage（input/output/total 非负、
-//   cached/cacheWrite/reasoning 与总量一致），再校验 output 里「恰好一个」compaction
-//   item 且保留消息合法；把校验后的响应包成合成的 Responses SSE 交回 provider，
-//   让 provider 走正常 SSE 流程产出 done usage（与真实 relay 同口径）；
-// - 成功结果 = { item, promptInput(=compact 请求 input), compactedOutput, usage }，
-//   交给 owner 的 checkpoint 核心（buildReplacementHistory + createCheckpointDetails）。
-//
-// 失败一律抛错（CodexCompactionProtocolError / DOMException(AbortError)），owner
-// 按 prepare 阶段失败处置（onUnsupported 回退或严格错误；已有 checkpoint 时取消保留）。
-// 本文件只负责「远端响应的收集、校验与重试」，checkpoint 构造归 owner。
-//
-// 类型口径：pi-ai 已按宿主依赖规则登记为 peer/dev 依赖（Pi 1.3.0）；provider /
-// 流 / usage 形状继续从 pi-coding-agent 公开导出结构推导，provider 上下文经
-// remote-shared.ts 的官方 normalizeContext helper 折成 TranscriptContext。
-
 import { providerTranscriptContext } from "./remote-shared.ts";
 import {
   CodexCompactionProtocolError,
@@ -37,7 +13,6 @@ import type {
   CodexRemoteUsage,
 } from "./remote.ts";
 
-/** 普通 OpenAI Responses compact 端点支持的请求字段（openai-responses-v1 profile） */
 const OFFICIAL_COMPACT_FIELDS = [
   "model",
   "input",
@@ -48,7 +23,6 @@ const OFFICIAL_COMPACT_FIELDS = [
   "service_tier",
 ] as const;
 
-/** Codex Responses compact 端点支持的请求字段（codex-responses-v1 profile） */
 const CODEX_COMPACT_FIELDS = [
   "model",
   "input",
@@ -66,7 +40,6 @@ function abortError(): DOMException {
   return new DOMException("Compaction aborted", "AbortError");
 }
 
-/** 按 profile 过滤 compact 请求字段（不支持的字段不静默发送）并校验 model / input */
 function compactPayload(payload: JsonObject, profile: ResponsesCompactionProfile): JsonObject {
   const fields = profile === "codex-responses-v1" ? CODEX_COMPACT_FIELDS : OFFICIAL_COMPACT_FIELDS;
   const result: JsonObject = {};
@@ -82,7 +55,6 @@ function compactPayload(payload: JsonObject, profile: ResponsesCompactionProfile
   return result;
 }
 
-/** 校验并克隆 compact 请求的 input（必须是 JSON 对象数组） */
 function assertPreparedInput(payload: JsonObject): JsonObject[] {
   if (!Array.isArray(payload.input) || !payload.input.every(isJsonObject)) {
     throw new CodexCompactionProtocolError("Prepared compaction payload has invalid input items");
@@ -94,11 +66,6 @@ function requestUrl(input: string | URL | Request): URL {
   return new URL(input instanceof Request ? input.url : String(input));
 }
 
-/**
- * 同源 compact endpoint 推导：provider 要 fetch 的 URL 必须以 /responses 结尾
- * （即普通 Responses endpoint），在其后追加 /compact，且 origin 不得漂移。
- * 路径不匹配或 origin 变化都视为「不是同源 Responses endpoint」→ 抛协议错误。
- */
 export function responsesCompactUrl(input: string | URL | Request): URL {
   const original = requestUrl(input);
   if (!original.pathname.endsWith("/responses")) {
@@ -166,7 +133,6 @@ function optionalUsageDetail(details: unknown, field: string): number {
   return value;
 }
 
-/** 校验 compact JSON 响应里的 usage（缺失 / 非法 / 与总量不一致都抛错） */
 function validatedUsage(response: JsonObject): JsonObject {
   const usage = response.usage;
   if (!isJsonObject(usage)) {
@@ -192,7 +158,6 @@ function validatedUsage(response: JsonObject): JsonObject {
   return structuredClone(usage);
 }
 
-/** 校验 compact JSON 的 output：保留消息 + 恰好一个 compaction item 收尾 */
 function validatedCompactOutput(value: unknown): { item: JsonObject; output: JsonObject[] } {
   if (!isJsonObject(value) || !Array.isArray(value.output)) {
     throw new CodexCompactionProtocolError("Responses Compact returned an invalid response object");
@@ -261,7 +226,6 @@ function isRetainedCompactMessage(value: unknown): value is JsonObject {
   );
 }
 
-/** 把校验后的 compact 结果包成合成的 Responses SSE（provider 按正常 SSE 解析） */
 function syntheticCompletion(usage: JsonObject, payload: JsonObject): Response {
   const completed = {
     id: "resp_pi_compact_bridge",
@@ -285,7 +249,6 @@ function syntheticCompletion(usage: JsonObject, payload: JsonObject): Response {
   });
 }
 
-/** 收集 provider 流的最终 usage（error 事件 / 取消 / 无 done usage 都抛错） */
 async function collectProviderUsage(stream: AsyncIterable<unknown>, signal: AbortSignal): Promise<CodexRemoteUsage> {
   let usage: CodexRemoteUsage | undefined;
   for await (const event of stream) {
@@ -306,11 +269,6 @@ async function collectProviderUsage(stream: AsyncIterable<unknown>, signal: Abor
   return usage;
 }
 
-/**
- * 建 `responses-compact` 协议适配器（owner 经 protocolAdapters 注入，key 为
- * "responses-compact"）。`defaultFetch` 是 relay transport 的兜底（request.fetch
- * 缺席时用；测试注入 fake relay）。
- */
 export function createResponsesCompactAdapter(defaultFetch?: typeof globalThis.fetch): CodexRemoteCompactionAdapter {
   return async (request: CodexRemoteCompactionRequest): Promise<CodexRemoteCompactionResponse> => {
     if (request.signal.aborted) throw abortError();
@@ -411,7 +369,6 @@ export function createResponsesCompactAdapter(defaultFetch?: typeof globalThis.f
   };
 }
 
-/** 读取 compact endpoint 的 JSON 响应体（非 SSE；取消 / 非 JSON 抛错） */
 async function readJsonObject(response: Response, signal: AbortSignal): Promise<JsonObject> {
   if (signal.aborted) throw abortError();
   let text: string;

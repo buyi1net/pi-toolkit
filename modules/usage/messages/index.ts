@@ -1,8 +1,3 @@
-// usage 模块三语键表（自包含：本模块的文案只在这里；模块目录拿走则这些文案一起消失）。
-// 框架级键（command/menu/group/problem/language/common/hint/notify）在 i18n/messages.ts。
-// 三语（en / zh-CN / zh-TW）必须同时补齐：ZH_CN / ZH_TW 以 typeof EN 断言，缺键/多键 typecheck 报错；
-// 三语键集合相等与无未翻译值由 tests/pi-toolkit/i18n-messages.test.ts 兜底。
-
 import type { MessageTables } from "../../../i18n/index.ts";
 
 const EN = {
@@ -161,8 +156,6 @@ const ZH_TW: typeof EN = {
   "module.usage.panel.hint": "  r 重新整理 · Esc 返回",
 };
 
-/** 本键表：全部模块键表在 modules/index.ts 聚合登记 */
 export const USAGE_MESSAGES = { en: EN, "zh-CN": ZH_CN, "zh-TW": ZH_TW } satisfies MessageTables;
 
-/** 模块内使用的键类型 */
 export type UsageMessageKey = keyof typeof EN;

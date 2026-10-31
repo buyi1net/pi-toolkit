@@ -42,13 +42,11 @@ const QUERY_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   'apikey.fun': 'ApiKey',
 };
 
-/** 仅用于未知中转的界面标注，不能用于选择查询端点或发送凭据。 */
 export function inferModelProviderName(modelId: string): string | undefined {
   const normalized = modelId.trim().toLowerCase().split('/').pop() ?? '';
   return MODEL_PROVIDER_PATTERNS.find(([pattern]) => pattern.test(normalized))?.[1];
 }
 
-/** 内部标识只用于逻辑；状态栏显示官方拉丁品牌名，未知值保留宿主原文。 */
 export function displayProviderName(providerId: string): string {
   const normalized = providerId.toLowerCase();
   return QUERY_DISPLAY_NAMES[normalized] ?? findProviderById(normalized)?.displayName ?? providerId;

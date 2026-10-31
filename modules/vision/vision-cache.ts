@@ -5,7 +5,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { VisionImage, VisionNote, VisionNotesFile } from "./vision-types.ts";
 
 const MAX_CACHE_ENTRIES = 256;
-// 会话旁挂缓存文件：随会话文件同目录，名字用 pi-toolkit 前缀（合并后不再沿用旧插件名）
+
 const NOTES_FILE = "pi-toolkit-vision-notes.json";
 
 export function imageHash(image: VisionImage): string {
@@ -74,7 +74,7 @@ export class VisionNoteCache {
   }
 
   private filePath(sessionFile: string): string {
-    // 同一项目的会话共用目录，加入会话文件名以避免不同会话互相读取视觉笔记。
+
     return join(dirname(sessionFile), `${basename(sessionFile)}.${NOTES_FILE}`);
   }
 

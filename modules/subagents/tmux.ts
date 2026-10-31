@@ -1,23 +1,8 @@
-/**
- * tmux 表面 —— IO 原语。语法族判定(shellEscape/sentinelSuffix)由
- * surface.ts 统一分派(tmux 恒为 POSIX),本模块只负责对 tmux CLI 的操作。
- *
- * 实现源自上游 amosblomqvist/pi-interactive-subagents 的 tmux.ts,接口
- * 对齐到统一表面签名(cwd/env 经 split-window 的 -c / -e 传入,tmux
- * 3.2+ 支持,替代上游的 cd 前缀 + 环境变量前缀拼装)。
- *
- * Panes are identified by tmux pane ids (e.g. `%12`). The parent pane keeps
- * one fixed side: only the first subagent pane is split off the parent, and
- * later splits subdivide the managed side only (see pane-layout.ts). The
- * user's focus is never stolen.
- */
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { chooseSplitTarget, type LayoutPane, type SplitDirection } from "./pane-layout.ts";
 
 const execFileAsync = promisify(execFile);
-
-// ── Availability ──
 
 const commandAvailability = new Map<string, boolean>();
 
@@ -42,7 +27,6 @@ export function isCliAvailable(): boolean {
   return hasCommand("tmux");
 }
 
-/** True when running inside tmux with the tmux binary on PATH. */
 export function isAvailable(): boolean {
   return !!process.env.TMUX && isCliAvailable();
 }
@@ -51,28 +35,13 @@ export function setupHint(): string {
   return "Start pi inside tmux (`tmux new -A -s pi 'pi'`).";
 }
 
-// ── Pane layout ──
-
 const managedPaneIds = new Set<string>();
 
-// 有意不使用 tmux select-layout(如 tiled)重排:全窗口重排会把主 pane 从
-// 固定侧挪走或挤小,违背“主 pane 稳定占一侧”的布局契约;split 按 50% 均分
-// 目标 pane,几何可预期,pane 关闭后 tmux 自动把空间归还相邻 pane,无需重排。
-
-// ── Surface primitives ──
-
-/**
- * Create a new pane in the parent's window. Split target selection lives in
- * pane-layout.ts:首次从主 pane 切出,之后只在 managed 区域内继续切分;
- * split 沿能保住最小尺寸的轴进行。
- * opts.cwd → split-window -c;opts.env → split-window -e(tmux 3.2+)。
- * Returns the new pane id (e.g. `%12`).
- */
 export function createSurface(
   name: string,
   opts?: { cwd?: string; env?: Record<string, string> },
 ): string {
-  void name; // tmux panes are not named; the pi process inside shows its own title.
+  void name;
 
   const parentId = process.env.TMUX_PANE;
   if (!parentId) throw new Error("TMUX_PANE is missing; cannot place a subagent pane.");
@@ -110,7 +79,6 @@ function splitPane(
   return pane;
 }
 
-/** 查询当前 window 的 pane 布局。 */
 function queryWindowLayout(paneId: string): LayoutPane[] | null {
   try {
     const output = execFileSync(
@@ -131,17 +99,11 @@ function queryWindowLayout(paneId: string): LayoutPane[] | null {
   }
 }
 
-/**
- * Send a command string to a pane and execute it.
- * Typed literally (`-l`) so special characters are not interpreted as keys,
- * then submitted with Enter.
- */
 export function sendCommand(surface: string, command: string): void {
   execFileSync("tmux", ["send-keys", "-t", surface, "-l", command], { encoding: "utf8" });
   execFileSync("tmux", ["send-keys", "-t", surface, "Enter"], { encoding: "utf8" });
 }
 
-/** Read the screen contents of a pane (sync). */
 export function readScreen(surface: string, lines = 50): string {
   return execFileSync(
     "tmux",
@@ -152,7 +114,6 @@ export function readScreen(surface: string, lines = 50): string {
   );
 }
 
-/** Read the screen contents of a pane (async). */
 export async function readScreenAsync(surface: string, lines = 50): Promise<string> {
   const { stdout } = await execFileAsync(
     "tmux",
@@ -162,12 +123,10 @@ export async function readScreenAsync(surface: string, lines = 50): Promise<stri
   return stdout;
 }
 
-/** 重载恢复后，把已有 pane 纳入当前 window 的布局目标集合。 */
 export function trackSurface(surface: string): void {
   managedPaneIds.add(surface);
 }
 
-/** 查询 pane 是否仍然存在,用于 /reload 恢复时丢弃 stale 记录。 */
 export function surfaceExists(surface: string): boolean {
   try {
     execFileSync("tmux", ["display-message", "-p", "-t", surface, "#{pane_id}"], { stdio: "ignore" });
@@ -177,13 +136,11 @@ export function surfaceExists(surface: string): boolean {
   }
 }
 
-/** Close a pane. tmux 自动把空间归还相邻 pane,无需重排。 */
 export function closeSurface(surface: string): void {
   execFileSync("tmux", ["kill-pane", "-t", surface], { encoding: "utf8" });
   managedPaneIds.delete(surface);
 }
 
-/** 给 pane 设置可识别标签(best-effort,失败不致命)。 */
 export function labelSurface(surface: string, label: string): void {
   execFileSync("tmux", ["select-pane", "-t", surface, "-T", label], { encoding: "utf8" });
 }

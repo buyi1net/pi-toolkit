@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import type { RuntimeRegistry } from "./registry.ts";
 import type { SubagentStartup } from "./startup.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
@@ -33,31 +33,37 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
   pi.registerTool({
     name: "followup_task",
     label: "Follow Up Task",
+    renderShell: "self",
     description: "Start the next task round for an existing subagent while preserving its session context. target accepts agent_id, canonical_task_name, or a local task name.",
     promptSnippet: "Continue an existing subagent session with a new task round using its agent_id, canonical path, or task name.",
     parameters: Type.Object({ target: Type.String({ minLength: 1 }), message: Type.String({ minLength: 1 }) }),
-    renderCall(args, theme) {
-      return new Text(
-        theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.followup_task.display") ?? "Follow-up task")) +
-          " " + theme.fg("accent", args.target ?? "(target)"),
-        0,
-        0,
+    renderCall(args, theme, context) {
+      return renderToolCardCall(
+        { title: deps.t?.("module.subagents.tool.followup_task.display") ?? "Follow-up task", object: args.target ?? "(target)" },
+        theme,
+        context,
       );
     },
-    renderResult(result, options, theme) {
+    renderResult(result, options, theme, context) {
       const details = result.details as any;
       const t = deps.t;
+      const target = typeof details?.task_name === "string" ? details.task_name : undefined;
       if (details?.submission_id) {
-        if (!options.expanded) return new Text("", 0, 0);
         const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-        return new Text(
-          [theme.fg("toolOutput", t?.("module.subagents.tool.followup_task.result.started") ?? "Follow-up started"), text ? theme.fg("muted", text) : ""].filter(Boolean).join("\n"),
-          0,
-          0,
+        return renderToolCardResult(
+          { title: t?.("module.subagents.tool.followup_task.display") ?? "Follow-up task", object: target, status: t?.("module.subagents.tool.followup_task.result.started") ?? "Follow-up started", details: options.expanded && text ? [text] : [] },
+          theme,
+          options,
+          context,
         );
       }
       const text = result.content[0]?.type === "text" ? result.content[0].text : "Follow-up failed";
-      return new Text(theme.fg("error", text), 0, 0);
+      return renderToolCardResult(
+        { title: t?.("module.subagents.tool.followup_task.display") ?? "Follow-up task", object: target, status: text },
+        theme,
+        options,
+        context,
+      );
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx: ToolContext) {
       const message = params.message.trim();

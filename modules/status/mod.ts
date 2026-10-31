@@ -1,16 +1,3 @@
-// status 模块实现入口：控制器创建、`status.*` 五个句柄注册、会话绑定与事件接线（工单 11）。
-//
-// 分工（工单 07 定案 2 + 定案 7）：
-// - 控制器在模块装配时创建、随会话绑定重建；注册句柄后 tui lifecycle 只从句柄取快照；
-// - 取数策略（什么时候刷 git / 运行时、哪些段位启用）留在本模块；
-// - 重绘节奏属于 tui（工单 18）：控制器不持重绘回调；句柄快照带变更序号（内容变化时递增），
-//   tui 心跳按序号变化重绘（句柄默认契约是 snapshot/refresh，telemetry 另有 liveSnapshot）。
-//
-// 事件接线：session_start 绑定会话并按段位创建工作区控制器；session_shutdown 释放；
-// status 模块启用时回合计时始终创建，独立于顶边段位，供 Working 与回合遥测复用；回合遥测由 turn/agent 事件驱动。工具执行后的数据刷新由消费方
-// （tui 的 tool_execution_end 处理器）调句柄 refresh() 触发，取数策略仍在控制器内部
-// （防抖、在途合并、1 秒轮询），与 providers.usage 的消费形式一致。
-
 import { SettingsManager, getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ModuleContext } from "../../kit/module.ts";
 import {
@@ -41,10 +28,6 @@ import {
 import { TurnTelemetryController, readLatestTurnDuration } from "./turn-telemetry.ts";
 import { TurnTimerController } from "./turn-timer.ts";
 
-/**
- * 快照变更序号的读取器（工单 18 / 决策 9）：内容与上次读取不同就递增序号，随快照带出。
- * 序号只在读取时按内容比较维护，控制器无需感知重绘；计时 working 期间的毫秒级变化也由此体现。
- */
 function createRevisionReader<T extends object>(): (value: T | undefined) => (T & SnapshotRevision) | undefined {
 	let revision = 0;
 	let signature: string | undefined;
@@ -60,19 +43,18 @@ function createRevisionReader<T extends object>(): (value: T | undefined) => (T 
 }
 
 export interface StatusModuleOptions {
-	/** pi 的配置目录（settings.json 在这里，自动压缩开关从它读）；默认 getAgentDir() */
+
 	readonly agentDir?: string;
-	/** 环境变量面（PI_UI_STATUS_PRESET / PI_UI_STATUS_SEGMENTS 段位覆盖）；默认 process.env */
+
 	readonly env?: Readonly<Record<string, string | undefined>>;
-	/** 自测钩子：自动压缩开关读取；默认读宿主 SettingsManager */
+
 	readonly readAutoCompactionEnabled?: (ctx: ExtensionContext, agentDir: string) => boolean;
-	/** 自测钩子：设置文件监听；默认 watchAgentSettings */
+
 	readonly watchAutoCompactionSettings?: (agentDir: string, onChange: () => void) => () => void;
 }
 
-/** 菜单保存后要触发的模块侧动作（模块装配时填入，菜单行闭包持用） */
 export interface StatusMenuRuntime {
-	/** 段位设置变化后重建控制器（纯数据侧，不碰 UI） */
+
 	reapply: () => void;
 }
 
@@ -102,8 +84,7 @@ export function registerStatus(
 
 	const currentConfig = () => context.getConfig();
 	const currentSettings = (): ResolvedStatusSettings => statusSettingsFromSection(currentConfig(), env);
-	// 快照变更序号（工单 18）：workspace / session / timer 三条按内容变化在句柄层维护；
-	// compaction 的值是布尔，序号由控制器自己维护（见 auto-compaction.ts）。
+
 	const readWorkspaceRevision = createRevisionReader<ProjectStatusSnapshot>();
 	const readSessionRevision = createRevisionReader<SessionStatusSnapshot>();
 	const readTimerRevision = createRevisionReader<TurnTimerSnapshot>();
@@ -125,7 +106,6 @@ export function registerStatus(
 		compaction = undefined;
 	};
 
-	/** 按当前段位设置重建控制器（会话绑定与菜单改设置都走这里） */
 	const startControllers = (ctx: ExtensionContext): void => {
 		disposeControllers();
 		const settings = currentSettings();

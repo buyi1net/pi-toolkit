@@ -1,10 +1,5 @@
-// Pi 视觉模型发现、通用调用与显式能力测试。
-// 所有调用都经 Pi 原生 modelRegistry.complete()，本模块不读取凭证、不自行构造 HTTP 请求。
-// 模型对象类型从 ModelRegistry 的方法签名推导，避免直接 import pi-ai（本包只声明 pi 宿主 peer）。
-
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
-/** pi 的模型对象（Model<Api>），由注册表签名推导 */
 export type PiVisionModel = NonNullable<ReturnType<ModelRegistry["find"]>>;
 
 export interface PiVisionModelSelection {
@@ -57,7 +52,6 @@ export function piVisionModelKey(provider: string, modelId: string): string {
   return `${provider}\0${modelId}`;
 }
 
-/** 列出全部声明支持图片的模型，并分别保留认证与当前可用状态。 */
 export function discoverPiVisionModels(registry: PiVisionModelRegistry): PiVisionModelCandidate[] {
   const available = new Set(registry.getAvailable().map((model) => piVisionModelKey(model.provider, model.id)));
   return registry.getAll()
@@ -83,7 +77,6 @@ function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** 从 Pi 当前可用的图片模型中按稳定规则选择一个，不发起模型调用。 */
 export function selectAutomaticPiVisionModel(
   registry: PiVisionModelRegistry,
   options: AutomaticPiVisionModelOptions = {},
@@ -120,7 +113,6 @@ export function selectAutomaticPiVisionModel(
   return candidates[0];
 }
 
-/** 只按 provider 与 modelId 联合键查找，不用显示名或模糊匹配。 */
 export function resolvePiVisionModel(
   registry: PiVisionModelRegistry,
   selection: PiVisionModelSelection,
@@ -135,7 +127,6 @@ function abortError(message: string): Error {
   return error;
 }
 
-/** 经 Pi 原生 provider 调度发送图片，不读取凭证，也不自行构造 HTTP 请求。 */
 export async function callPiVisionModel(
   registry: PiVisionModelRegistry,
   selection: PiVisionModelSelection,
@@ -220,7 +211,7 @@ export function evaluatePiVisionProbe(text: string, expected: readonly string[])
 
 export function buildPiVisionProbePrompt(expected: readonly string[]): string {
   if (expected.length === 0) throw new Error("Pi 视觉模型测试至少需要一个预期值");
-  // 排序后再放进提示，避免候选标签的排列意外泄露测试图答案。
+
   const labels = [...new Set(expected.map(normalizeProbeValue))].sort();
   return (
     `The image contains ${expected.length} colored cells. Read them from left to right, then top to bottom. ` +
@@ -228,7 +219,6 @@ export function buildPiVisionProbePrompt(expected: readonly string[]): string {
   );
 }
 
-/** 仅在调用方明确触发时，使用调用方提供的测试图验证模型是否真正能看图。 */
 export async function testPiVisionModel(
   registry: PiVisionModelRegistry,
   selection: PiVisionModelSelection,

@@ -1,8 +1,3 @@
-// tui 渲染半：回合遥测条目的渲染器（工单 11 从原 status/turn-telemetry.ts 切出）。
-//
-// 数据半（采集器、条目 schema、解析函数）在 modules/status/：渲染器注册与
-// 遥测行排版留在 tui，条目类型与解析从 status 模块的静态导出面取。
-
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import {

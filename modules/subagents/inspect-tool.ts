@@ -37,7 +37,6 @@ import {
 import type { RuntimeRecord, RuntimeRegistry } from "./registry.ts";
 import type { RunningSubagent, SubagentWaitMode, SubagentWaitRelease } from "./types.ts";
 
-/** 只读状态观测的来源。runtime-registry 是 /reload 后尚未恢复的磁盘记录。 */
 export type SubagentInspectionSource = "live" | "runtime-registry" | "session-registry";
 
 export type SubagentInspectionLifecycle =
@@ -61,15 +60,15 @@ export interface SubagentInspection {
   model: string | null;
   thinking: string | null;
   tier: string | null;
-  /** 模型来源（工单 08：统一读路由快照；快照缺席为 null，维持现状）。 */
+
   modelSource: RoutingModelOrigin | null;
-  /** fallback 继承原因细分；非继承与旧快照为 null。 */
+
   inheritanceCause: RoutingInheritanceCause | null;
   source: SubagentInspectionSource;
   lifecycle: SubagentInspectionLifecycle;
-  /** activity sidecar 中的原始阶段;没有快照时为 null。 */
+
   phase: "starting" | "active" | "waiting" | "done" | null;
-  /** status.ts 根据快照计算出的即时状态;已结束的历史记录为 null。 */
+
   status: "starting" | "active" | "waiting" | "stalled" | "running" | null;
   statusLabel: string | null;
   surface: string | null;
@@ -126,15 +125,15 @@ export interface InspectRosterMember {
 }
 
 export interface SubagentInspectDeps {
-  /** 运行态登记表：实时态、内存优先的磁盘记录视图都从它取。 */
+
   registry: RuntimeRegistry;
-  /** 读取并刷新当前进程持有的 activity/status 快照。 */
+
   observeRunningSubagent: (running: RunningSubagent, observedAt?: number) => void;
   getArtifactDir: (sessionDir: string, sessionId: string) => string;
   readNameRegistry: (artifactDir: string) => NameRegistry;
   readSubagentLoadout: (sessionFile: string) => SubagentLoadout | null;
   isPidAlive: (pid: number) => boolean;
-  /** 没有复用器或表面不支持探测时返回 null。 */
+
   probeSurface?: (surface: string) => boolean | null;
   readRosterMember?: (name: string, artifactDir: string) => InspectRosterMember | null;
   readonly t?: SubagentsTranslate;
@@ -147,7 +146,7 @@ interface InspectRecord {
   cohortId?: string;
   agent?: string;
   model?: string | null;
-  /** 运行态路由快照（工单 06 随 RunningSubagent 登记；工单 08 起检查视图优先读它）。 */
+
   modelRouting?: LoadoutRoutingSnapshot | null;
   surface: string;
   startTime: number;
@@ -168,8 +167,6 @@ interface InspectRecord {
 
 const MAX_TASK_LENGTH = 1200;
 const MAX_QUESTION_LENGTH = 1200;
-// 工单 23：思考等级词汇表统一由 routing.ts 提供（与配置解析、启动校验同一份），
-// 本文件不再维护本地副本。
 
 function truncate(value: string | null | undefined, maxLength: number): string {
   const normalized = (value ?? "").replace(/\s+/g, " ").trim();
@@ -220,20 +217,10 @@ function freshActivity(
   return readSubagentActivityFile(record.activityFile, record.id);
 }
 
-/**
- * 模型侧状态标签的冻结口径（工单 37/44）：status.ts 只出码，这里展开成
- * 工单 44 之前的既有英文文案，保证 subagent_inspect 输出逐字不变、不随
- * 界面语言变化；渲染层的翻译不走这条路径。
- */
 function frozenStatusLabel(label: string | null): string | null {
   return label === "wrong-activity-id" ? "wrong activity id" : label;
 }
 
-/**
- * 模型侧 kind 冻结（工单 45）：status 字段的词表不含 stale/stale-tool——
- * 证据已在上游剥掉（无证据口径不会出新档位），这里防御性收窄：万一未来
- * 有新档位泄入，也回落到该场景无证据时的冻结值 active，不扩协议。
- */
 function frozenStatusKind(kind: StatusSnapshot["kind"]): SubagentInspection["status"] {
   return kind === "stale" || kind === "stale-tool" ? "active" : kind;
 }
@@ -257,10 +244,7 @@ function statusFromActivity(
 }
 
 function resolveThinking(loadout: SubagentLoadout | null, model: string | null): string | null {
-  // 与 applySandboxToParts 同一覆盖链（工单 23，规格 §4）：spawn 显式 >
-  // 代理 frontmatter > 档位默认 > 模型自带后缀。展示的是实际拼进 argv 的
-  // 请求等级；启动前已对已知模型做过支持性拒绝，未知模型无法在父侧核验，
-  // 实际生效值以子会话记录为准。
+
   if (loadout?.thinkingOverride) return loadout.thinkingOverride;
   if (loadout?.thinking) return loadout.thinking;
   if (loadout?.tierThinking) return loadout.tierThinking;
@@ -293,8 +277,7 @@ function inspectProcess(
     if (record.headlessChild?.exited) {
       processAlive = false;
     } else if (pid != null) {
-      // ChildProcess 的退出事件可能晚于外部终止。这里同时探测 PID，避免
-      // 一次性观测在 watcher 下一轮运行前把已死亡的子进程报告为存活。
+
       processAlive = deps.isPidAlive(pid);
     } else if (source === "live" && record.headlessChild) {
       processAlive = true;
@@ -467,9 +450,7 @@ function buildInspection(
     memberRound,
     stdinLost,
   });
-  // 工单 08：model/tier/thinking 与来源统一读路由快照（live 记录带
-  // modelRouting；旧 loadout / 旧记录无快照时退回零散字段，行为不变）。
-  // 快照在场时以它的值为准（包括合法的 null），不拿旧字段凑。
+
   const routing = loadout?.routing ?? record.modelRouting ?? null;
   const origin = routingModelOrigin(routing);
   const model = routing ? routing.model : loadout?.model ?? record.model ?? null;
@@ -542,7 +523,6 @@ function asInspectRecord(record: RunningSubagent | RuntimeRecord): InspectRecord
   return record as unknown as InspectRecord;
 }
 
-/** 构造当前进程直接持有的实时观测。每次调用都会刷新 activity 快照。 */
 export function buildLiveSubagentInspection(
   running: RunningSubagent,
   deps: Pick<SubagentInspectDeps, "observeRunningSubagent" | "isPidAlive" | "probeSurface" | "readSubagentLoadout"> & {
@@ -555,8 +535,7 @@ export function buildLiveSubagentInspection(
   const record = asInspectRecord(running);
   const activityRead = freshActivity(record);
   const activity = activityRead.ok ? activityRead.activity : running.activity;
-  // 根据刚读到的文件再核对一次状态。生产 observer 通常已经完成这一步，
-  // 但让 builder 自包含可以避免调用方传入轻量 observer 时返回旧状态。
+
   const baseState = running.statusState ?? createStatusState({ source: "pi", startTimeMs: running.startTime });
   const freshState = observeStatus(
     baseState,
@@ -566,9 +545,7 @@ export function buildLiveSubagentInspection(
     now,
   );
   running.statusState = freshState;
-  // 模型侧冻结（工单 45）：inspect 不消费存活证据——新三态（stale /
-  // stale-tool / 证据停滞）只进显示层，这里的判定必须与无证据口径逐字
-  // 一致（回归断言钉住）；证据仍留在 running.statusState 供 widget 消费。
+
   const status = classifyStatus(withoutLivenessEvidence(freshState), now);
   const process = inspectProcess(record, "live", deps);
   const loadout = deps.readSubagentLoadout(running.sessionFile);
@@ -586,7 +563,6 @@ export function buildLiveSubagentInspection(
   });
 }
 
-/** 构造 /reload 后 runtime registry 中尚未被当前模块接管的记录。 */
 export function buildRuntimeSubagentInspection(
   record: RuntimeRecord,
   deps: Pick<SubagentInspectDeps, "isPidAlive" | "probeSurface" | "readSubagentLoadout">,
@@ -612,7 +588,6 @@ export function buildRuntimeSubagentInspection(
   });
 }
 
-/** 构造已完成或已清理的会话注册记录；不会把未知进程状态说成存活。 */
 export function buildSessionSubagentInspection(
   name: string,
   entry: NameRegistryEntry,
@@ -758,7 +733,7 @@ export function registerSubagentInspectTool(pi: ExtensionAPI, deps: SubagentInsp
       for (const running of live) {
         liveByName.set(running.name, running);
       }
-      // 内存优先：磁盘记录里名字已被实时运行态占用的条目不再单独展示。
+
       const runtimeByName = new Map<string, RuntimeRecord>();
       for (const record of deps.registry.inspectableRecords(runtimePath)) {
         runtimeByName.set(record.name, record);
@@ -801,8 +776,7 @@ export function registerSubagentInspectTool(pi: ExtensionAPI, deps: SubagentInsp
         }
         const runtime = runtimeByName.get(name);
         if (runtime) {
-          // 旧 runtime 记录可能没有 activityFile；新路径可由父 artifact
-          // 目录和 child id 稳定推导，避免 /reload 后丢失状态观测。
+
           const runtimeForInspection = runtime.activityFile
             ? runtime
             : { ...runtime, activityFile: getSubagentActivityFile(artifactDir, runtime.id) };

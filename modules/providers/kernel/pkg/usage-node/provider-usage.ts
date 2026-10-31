@@ -1,8 +1,3 @@
-// 供应商查询运行层：按共享领域层的路由表执行查询（查表 → 按记录逐步执行）。
-// 简单 JSON 端点由通用执行器直接发请求；OAuth 订阅、HMAC 签名、gRPC 等复杂协议
-// 以连接器标识登记在这里。凭据只经 ProviderQueryCredentials 一个通道进入，
-// 调用方无需按 kind 记忆传参规则。
-
 import { findProviderByUrl, type BuiltinQueryKind } from "../shared/provider-catalog.ts";
 import type {
 	ProviderQueryConfig,
@@ -50,21 +45,20 @@ export function detectProviderKind(baseUrl: string): ProviderKind {
 	return findProviderByUrl(baseUrl)?.queryKind ?? "unknown";
 }
 
-/** 查询入口参数：凭据只此一个通道，具体用途由路由表按供应商决定。 */
 export interface ProviderUsageQuery {
-	/** 宿主身份只用于 Grok 请求头；未注入时不显式设置，不参与凭据或缓存身份。 */
+
 	userAgent?: string;
 	kind: ProviderKind;
 	baseUrl: string;
 	credentials: ProviderQueryCredentials;
 	request?: typeof fetch;
-	/** 显式中转查询配置；存在时优先于 kind 路由。 */
+
 	query?: ProviderQueryConfig | null;
 }
 
 export interface ConfiguredProviderUsageQuery {
 	config: ProviderQueryConfig;
-	/** 推理端点地址；仅用于同源判定与缺省查询地址。 */
+
 	baseUrl: string;
 	credentials: ProviderQueryCredentials;
 	request?: typeof fetch;
@@ -95,7 +89,6 @@ async function requestJson(url: string, apiKey: string, request: typeof fetch): 
 	return response.json().catch(() => null);
 }
 
-/** 简单 JSON 端点的解析器登记表；标识由路由表引用，宿主不可见。 */
 const JSON_PARSERS: Record<
 	JsonParserId,
 	(json: any, ctx: QueryContext) => ProviderUsage | null
@@ -116,7 +109,7 @@ const JSON_PARSERS: Record<
 		const balance = parseNovitaBalance(json);
 		return balance ? { mode: "api", balance } : null;
 	},
-	// Kimi 国际站余额以美元计价
+
 	"kimi-balance": (json, ctx) => {
 		const balance = parseKimiBalance(json, hostIs(ctx.baseUrl, "api.moonshot.ai"));
 		return balance ? { mode: "api", balance } : null;
@@ -129,12 +122,11 @@ const JSON_PARSERS: Record<
 		const quota = parseMiniMaxQuota(json);
 		return quota ? { mode: "subscription", quota } : null;
 	},
-	// 内置 Sub2API 站点按推理地址从目录取品牌标识，避免所有站点共享 ApiKey 的名称。
+
 	"sub2api-usage": (json, ctx) =>
 		parseSub2ApiUsage(json, findProviderByUrl(ctx.baseUrl)?.id ?? "sub2api"),
 };
 
-/** 专用协议连接器登记表；标识由路由表引用，宿主不可见。 */
 const CONNECTORS: Record<ConnectorId, (ctx: QueryContext) => Promise<ProviderUsage | null>> = {
 	"claude-subscription": (ctx) =>
 		fetchClaudeSubscription(ctx.credentials.token, ctx.request).catch(() => null),
@@ -147,13 +139,12 @@ const CONNECTORS: Record<ConnectorId, (ctx: QueryContext) => Promise<ProviderUsa
 	"grok-subscription": (ctx) =>
 		fetchGrokSubscription(ctx.credentials.token, ctx.request, ctx.userAgent).catch(() => null),
 	"zhipu-quota": async (ctx) => {
-		// 团队套餐与个人套餐是同一计费产品的两种入口：配置了团队凭据就走团队端点，
-		// 否则走个人端点；两端都失败才轮到路由表里的余额回退。
+
 		const team = ctx.credentials.zhipuTeam;
 		const quota = team
 			? await fetchZhipuTeamQuota(ctx.credentials.token, team.organizationId, team.projectId, ctx.request).catch(() => null)
 			: await fetchZhipuQuota(ctx.baseUrl, ctx.credentials.token, ctx.request).catch(() => null);
-		// 订阅接口只要返回有效窗口（包括剩余 0%），就优先展示并停止后续余额查询。
+
 		return quota ? { mode: "subscription", quota } : null;
 	},
 	"zhipu-balance": async (ctx) => {
@@ -220,7 +211,6 @@ async function runRouteStep(step: ProviderRouteStep, ctx: QueryContext): Promise
 	return JSON_PARSERS[step.parser](json, ctx);
 }
 
-/** kind 路由查询：查路由表，按记录的回退链依次执行，首个成功结果即返回。 */
 export async function fetchProviderUsage(query: ProviderUsageQuery): Promise<ProviderUsage | null> {
 	if (query.query) {
 		return fetchConfiguredProviderUsage({
@@ -254,7 +244,6 @@ function matchesConfiguredHost(hostname: string, pattern: string): boolean {
 	return hostname === parent || hostname.endsWith(`.${parent}`);
 }
 
-/** 显式配置按当前推理主机匹配；不根据品牌名或 URL 子串猜测。 */
 export function findProviderQueryConfig(
 	baseUrl: string,
 	configs: readonly ProviderQueryConfig[],
@@ -311,7 +300,6 @@ async function requestConfiguredJson(
 	return response.json().catch(() => null);
 }
 
-/** 显式中转协议查询（new-api / zenmux / sub2api / generic-balance）。 */
 export async function fetchConfiguredProviderUsage(
 	query: ConfiguredProviderUsageQuery,
 ): Promise<ProviderUsage | null> {
@@ -358,7 +346,6 @@ export async function fetchConfiguredProviderUsage(
 		return quota ? { mode: "subscription", quota } : null;
 	}
 
-	// 只有同源查询可以复用推理 Key；跨域查询必须在配置里单独提供查询 Key。
 	const apiKey = config.apiKey || (sameOrigin(queryBaseUrl, query.baseUrl) ? inferenceApiKey : "");
 	if (!apiKey) return null;
 

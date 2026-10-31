@@ -1,6 +1,6 @@
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import {
   buildModelDirectory,
   type CatalogModel,
@@ -20,7 +20,6 @@ export interface AgentTypeSummary {
   readonly capabilities: readonly string[];
 }
 
-// 角色定义层字段是 displayName（可缺席），线协议统一输出 display_name: string | null。
 export function summarizeAgentTypes(agents: readonly (Pick<ListedAgentDefinition, "name" | "description" | "capabilities"> & { displayName?: string | null })[]): AgentTypeSummary[] {
   return agents.map((agent) => ({
     name: agent.name,
@@ -39,12 +38,11 @@ export interface SubagentModelsToolDeps {
   readonly getPools: (cwd: string) => Partial<Record<ModelTier, readonly string[]>>;
   readonly getHealth?: (pool: readonly string[]) => ModelHealthMap;
   readonly getDisplayModes?: () => readonly DisplayModeAvailability[];
-  /** 可选的宿主共享目录快照；spawn 与 models 必须复用同一接缝。 */
+
   readonly getModelDirectory?: (ctx: ExtensionContext) => SubagentModelsResult;
   readonly t?: SubagentsTranslate;
 }
 
-/** 组合模型目录、健康摘要和显示模式，保持三个来源读口独立。 */
 export function buildSubagentModelsResult(input: ModelDirectoryInput & {
   readonly display_modes?: readonly DisplayModeAvailability[];
   readonly agent_types?: readonly AgentTypeSummary[];
@@ -73,8 +71,6 @@ function modelRenderLine(model: SubagentModelsResult["models"][number]): string 
   return `${route} — reasoning: ${reasoning}`;
 }
 
-// 与 SubagentModelsResult 镜像：目录只暴露当前 /model 可用模型的可读身份；
-// Agent 用唯一 id/name 选择，跨供应商重复时传 provider/model。
 const subagentModelsOutputSchema = Type.Object({
   generated_at: Type.String(),
   models: Type.Array(Type.Object({
@@ -115,6 +111,7 @@ export function registerSubagentModelsTool(
   pi.registerTool({
     name: "subagent_models",
     label: "Subagent Models",
+    renderShell: "self",
     description:
       "Read the current /model available subagent models. Each entry includes a provider, model id, display name, " +
       "host-supported reasoning_effort values, health facts, and display mode availability. " +
@@ -123,24 +120,20 @@ export function registerSubagentModelsTool(
       "Read the current available model directory before choosing a model for spawn_agent.",
     parameters: Type.Object({}),
     outputSchema: subagentModelsOutputSchema,
-    renderCall(_args, theme) {
-      return new Text(
-        theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent_models.display") ?? "Read available models")),
-        0,
-        0,
-      );
+    renderCall(_args, theme, context) {
+      return renderToolCardCall({ title: deps.t?.("module.subagents.tool.subagent_models.display") ?? "Read available models" }, theme, context);
     },
-    renderResult(result, options, theme) {
+    renderResult(result, options, theme, context) {
       const details = result.details as Partial<SubagentModelsResult> | undefined;
       const models = Array.isArray(details?.models) ? details.models : [];
       const summary = deps.t?.("module.subagents.tool.subagent_models.result.summary", { count: models.length })
         ?? `${models.length} available model${models.length === 1 ? "" : "s"}`;
-      if (!options.expanded) return new Text("", 0, 0);
-      const rows = models.map((model) => modelRenderLine(model));
-      return new Text(
-        [theme.fg("toolOutput", summary), ...rows.map((row) => theme.fg("toolOutput", row))].join("\n"),
-        0,
-        0,
+      const rows = options.expanded ? models.map((model) => modelRenderLine(model)) : [];
+      return renderToolCardResult(
+        { title: deps.t?.("module.subagents.tool.subagent_models.display") ?? "Read available models", status: summary, details: rows },
+        theme,
+        options,
+        context,
       );
     },
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {

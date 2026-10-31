@@ -1,30 +1,17 @@
-// 坐标换算链（工单 17/43）：截图像素 ↔ 平台桌面单位（Windows 物理像素、macOS Quartz 屏幕点）。
-//
-// 口径定稿 screenshot_pixels：观察带图时，图的像素坐标系由采集记录定义——
-//   image.x = (desktop.x − region.x) × (image.width / region.width)
-//   image.y = (desktop.y − region.y) × (image.height / region.height)
-// 两个方向分别换算：helper 逐边取整（窄边兜到 1 像素），纵向比例因此可能与横向的
-// `scale` 相差万分之一；只有一个比例会让图的另一侧整体偏移，所以帧里存两个。
-// 采集记录与 stateId 一一绑定（state.ts），旧图与新图不混用；没有图的快照不带 bounds。
-//
-// 本文件只有纯逻辑：不碰后端、不碰状态层，任何平台可测。
-// 规格来源：工单 17、docs/pi-computer/规划书.md 的坐标口径决策、桥协议 v1 的 capture result 约束。
-
 import type { ComputerBounds, ComputerCaptureRecord } from "./contract.ts";
 
-/** 图的像素坐标系：由采集记录里的 region 与图像尺寸定义 */
 export interface ComputerImageFrame {
-  /** 采集区域左上角的桌面坐标（Windows 像素或 macOS 屏幕点，可为负） */
+
   readonly originX: number;
   readonly originY: number;
-  /** 采集区域尺寸（与 origin 相同的平台单位，正数） */
+
   readonly width: number;
   readonly height: number;
-  /** 横向比例：image.width / region.width（与采集记录的 scale 同值） */
+
   readonly scaleX: number;
-  /** 纵向比例：image.height / region.height（逐边取整时与 scaleX 可差万分之一） */
+
   readonly scaleY: number;
-  /** 图像实际像素边界；动作输入必须严格落在这个范围内，绝不夹紧。 */
+
   readonly imageWidth: number;
   readonly imageHeight: number;
 }
@@ -34,14 +21,8 @@ export interface ComputerImagePoint {
   readonly y: number;
 }
 
-/** scale 与图像宽/区域宽的一致性容差：线上 double 由同一串除法得出，这里只做防呆 */
 const FRAME_EPSILON = 1e-9;
 
-/**
- * 采集区域与图像的字段能不能构成一张可换算的图：区域有正面积、图像有正尺寸、
- * 记录的 `scale` 与「图像宽 / 区域宽」一致（协议要求 scale 就是横向比例）。
- * 桥边界与状态层共用这一份判定，避免两处容差各自漂移。
- */
 export function isValidImageFrame(
   region: ComputerBounds,
   image: { readonly width: number; readonly height: number; readonly scale: number },
@@ -52,10 +33,6 @@ export function isValidImageFrame(
   return Math.abs(image.scale - image.width / region.width) <= FRAME_EPSILON;
 }
 
-/**
- * 从采集记录取出图面几何；字段自相矛盾时判不可用。
- * 调用方按「这份记录不能用来换算」处理，不拿它凑合：换算错的坐标比没有坐标危险。
- */
 export function imageFrameOf(capture: ComputerCaptureRecord): ComputerImageFrame | undefined {
   const { region, image } = capture;
   if (!isValidImageFrame(region, image)) return undefined;
@@ -71,7 +48,6 @@ export function imageFrameOf(capture: ComputerCaptureRecord): ComputerImageFrame
   };
 }
 
-/** 虚拟桌面物理坐标 → 图像像素（四舍五入到整像素） */
 export function desktopPointToImage(frame: ComputerImageFrame, x: number, y: number): ComputerImagePoint {
   return {
     x: Math.round((x - frame.originX) * frame.scaleX),
@@ -79,10 +55,6 @@ export function desktopPointToImage(frame: ComputerImageFrame, x: number, y: num
   };
 }
 
-/**
- * 图像像素 → 虚拟桌面物理坐标。
- * 保留小数：图像像素是对物理像素的采样，整数图点反算不一定落在整数物理像素上。
- */
 export function imagePointToDesktop(frame: ComputerImageFrame, x: number, y: number): ComputerImagePoint {
   return {
     x: frame.originX + x / frame.scaleX,
@@ -90,10 +62,8 @@ export function imagePointToDesktop(frame: ComputerImageFrame, x: number, y: num
   };
 }
 
-/** 截图像素 → Quartz 屏幕点（左上原点、Y 向下）；Cocoa 的 Y 翻转仅在覆盖层内部进行。 */
 export const imagePointToScreenPoint = imagePointToDesktop;
 
-/** 虚拟桌面 screen point → 目标窗口局部 point；窗口 frame 原点固定，不猜标题栏或边框。 */
 export function screenPointToWindowLocal(
   windowFrame: ComputerBounds,
   x: number,
@@ -102,15 +72,10 @@ export function screenPointToWindowLocal(
   return { x: x - windowFrame.x, y: y - windowFrame.y };
 }
 
-/** 坐标必须在本次截图像素的半开区间内；边界外不夹紧。 */
 export function isImagePointInFrame(frame: ComputerImageFrame, x: number, y: number): boolean {
   return Number.isFinite(x) && Number.isFinite(y) && x >= 0 && y >= 0 && x < frame.imageWidth && y < frame.imageHeight;
 }
 
-/**
- * 矩形换算：两个角分别换算再取差值，换算后的矩形覆盖原区域。
- * 缩小时出现 0 宽/高属如实结果（元素比一个图点还小），不硬凑成 1 像素。
- */
 export function desktopBoundsToImage(frame: ComputerImageFrame, bounds: ComputerBounds): ComputerBounds {
   const left = Math.round((bounds.x - frame.originX) * frame.scaleX);
   const top = Math.round((bounds.y - frame.originY) * frame.scaleY);

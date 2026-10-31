@@ -1,6 +1,3 @@
-// 共享视觉链：Pi 视觉模型选择、熔断与 deadline。
-// 视觉模块持有一个实例，context 注入与 vision_query 的模型调用都经它提问。
-
 import {
   callPiVisionModel,
   piVisionModelKey,
@@ -59,7 +56,6 @@ export class VisionChain {
     this.failedAutomaticModels.clear();
   }
 
-  /** 一次 agent run 记一轮:清上一轮的失败短路与无效请求熔断。 */
   beginTurn(): void {
     this.turnCount += 1;
     this.turnMemory.newTurn(this.turnCount);
@@ -95,10 +91,6 @@ export class VisionChain {
     return selected;
   }
 
-  /**
-   * 向视觉链提一次问。deadlineAt 是整个工具任务(可能含多次 ask)的共享截止,
-   * 单后端再叠加 per-call 上限;本轮已全失败时直接短路。
-   */
   async ask(
     registry: PiVisionModelRegistry,
     images: VisionImage[],
@@ -163,10 +155,10 @@ export class VisionChain {
         }
       }
     }
-    // 自动模式每个请求只试一个 Pi 模型；该候选失败后，下次调用可换下一个。
+
     const automaticCanTryAnotherModel =
       this.routing.route.mode === "automatic" && piSelection !== undefined;
-    // 400/413/422 往往是本次参数或负载问题，允许调用方修正后重试。
+
     if (!failureKinds.includes("INVALID_REQUEST") && !automaticCanTryAnotherModel) this.turnMemory.markAllFailed();
     return { ok: false, json: buildFailureJson(failureKinds.length > 0 ? failureKinds : ["OTHER"], attempted) };
   }

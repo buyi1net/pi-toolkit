@@ -61,7 +61,6 @@ function providerBrand(brandName: string): string {
 	return sanitizeSingleLine(brandName);
 }
 
-/** 订阅额度窗口全部进入顶边 subscription 段；紧凑形态去掉重置倒计时。 */
 function buildSubscriptionSegment(
 	state: UsageRuntimeState,
 	theme: Theme,

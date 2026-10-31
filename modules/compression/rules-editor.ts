@@ -1,17 +1,3 @@
-// 压缩模型规则编辑器（工单 02）：从当前模型目录选择完整 provider/model 身份，
-// 配出压缩模式（codex 再选协议，codex 规则下方另给 profile 与 onUnsupported
-// 两个参数子行），保存/删除经 kit 配置写入事务落盘。
-//
-// 先例：modules/subagents/menu.ts 的候选池编辑器（自绘面板 + ChoicePicker）。
-// 原生 SettingsList 不支持 Ctrl+D 待删态与「当前选中行」读取口，规则是结构化
-// 对象（规格：菜单 schema 只放开关和有限枚举），所以走模块自己的编辑页。
-//
-// 键位：↑↓ 全行可达、Enter 规则行改模式（codex 跟进协议选择）/ codex 参数行改
-// profile 或 onUnsupported / 添加行开模型选择器、Ctrl+D 进入待删态 → Enter
-// 确认删除（Esc 或移动光标撤销）、Esc 退出。
-// 写盘语义：每次改动立即落盘（modelRulesPatch 写前校验），失败只提示，读侧
-// 永远回读配置节（盘上真相）。规则可以删到零条（空规则列表合法）。
-
 import { type ExtensionContext, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import {
   getKeybindings,
@@ -46,10 +32,8 @@ import {
 } from "./messages/index.ts";
 import { normalizeBaseUrlForCompare, normalizeCompressionToken } from "./strategy.ts";
 
-/** 菜单需要的模型注册表能力（取子集，方便 headless 自测塞 stub） */
 export type CompressionMenuRegistry = Pick<ModelRegistry, "getAll">;
 
-/** 模型目录里的候选：完整 provider/model 身份 + 目录声明的元数据 */
 export interface CompressionModelCandidate {
   readonly provider: string;
   readonly modelId: string;
@@ -58,10 +42,6 @@ export interface CompressionModelCandidate {
   readonly contextWindow: number | undefined;
 }
 
-/**
- * 候选 = 模型目录里的全部模型（完整 provider/model 身份，不手写模型名做主键）。
- * 同一 provider/model 去重（保留首条的元数据）；按 provider/model 字典序排序。
- */
 export function discoverCompressionCandidates(
   registry: CompressionMenuRegistry,
 ): CompressionModelCandidate[] {
@@ -85,7 +65,6 @@ export function discoverCompressionCandidates(
   return candidates;
 }
 
-/** 候选 → 策略解析的模型身份。 */
 export function candidateIdentity(candidate: {
   readonly provider: string;
   readonly modelId: string;
@@ -102,7 +81,6 @@ export function candidateIdentity(candidate: {
   };
 }
 
-/** Pi 的会话模型 → 模型身份（结构收敛在模块内）。 */
 export function modelIdentityFromModel(model: {
   readonly provider: string;
   readonly id: string;
@@ -119,11 +97,6 @@ export function modelIdentityFromModel(model: {
   });
 }
 
-/**
- * 规则与候选是否同一身份（规范化比较：id 去空白、baseUrl 按规范化键）。
- * 注意：基础编辑器写入的规则不带可选约束，重复判定用裸身份（不传 api /
- * baseUrl 的候选形状）——带约束的旧规则与裸新规则是不同精度，允许共存。
- */
 export function sameRuleIdentity(
   rule: CompressionModelRule,
   candidate: { readonly provider: string; readonly modelId: string; readonly api?: string; readonly baseUrl?: string },
@@ -141,11 +114,6 @@ export function sameRuleIdentity(
   return true;
 }
 
-/**
- * 改规则的模式（编辑器写点之一）：身份约束（provider/model/api/baseUrl）保持不变；
- * 离开 codex 时剥掉 Codex 参数（protocol/profile/onUnsupported 不再有意义），
- * 留在 codex 时保留原有 profile / onUnsupported，protocol 由本次选择给出。
- */
 export function withRuleMode(
   rule: CompressionModelRule,
   mode: CompressionMode,
@@ -168,14 +136,8 @@ export function withRuleMode(
   };
 }
 
-/** codex 规则的两个可编辑参数（子行）：Responses 兼容声明与不支持时策略 */
 export type CodexRuleParam = "profile" | "onUnsupported";
 
-/**
- * 改规则的 profile（编辑器写点之一）：其余字段全部不变；undefined = 剥掉该键
- * （生效口径回到「按 API 推导」）。编辑器只写合法枚举值，手工配置的自定义
- * 字符串在回读时原样显示，重选即可替换。
- */
 export function withRuleProfile(
   rule: CompressionModelRule,
   profile: string | undefined,
@@ -183,7 +145,6 @@ export function withRuleProfile(
   return mergeCodexParams(rule, profile, rule.onUnsupported);
 }
 
-/** 改规则的不支持时策略（编辑器写点之一）：其余字段全部不变；undefined = 剥掉该键（生效默认 native） */
 export function withRuleOnUnsupported(
   rule: CompressionModelRule,
   policy: CodexUnsupportedPolicy | undefined,
@@ -191,7 +152,6 @@ export function withRuleOnUnsupported(
   return mergeCodexParams(rule, rule.profile, policy);
 }
 
-/** codex 参数归一重建：两个可选键同时展开，未提供的不落键 */
 function mergeCodexParams(
   rule: CompressionModelRule,
   profile: string | undefined,
@@ -205,14 +165,12 @@ function mergeCodexParams(
   };
 }
 
-/** 规则行值位：模式名（codex 追加生效协议） */
 export function ruleRowValue(rule: CompressionModelRule, t: Translator): string {
   const mode = compressionModeLabel(rule.mode, t);
   if (rule.mode !== "codex") return mode;
   return `${mode} · ${codexProtocolLabel(rule.protocol, t)}`;
 }
 
-/** codex 参数子行值位：profile 显示声明值（未指定显示推导口径），onUnsupported 显示策略（未指定显示默认 native） */
 export function codexParamRowValue(rule: CompressionModelRule, param: CodexRuleParam, t: Translator): string {
   if (param === "profile") {
     return rule.profile === undefined ? t("module.compression.rules.profile.unset") : rule.profile;
@@ -222,16 +180,11 @@ export function codexParamRowValue(rule: CompressionModelRule, param: CodexRuleP
     : t(`module.compression.rules.onUnsupported.${rule.onUnsupported}`);
 }
 
-/** 已配置规则数文案（入口行与退出回执的当前值） */
 export function rulesCountValue(count: number, t: Translator): string {
   return count === 0
     ? t("module.compression.rules.value.none")
     : t("module.compression.rules.value.configured", { count });
 }
-
-// ─────────────────────────────────────────────────────────────
-// 写盘
-// ─────────────────────────────────────────────────────────────
 
 export interface SaveOutcome {
   readonly ok: boolean;
@@ -246,15 +199,14 @@ export interface CompressionRulesPanelOptions {
   readonly t: Translator;
   readonly theme: MenuTheme;
   readonly context: ExtensionContext;
-  /** 结构化配置写入事务（菜单层注入，重绘请求也由它带） */
+
   readonly saveConfig: (patch: ModuleConfigRecord, hooks?: ConfigWriteHooks) => Promise<void>;
   readonly requestRender: () => void;
-  /** 读本模块配置节（实时，盘上真相） */
+
   readonly getSection: () => Record<string, unknown>;
   readonly onDone: (value: string) => void;
 }
 
-/** 写整组模型规则（补丁语义与写前校验在 modelRulesPatch） */
 export async function saveModelRules(
   options: CompressionRulesPanelOptions,
   rules: readonly CompressionModelRule[],
@@ -267,7 +219,6 @@ export async function saveModelRules(
   }
 }
 
-/** 当前的规则与配置问题（读侧统一走 readCompressionSettings） */
 export function readRulesState(section: Record<string, unknown>): {
   readonly rules: readonly CompressionModelRule[];
   readonly problems: readonly unknown[];
@@ -276,24 +227,17 @@ export function readRulesState(section: Record<string, unknown>): {
   return { rules: settings.modelRules, problems };
 }
 
-// ─────────────────────────────────────────────────────────────
-// 行模型
-// ─────────────────────────────────────────────────────────────
-
-/** 编辑器行：规则行 / codex 参数子行 / 添加规则行 */
 export type RulesEditorRow =
   | { readonly kind: "rule"; readonly index: number }
   | { readonly kind: "codexParam"; readonly index: number; readonly param: CodexRuleParam }
   | { readonly kind: "add" };
 
-/** 行 id（自测用）：compression.rules.rule.<n>[.profile|.onUnsupported] / compression.rules.add */
 export function rulesEditorRowId(row: RulesEditorRow): string {
   if (row.kind === "rule") return `compression.rules.rule.${row.index}`;
   if (row.kind === "codexParam") return `compression.rules.rule.${row.index}.${row.param}`;
   return "compression.rules.add";
 }
 
-/** 行序列（渲染顺序）：规则行在前（codex 规则跟 profile / onUnsupported 两个子行），添加行收尾 */
 export function buildRulesEditorRows(rules: readonly CompressionModelRule[]): RulesEditorRow[] {
   const rows: RulesEditorRow[] = [];
   rules.forEach((rule, index) => {
@@ -307,16 +251,10 @@ export function buildRulesEditorRows(rules: readonly CompressionModelRule[]): Ru
   return rows;
 }
 
-/** 行 id 序列（自测用）：结构断言走这里 */
 export function rulesEditorRowIds(rules: readonly CompressionModelRule[]): string[] {
   return buildRulesEditorRows(rules).map(rulesEditorRowId);
 }
 
-// ─────────────────────────────────────────────────────────────
-// UI：规则编辑器面板
-// ─────────────────────────────────────────────────────────────
-
-/** 待删态：记下标与规则身份，写盘刷新后失配即自动撤销 */
 interface PendingDelete {
   readonly index: number;
   readonly identity: string;
@@ -350,7 +288,7 @@ export class CompressionRulesPanel implements Component {
   }
 
   handleInput(data: string): void {
-    // 选择器打开期间输入全部委托给它；它的 Esc 经 onCancel 回到这里关闭
+
     if (this.submenu) {
       this.submenu.handleInput?.(data);
       return;
@@ -410,13 +348,11 @@ export class CompressionRulesPanel implements Component {
     this.options.context.ui.notify(message, "error");
   }
 
-  /** 写盘失败只提示，不改任何取值（读侧回读配置节，天然是盘上真相） */
   private reportSave(outcome: SaveOutcome): void {
     if (outcome.ok) return;
     this.notify(this.options.t("notify.saveFailed", { reason: outcome.error ?? "" }));
   }
 
-  /** 写盘成功后回读配置节并重建行；selectRowId 指定刷新后的光标落点 */
   private refresh(selectRowId?: string): void {
     const state = readRulesState(this.options.getSection());
     this.rules = state.rules;
@@ -437,7 +373,6 @@ export class CompressionRulesPanel implements Component {
     return this.rows[this.selectedIndex];
   }
 
-  /** 把光标移到指定行 id（找不到返回 false）；自测与外部定位用 */
   selectRow(id: string): boolean {
     const index = this.rows.findIndex((row) => rulesEditorRowId(row) === id);
     if (index === -1) return false;
@@ -446,13 +381,11 @@ export class CompressionRulesPanel implements Component {
     return true;
   }
 
-  /** 当前光标行的 id（空面板返回空串；自测用） */
   currentRowId(): string {
     const row = this.rows[this.selectedIndex];
     return row ? rulesEditorRowId(row) : "";
   }
 
-  /** ↑↓/滚轮：全行可达，首尾循环；移动即撤销待删态 */
   private moveSelection(step: 1 | -1): void {
     if (this.rows.length === 0) return;
     const next = (this.selectedIndex + step + this.rows.length) % this.rows.length;
@@ -463,7 +396,6 @@ export class CompressionRulesPanel implements Component {
     this.options.requestRender();
   }
 
-  /** Enter/空格/点击：待删行确认删除；规则行开模式选择；添加行开模型选择 */
   private activate(): void {
     const row = this.currentRow();
     if (!row) return;
@@ -477,7 +409,6 @@ export class CompressionRulesPanel implements Component {
     else this.openModelPicker();
   }
 
-  /** Ctrl+D：规则行进入/撤销待删态（再按一次撤销）；其它行无反应 */
   private toggleDeleteArm(): void {
     const row = this.currentRow();
     if (!row || row.kind !== "rule") return;
@@ -492,7 +423,6 @@ export class CompressionRulesPanel implements Component {
     this.options.requestRender();
   }
 
-  /** 待删确认：删除该规则（允许删到零条，空规则列表合法） */
   private async confirmDelete(index: number): Promise<void> {
     const rules = readRulesState(this.options.getSection()).rules;
     const outcome = await saveModelRules(
@@ -506,7 +436,6 @@ export class CompressionRulesPanel implements Component {
     }
   }
 
-  /** 开模式选择器：选定后经 applyModeEdit 写盘；codex 再跟进协议选择 */
   private openModePicker(index: number): void {
     const t = this.options.t;
     const rule = this.rules[index];
@@ -538,7 +467,6 @@ export class CompressionRulesPanel implements Component {
     this.options.requestRender();
   }
 
-  /** 开 Codex 协议选择器：默认条目 = 不写 protocol（生效产品默认） */
   private openProtocolPicker(
     index: number,
     mode: CompressionMode,
@@ -570,15 +498,10 @@ export class CompressionRulesPanel implements Component {
     this.options.requestRender();
   }
 
-  /**
-   * 开 codex 参数选择器（profile / onUnsupported）：默认条目 = 不写该键
-   * （profile 生效「按 API 推导」、onUnsupported 生效默认 native）；远程请求
-   * 限制的说明在编辑页底部的提示行（codexRemoteNote），不在选择器里重复。
-   */
   private openCodexParamPicker(index: number, param: CodexRuleParam): void {
     const t = this.options.t;
     const rule = this.rules[index];
-    if (!rule || rule.mode !== "codex") return; // 模式已变（写盘刷新后子行消失）
+    if (!rule || rule.mode !== "codex") return;
     const isProfile = param === "profile";
     const options = isProfile
       ? [
@@ -625,7 +548,6 @@ export class CompressionRulesPanel implements Component {
     this.options.requestRender();
   }
 
-  /** 模式/协议落选：重建该规则并整组写盘 */
   private async applyModeEdit(
     index: number,
     mode: CompressionMode,
@@ -643,7 +565,6 @@ export class CompressionRulesPanel implements Component {
     }
   }
 
-  /** codex 参数落选：按 update 重建该规则并整组写盘（规则已非 codex 时不动） */
   private async applyCodexParamEdit(
     index: number,
     update: (rule: CompressionModelRule) => CompressionModelRule,
@@ -660,7 +581,6 @@ export class CompressionRulesPanel implements Component {
     }
   }
 
-  /** 开模型选择器（添加行）：选择项 = 模型目录全集的完整 provider/model 身份 */
   private openModelPicker(): void {
     const t = this.options.t;
     this.submenu = new ChoicePicker({
@@ -691,7 +611,6 @@ export class CompressionRulesPanel implements Component {
     this.options.requestRender();
   }
 
-  /** 新规则的模式选择 → codex 再选协议 → 追加写盘 */
   private openAddModePicker(candidate: CompressionModelCandidate): void {
     const t = this.options.t;
     const label = `${candidate.provider}/${candidate.modelId}`;
@@ -749,7 +668,6 @@ export class CompressionRulesPanel implements Component {
     this.options.requestRender();
   }
 
-  /** 追加规则：与新规则同身份（基础编辑器只写裸身份）的规则已存在时拒绝，不产生写盘 */
   private async applyAddRule(
     candidate: CompressionModelCandidate,
     mode: CompressionMode,
@@ -776,8 +694,6 @@ export class CompressionRulesPanel implements Component {
     }
   }
 
-  // ── 渲染 ────────────────────────────────────────────────
-
   private getVisibleRange(): { startIndex: number; endIndex: number } {
     const startIndex = Math.max(
       0,
@@ -803,7 +719,7 @@ export class CompressionRulesPanel implements Component {
     }
     lines.push("");
     if (this.rules.some((rule) => rule.mode === "codex")) {
-      // 远程请求限制的如实说明：仅在页面上存在 codex 规则时展示，不造假开关
+
       lines.push(
         truncateToWidth(this.options.theme.hint(this.options.t("module.compression.rules.codexRemoteNote")), width),
       );

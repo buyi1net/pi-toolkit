@@ -1,11 +1,5 @@
 import type { SessionStats } from "./session.ts";
 
-/**
- * 路由异常结构化分类:子代理的 errorMessage 被归到有限的 kind 集合,连同
- * retryable 与 suggestedActions 一起作为 tool result details 里的
- * route_exception 提供给主编排代理。是否重试/换模型由主代理决定——本扩展
- * 不做自动 fallback,也不暂停其它 sibling 子代理。
- */
 export type RouteExceptionKind =
   | "quota_exhausted"
   | "rate_limited"
@@ -19,18 +13,17 @@ export type RouteExceptionKind =
 export interface RouteException {
   kind: RouteExceptionKind;
   retryable: boolean;
-  /** 原始错误文本(人类可读 content 之外的程序可读副本)。 */
+
   message: string;
-  /** 能从已解析模型 id 拆出时提供("openrouter/z-ai/glm-5.2" → "openrouter")。 */
+
   provider?: string;
-  /** 已解析模型 id(不含 provider 前缀;能解析时提供)。 */
+
   model?: string;
-  /** 子代理会话中已执行的工具调用数(区分"启动即败"与"执行中途失败")。 */
+
   toolCount?: number;
   suggestedActions: string[];
 }
 
-/** 拆分 "provider/model[:thinking]" 形式的模型 id;无 provider 前缀时省略。 */
 export function splitModelRef(modelRef: string): { provider?: string; model: string } {
   const slash = modelRef.indexOf("/");
   if (slash > 0 && slash < modelRef.length - 1) {
@@ -46,11 +39,6 @@ interface RoutePattern {
   suggestedActions: string[];
 }
 
-/**
- * 分类规则按优先级排列:更具体/更高价值判定(上下文超限、鉴权、额度、
- * 模型不存在)先于通用供应商错误;通用 5xx/网络类最后兜底,未命中即 unknown。
- * 模式来自常见供应商错误文案(Anthropic/OpenAI/OpenRouter),保守避免误判。
- */
 const ROUTE_PATTERNS: RoutePattern[] = [
   {
     kind: "context_too_large",
@@ -163,10 +151,6 @@ const ROUTE_PATTERNS: RoutePattern[] = [
   },
 ];
 
-/**
- * 从错误文本分类路由异常。context.model 取自主代理已解析的模型 id
- * (launch loadout / resume loadout),只做展示拆分,不影响 kind 判定。
- */
 export function buildRouteException(
   errorMessage: string,
   context?: { model?: string | null; toolCount?: number },
@@ -195,11 +179,6 @@ export function buildRouteException(
   };
 }
 
-/**
- * 子代理结果 → route_exception(details 组装的统一入口):errorMessage 缺失
- * (成功/取消)或 userClosed(用户关闭 pane,非 provider/agent 错误)返回
- * undefined;已有 errorMessage 则现场分类,并把 stats.toolCount 一并带上。
- */
 export function routeExceptionFromResult(
   result: { errorMessage?: string; stats?: Pick<SessionStats, "toolCount">; userClosed?: boolean },
   model?: string | null,

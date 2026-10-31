@@ -1,25 +1,17 @@
-// peers_send 模型侧工具（工单 39）：按目标寻址投递一句话，返回三态结果与原因码。
-//
-// 文案口径与 peers_list 相同：工具名、描述与模型可见的结果文本是稳定的协议文本
-// （英文），不随界面语言变化；人类界面的工具显示名走三语键表（mod.ts 装配时解析）。
-// 发送语义（寻址、组帧、三态映射）全部在 messaging.ts 的 deliverPeersMessage；本文件
-// 只做参数形状与结果呈现，不含判定逻辑。
-
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text, stripTerminalSequences } from "@earendil-works/pi-tui";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { compactRenderText, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import { Type } from "typebox";
 import { describePeersReason, deliverPeersMessage, type PeersSendDeps, type PeersSendReport, type PeersTargetStatusSnapshot } from "./messaging.ts";
 import type { PeersTranslate } from "./messages/index.ts";
 
 export interface PeersSendToolDeps extends PeersSendDeps {
-  /** 工具显示名（三语键表在装配时解析） */
+
   readonly label: string;
-  /** TUI 调用行展示译者 */
+
   readonly t?: PeersTranslate;
 }
 
-/** 寻址时刻对端状态快照的模型可见文案（新增文案用英文）：注册候选给活性 / 活动 /
- * 心跳年龄；纯磁盘离线候选中活动与心跳不可得，写 unavailable，不伪造数值。 */
 function formatTargetStatus(status: PeersTargetStatusSnapshot): string {
   if (status.source === "disk") {
     return "offline (no live instance; activity and heartbeat age unavailable)";
@@ -27,12 +19,11 @@ function formatTargetStatus(status: PeersTargetStatusSnapshot): string {
   return `${status.liveness} / ${status.activity} / heartbeat age ${status.heartbeatAgeMs}ms`;
 }
 
-/** 把发送报告折成模型可见文本（稳定英文协议文本） */
 function formatSendReport(report: PeersSendReport, target: string): string {
   const head = `peers_send → target ${JSON.stringify(target)}`;
   if (report.result === "accepted") {
     const duplicate = report.reason === "duplicate-message";
-    // 成功回执按 id 形状给出引用：UUID 给完整 id 加 `@` 短码，非 UUID 只给完整 id（决策 4）
+
     const reference =
       report.messageId !== null
         ? ` message id ${report.messageId}${report.messageShortId !== null ? ` (@${report.messageShortId})` : ""}.`
@@ -41,9 +32,9 @@ function formatSendReport(report: PeersSendReport, target: string): string {
   }
   const reasonText =
     report.reason !== null ? `${report.reason} (${describePeersReason(report.reason)})` : "no reason code";
-  // 传输类失败带阶段（connect / write / response）：只作可观测信息，不对模型暴露重试策略细节
+
   const stageText = report.stage !== null ? `; stage: ${report.stage}` : "";
-  // 失败回执带上寻址时刻的对端状态（决策 9）；多义 / 目标不明等无单一对端的拒绝不带
+
   const statusText =
     report.targetStatus !== null
       ? ` Target status at resolution: ${formatTargetStatus(report.targetStatus)}.`
@@ -54,32 +45,23 @@ function formatSendReport(report: PeersSendReport, target: string): string {
   return `${head}: DELIVERY FAILED (error: ${reasonText}${stageText}).${statusText} ${report.detail}`;
 }
 
-/** 把折叠态动态字段压成单行，完整回执仍保留给展开态。 */
-function compactRenderText(value: unknown): string {
-  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
-}
-
-/** 把发送回执折成只含目标与结果的 UI 摘要。 */
-function sendRenderSummary(
+function sendRenderStatus(
   result: { details?: unknown },
-  theme: { fg(color: string, text: string): string },
   t?: PeersTranslate,
 ): string {
   const details = result.details as (Partial<PeersSendReport> & { target?: unknown }) | undefined;
   const target = compactRenderText(details?.target) || "(target)";
   if (details?.result === "accepted") {
-    return theme.fg(
-      "toolOutput",
-      t?.("module.peers.tool.send.result.delivered", { target }) ?? `Delivered ${target}`,
-    );
+    return t?.("module.peers.tool.send.result.delivered", { target }) ?? `Delivered ${target}`;
   }
   const reason = typeof details?.reason === "string"
     ? describePeersReason(details.reason as Parameters<typeof describePeersReason>[0])
     : compactRenderText(details?.detail) || compactRenderText(details?.result) || "delivery failed";
-  return theme.fg(
-    "error",
-    t?.("module.peers.tool.send.result.failed", { reason }) ?? `Delivery failed: ${reason}`,
-  );
+  return t?.("module.peers.tool.send.result.failed", { reason }) ?? `Delivery failed: ${reason}`;
+}
+
+function normalizeReplyTo(replyTo: string | undefined): string | null {
+  return typeof replyTo === "string" && replyTo.trim() !== "" ? replyTo : null;
 }
 
 function sendBodyLines(body: unknown): string[] {
@@ -126,38 +108,31 @@ export function registerPeersSendTool(pi: ExtensionAPI, deps: PeersSendToolDeps)
         }),
       ),
     }),
-    renderCall(args, theme) {
+    renderShell: "self",
+    renderCall(args, theme, context) {
       const rawTarget = typeof args.target === "string" ? args.target : "";
       const target = rawTarget.trim() || "(target)";
-      return new Text(
-        theme.fg("toolTitle", theme.bold(deps.t?.("module.peers.tool.send.display", { target }) ?? `Message ${target}`)) +
-          " " + theme.fg("accent", target),
-        0,
-        0,
-      );
+      const title = deps.t?.("module.peers.tool.send.display", { target }) ?? "Message";
+      return renderToolCardCall({ title, object: target }, theme, context);
     },
     renderResult(result, options, theme, context) {
-      const summary = sendRenderSummary(result, theme, deps.t);
       const details = result.details as (Partial<PeersSendReport> & { target?: unknown }) | undefined;
+      const target = compactRenderText(details?.target) || compactRenderText(context?.args?.target) || "(target)";
+      const title = deps.t?.("module.peers.tool.send.display", { target }) ?? "Message";
       const body = sendBodyLines(context?.args?.body);
-      if (!options.expanded) {
-        if (details?.result !== "accepted" || body.length === 0) return new Text(summary, 0, 0);
-        const preview = body.slice(0, 5).map((line) => theme.fg("toolOutput", line));
-        if (body.length > 5) {
-          preview.push(theme.fg("muted", deps.t?.("module.peers.tool.send.result.moreLines", { count: body.length - 5 }) ?? `… ${body.length - 5} more lines`));
-        }
-        return new Text([summary, ...preview].join("\n"), 0, 0);
-      }
-      const reference = typeof details?.messageShortId === "string" && details.messageShortId.trim() !== ""
-        ? `@${details.messageShortId.trim()}`
-        : "";
-      const bodyText = body.length > 0
-        ? body.map((line) => theme.fg("toolOutput", line))
-        : [theme.fg("muted", deps.t?.("module.peers.tool.send.result.bodyUnavailable") ?? "Message body unavailable")];
-      return new Text(
-        [summary, ...bodyText, ...(reference ? [theme.fg("muted", reference)] : [])].join("\n"),
-        0,
-        0,
+      const expandedDetails = options.expanded
+        ? [
+            ...(details?.result ? [`result: ${details.result}`] : []),
+            ...(details?.reason ? [`reason: ${details.reason}`] : []),
+            ...(details?.stage ? [`stage: ${details.stage}`] : []),
+            ...body,
+          ]
+        : [];
+      return renderToolCardResult(
+        { title, object: target, status: sendRenderStatus(result, deps.t), details: expandedDetails },
+        theme,
+        options,
+        context,
       );
     },
 
@@ -170,11 +145,13 @@ export function registerPeersSendTool(pi: ExtensionAPI, deps: PeersSendToolDeps)
     ): Promise<{
       content: { type: "text"; text: string }[];
       details: PeersSendReport & { readonly target: string };
+      isError?: boolean;
     }> {
-      const report = await deliverPeersMessage(deps, params.target, params.body, params.replyTo ?? null);
+      const report = await deliverPeersMessage(deps, params.target, params.body, normalizeReplyTo(params.replyTo));
       return {
         content: [{ type: "text", text: formatSendReport(report, params.target) }],
         details: { ...report, target: params.target },
+        isError: report.result !== "accepted",
       };
     },
   });

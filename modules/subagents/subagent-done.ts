@@ -1,23 +1,9 @@
-/**
- * Extension loaded into sub-agents.
- * - Shows agent identity + available tools as a styled widget above the editor (toggle with Ctrl+Alt+O)
- * - Provides an `ask_question` tool for asking the parent orchestrator a question
- *
- * Subagents do NOT self-terminate via a tool. Auto-exit agents shut down
- * automatically when their agent loop ends (see the `agent_end` handler);
- * interactive agents end when the human exits the pane.
- *
- * `ask_question` keeps the session OPEN: it writes a `${sessionFile}.ask`
- * signal the parent's watcher picks up, parks the session in a "waiting" state
- * (auto-exit is suppressed for that turn via `awaitingAnswer`), and the parent
- * replies with subagent_message — which lands as the subagent's next turn.
- */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { renameSync, writeFileSync } from "node:fs";
+import { compactRenderText, renderToolCardCall, renderToolCardResult, toolCardText } from "../../kit/tool-card.ts";
 
-/** sidecar 协议文件(.exit/.ask)原子写:tmp+rename,避免部分写入被父侧读走。 */
 function writeSidecar(path: string, data: string): void {
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, data);
@@ -32,21 +18,12 @@ export function shouldMarkUserTookOver(agentStarted: boolean): boolean {
   return agentStarted;
 }
 
-/**
- * Number of child subagents this session itself still has in flight.
- *
- * When this extension is loaded inside a subagent that can spawn its own
- * children (e.g. a general-purpose agent delegating to explore), `index.ts` runs in
- * the same process and publishes a live count through a shared process-global
- * symbol. A subagent that spawns children and then writes a "waiting for
- * results" message would otherwise auto-exit the instant that turn ends —
- * killing the session before its children report back. Reading this count lets
- * `agent_end` keep the session open until every child has finished and its
- * result has been delivered.
- *
- * Returns 0 when the spawning tools aren't loaded (for example at depth 2), or a
- * standalone session), so those agents auto-exit exactly as before.
- */
+function collapsedReason(text: string): string | undefined {
+  const compact = compactRenderText(text);
+  if (!compact) return undefined;
+  return compact.length > 48 ? `${compact.slice(0, 47)}…` : compact;
+}
+
 export function runningChildrenCount(): number {
   const fn = (globalThis as any)[Symbol.for("pi-subagents/running-children-count")];
   if (typeof fn !== "function") return 0;
@@ -62,14 +39,7 @@ export function shouldAutoExitOnAgentEnd(
   _userTookOver: boolean,
   messages: any[] | undefined,
 ): boolean {
-  // Manual input should not strand an auto-exit subagent. If the latest agent
-  // turn completed normally, close the session. Escape/abort still leaves it
-  // open for inspection or another prompt.
-  //
-  // stopReason: "error" (e.g. exhausted retries on a provider overload) also
-  // returns true — we want to shut down so the parent is woken up — but we
-  // pair this with findLatestAssistantError() so the parent learns it was an
-  // error, not a clean completion.
+
   if (messages) {
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
@@ -87,15 +57,6 @@ export interface SubagentErrorInfo {
   stopReason: "error";
 }
 
-/**
- * If the last assistant message in the turn ended with `stopReason: "error"`
- * (typically auto-retry exhausted on an overload / rate limit / server error),
- * return its error info so the parent orchestrator can surface a clear
- * failure instead of silently treating the run as completed.
- *
- * Returns `null` when the latest assistant turn completed normally or was
- * aborted by the user (handled separately by shouldAutoExitOnAgentEnd).
- */
 export function findLatestAssistantError(
   messages: any[] | undefined,
 ): SubagentErrorInfo | null {
@@ -120,9 +81,6 @@ export function parseDeniedTools(rawValue: string | undefined): string[] {
     .filter(Boolean);
 }
 
-/** 持久成员的轮次结束信号判定(纯函数):成员模式且本轮真正落定——
- *  无待答问题(ask 等待的 park 不是轮次完成)、无在途孙代理(它们的
- *  结果还没回来,提前宣布轮次完成会丢弃后续交付)。 */
 export function shouldWriteRoundSignal(
   memberMode: boolean,
   awaitingAnswer: boolean,
@@ -137,20 +95,12 @@ export default function (pi: ExtensionAPI) {
   let denied: string[] = [];
   let expanded = false;
 
-  // Read subagent identity from env vars (set by parent orchestrator)
   const subagentName = process.env.PI_SUBAGENT_NAME ?? "";
   const subagentAgent = process.env.PI_SUBAGENT_AGENT ?? "";
   const deniedToolsValue = process.env.PI_DENY_TOOLS;
   const autoExit = process.env.PI_SUBAGENT_AUTO_EXIT === "1";
-  // A blocking parent tool cannot wait forever while an autonomous child parks
-  // for input: the parent's turn is still busy, so it cannot call
-  // subagent_message to answer. In barrier mode, ask_question therefore acts
-  // as a durable checkpoint: notify the parent, request a graceful exit, and
-  // let the parent resume this session with the answer. Interactive/demo panes
-  // keep the original live waiting behavior.
   const barrierMode = process.env.PI_SUBAGENT_BARRIER === "1";
-  // 持久团队成员:常驻进程(无 barrier/无 auto-exit),轮次结束写 .round;
-  // 拥有受限的成员间直信工具 team_send(peer-send ACL)。
+
   const memberMode = process.env.PI_SUBAGENT_MEMBER === "1";
   const teamDir = process.env.PI_SUBAGENT_TEAM_DIR ?? "";
   const peerSendAcl = parseDeniedTools(process.env.PI_SUBAGENT_PEER_SEND);
@@ -170,7 +120,7 @@ export default function (pi: ExtensionAPI) {
         const agentTag = label ? theme.bold(theme.fg("accent", `[${label}]`)) : "";
 
         if (expanded) {
-          // Expanded: full tool list + denied
+
           const countInfo = theme.fg("dim", ` — ${toolNames.length} available`);
           const hint = theme.fg("muted", "  (Ctrl+Alt+O to collapse)");
 
@@ -193,7 +143,7 @@ export default function (pi: ExtensionAPI) {
           );
           box.addChild(content);
         } else {
-          // Collapsed: one-line summary
+
           const countInfo = theme.fg("dim", ` — ${toolNames.length} tools`);
           const deniedInfo =
             denied.length > 0
@@ -213,13 +163,9 @@ export default function (pi: ExtensionAPI) {
 
   let userTookOver = false;
   let agentStarted = false;
-  // Set when ask_question is called; suppresses auto-exit so the session stays
-  // open while it waits for the orchestrator's reply. Cleared when the reply
-  // lands — on `input` (covers a reply steered into the current run) and on
-  // `agent_start` (covers a reply that starts a fresh turn after parking).
+
   let awaitingAnswer = false;
 
-  // Show widget + status bar on session start
   pi.on("session_start", async (_event, ctx) => {
     const provider = process.env.PI_SUBAGENT_MODEL_PROVIDER;
     const modelId = process.env.PI_SUBAGENT_MODEL_ID;
@@ -240,17 +186,9 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("input", () => {
     recorder.input();
-    // A submitted message is the orchestrator's (or a human's) reply — the
-    // pending ask_question has been answered, however it was delivered. Clear
-    // here, not only on agent_start, because a reply steered in *mid-run* is
-    // absorbed into the current run (pi's `steer` behavior injects it before
-    // the next LLM call): no new agent_start fires, so without this the flag
-    // would stay set and agent_end would park the session as `waiting` even
-    // though the answer already arrived and was consumed. (The `input` event
-    // fires for mid-run steers because prompt() emits it before queueing.)
+
     awaitingAnswer = false;
-    // Ignore the initial task message that starts an autonomous subagent.
-    // Only inputs after the first agent run has started count as user takeover.
+
     if (!shouldMarkUserTookOver(agentStarted)) return;
     userTookOver = true;
   });
@@ -261,21 +199,14 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("agent_start", () => {
     agentStarted = true;
-    // A new turn is starting — any pending ask_question has now been answered
-    // (or superseded), so let auto-exit resume normally when this turn ends.
+
     awaitingAnswer = false;
     recorder.agentStart();
   });
 
   pi.on("agent_end", (event, ctx) => {
     const messages = (event as any).messages as any[] | undefined;
-    // Never shut down while this session still has work in flight:
-    //  - awaitingAnswer: an ask_question is pending the orchestrator's reply.
-    //  - runningChildrenCount(): this subagent spawned its own children and is
-    //    waiting for their results (delivered as steered turns). Exiting now
-    //    would strand those children and drop their results.
-    // In both cases the session parks as `waiting` and resumes when the next
-    // turn lands.
+
     const hasPendingChildren = runningChildrenCount() > 0;
     const shouldExit =
       !awaitingAnswer &&
@@ -284,11 +215,7 @@ export default function (pi: ExtensionAPI) {
       shouldAutoExitOnAgentEnd(userTookOver, messages);
 
     if (shouldExit) {
-      // Surface stopReason: "error" turns (auto-retry exhausted, provider
-      // overload, etc.) to the parent via the .exit sidecar so the watcher
-      // can report a clear failure with the underlying error message.
-      // Without this the parent would only see exit code 0 and a stale
-      // assistant message, mistaking the crash for a successful completion.
+
       const errorInfo = findLatestAssistantError(messages);
       const sessionFile = process.env.PI_SUBAGENT_SESSION;
       if (errorInfo && sessionFile) {
@@ -313,9 +240,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     recorder.agentEndWaiting();
-    // 持久成员:本轮真正落定(无待答问题、无在途孙代理)时写轮次结束
-    // 信号;父侧 round watcher 认领后恰好回注一次。"进程仍存活"是成员的
-    // 常态,轮次终态以 .round 为准。
+
     if (
       shouldWriteRoundSignal(memberMode, awaitingAnswer, runningChildrenCount()) &&
       process.env.PI_SUBAGENT_SESSION
@@ -332,8 +257,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
     if (autoExit) {
-      // Reset any recorded manual input marker. Auto-exit is decided by whether
-      // the latest agent turn completed normally, not by who initiated it.
+
       userTookOver = false;
     }
   });
@@ -382,7 +306,6 @@ export default function (pi: ExtensionAPI) {
     recorder.sessionShutdown((event as any).reason);
   });
 
-  // Toggle expand/collapse with Ctrl+Alt+O
   pi.registerShortcut("ctrl+alt+o", {
     description: "Toggle subagent tools widget",
     handler: (ctx) => {
@@ -420,6 +343,48 @@ export default function (pi: ExtensionAPI) {
           "The single freeform question to ask the orchestrator. Include enough context to answer it directly.",
       }),
     }),
+    renderShell: "self",
+    renderCall(args, theme, context) {
+      return renderToolCardCall(
+        {
+          title: toolText("module.subagents.tool.ask_question.display"),
+          object: compactRenderText((args as any).question) || "(question)",
+        },
+        theme,
+        context,
+      );
+    },
+    renderResult(result, options, theme, context) {
+      const details = (result.details ?? {}) as {
+        question?: unknown;
+        checkpoint?: boolean;
+        deferredExit?: boolean;
+        pendingChildren?: number;
+      };
+      const question =
+        compactRenderText(details.question) ||
+        compactRenderText((context?.args as { question?: unknown } | undefined)?.question) ||
+        "(question)";
+      const text = toolCardText(result);
+      const status = context?.isError
+        ? collapsedReason(text)
+        : details.deferredExit
+          ? `checkpoint deferred (${details.pendingChildren ?? 0} in flight)`
+          : details.checkpoint
+            ? "checkpoint"
+            : "waiting for reply";
+      return renderToolCardResult(
+        {
+          title: toolText("module.subagents.tool.ask_question.display"),
+          object: question,
+          status,
+          details: options.expanded ? text.split("\n") : [],
+        },
+        theme,
+        options,
+        context,
+      );
+    },
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const sessionFile = process.env.PI_SUBAGENT_SESSION;
       if (!sessionFile) {
@@ -429,10 +394,6 @@ export default function (pi: ExtensionAPI) {
         );
       }
 
-      // Interactive/demo panes can remain live while the parent answers. An
-      // autonomous child is awaited by a blocking parent tool, so parking it
-      // would deadlock that parent; barrier mode turns the question into a
-      // checkpoint that is resumed by subagent_message after this process exits.
       const checkpoint = autoExit && barrierMode;
       awaitingAnswer = !checkpoint;
       recorder.askQuestion();
@@ -444,16 +405,7 @@ export default function (pi: ExtensionAPI) {
       writeSidecar(`${sessionFile}.ask`, JSON.stringify(askData));
 
       if (checkpoint) {
-        // ctx.shutdown() is graceful: the current tool result and session
-        // entries are flushed, then subagent-done's agent_end handler permits
-        // the auto-exit. The parent receives the .ask notification and can
-        // resume this durable session with the answer once this tool settles.
-        //
-        // 但绝不能在本会话自身仍有在途孙代理时 shutdown——那会把孙代理一并
-        // 终止并丢失它们的结果。此时采用延迟退出:.ask 已写入、父侧收到通知;
-        // agent_end 的 runningChildrenCount 抑制自动退出,会话停留 waiting,
-        // 孙代理全部交付后的最终 agent_end 自然 checkpoint 退出(此时父侧
-        // 无论 steer 还是 resume 都能送达答案)。
+
         const pendingChildren = runningChildrenCount();
         if (pendingChildren > 0) {
           return {
@@ -462,7 +414,7 @@ export default function (pi: ExtensionAPI) {
               text:
                 `Question sent to the orchestrator. This run still has ${pendingChildren} sub-agent(s) in flight; ` +
                 `the session stays alive until they finish and will only then checkpoint and exit. ` +
-                `The orchestrator has the question and will answer via subagent_message — keep waiting ` +
+                `The orchestrator has the question and will answer via send_message (or continue this session with followup_task) — keep waiting ` +
                 `for your sub-agents and do not assume the question is answered yet.`,
             }],
             details: {
@@ -479,7 +431,7 @@ export default function (pi: ExtensionAPI) {
             type: "text",
             text:
               "Question sent to the orchestrator. This autonomous run is checkpointing and will exit; " +
-              "the orchestrator should resume this session with the answer via subagent_message.",
+              "the orchestrator should continue this session with followup_task after the answer is ready.",
           }],
           details: { question: params.question, checkpoint: true },
         };
@@ -497,20 +449,8 @@ export default function (pi: ExtensionAPI) {
         details: { question: params.question },
       };
     },
-
-    renderCall(args, theme) {
-      const text =
-        theme.fg("toolTitle", theme.bold(toolText("module.subagents.tool.ask_question.display"))) +
-        " " + theme.fg("accent", String((args as any).question ?? ""));
-      return new Text(text, 0, 0);
-    },
   });
 
-  // ── 持久成员间直信(仅 member 模式注册)──────────────────────────
-  // fire-and-forget:写入目标成员 mailbox 后立即返回;父侧 round watcher
-  // 认领并经 RPC steer 注入。无阻塞 request/response——不存在互等死锁。
-  // ACL:仅 profile 的 peer-send 列出的成员名可投递;发送方身份取自父
-  // 进程注入的 env(成员无法冒名——它只能用自己的 PI_SUBAGENT_NAME)。
   if (memberMode) {
     pi.registerTool({
       name: "team_send",
@@ -534,7 +474,7 @@ export default function (pi: ExtensionAPI) {
         if (!to) {
           return { content: [{ type: "text", text: "Provide the target member's `name`." }], details: { error: "missing-target" } };
         }
-        // 空白校验用 trim,但投递保留原文(fire-and-forget 忠实传递)。
+
         if (!text.trim()) {
           return { content: [{ type: "text", text: "Provide a non-empty `text`." }], details: { error: "missing-text", to } };
         }
@@ -549,7 +489,7 @@ export default function (pi: ExtensionAPI) {
             details: { error: "acl-denied", to },
           };
         }
-        // 目标状态核验(成员只读 roster):offline/未知目标明确拒绝,不伪称在线。
+
         const target = readRoster(rosterPath(teamDir)).find(
           (entry) => entry.name === to,
         );
@@ -587,13 +527,41 @@ export default function (pi: ExtensionAPI) {
         };
       },
 
-      renderCall(args, theme) {
-        const to = String((args as any).to ?? "?");
-        return new Text(
-          theme.fg("toolTitle", theme.bold(toolText("module.subagents.tool.team_send.display"))) +
-          " " + theme.fg("accent", to),
-          0,
-          0,
+      renderShell: "self",
+      renderCall(args, theme, context) {
+        return renderToolCardCall(
+          {
+            title: toolText("module.subagents.tool.team_send.display"),
+            object: compactRenderText((args as any).to) || "(target)",
+          },
+          theme,
+          context,
+        );
+      },
+      renderResult(result, options, theme, context) {
+        const details = (result.details ?? {}) as { to?: unknown; queued?: unknown; error?: unknown };
+        const target =
+          compactRenderText(details.to) ||
+          compactRenderText((context?.args as { to?: unknown } | undefined)?.to) ||
+          "(target)";
+        const text = toolCardText(result);
+        const status = context?.isError
+          ? collapsedReason(text)
+          : details.queued
+            ? "queued"
+            : details.error
+              ? String(details.error)
+              : undefined;
+        return renderToolCardResult(
+          {
+            title: toolText("module.subagents.tool.team_send.display"),
+            object: target,
+            status,
+            details: options.expanded ? text.split("\n") : [],
+          },
+          theme,
+          options,
+          context,
         );
       },
     });

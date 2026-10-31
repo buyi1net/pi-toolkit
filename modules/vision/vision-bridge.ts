@@ -1,6 +1,3 @@
-// 视觉桥：收集消息里的图片、保存最近一张截图、调用辅助视觉模型并把结构化视觉笔记注入上下文。
-// 文案（注入告警、询问失败说明）全部走 pi-toolkit 三语键表；纯文本模型才走注入，原生多模态模型旁路。
-
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Translator } from "../../i18n/index.ts";
 import { VisionChain, type VisionAnswer } from "./chain.ts";
@@ -111,7 +108,6 @@ export class VisionBridge {
     this.latestImages.set(key, image);
   }
 
-  /** sharp 缺失属于可操作的安装问题，单独给用户弹提示（其余预处理失败只注入上下文） */
   private reportPreprocessFailure(error: unknown, ctx: ExtensionContext): void {
     if (!ctx.hasUI || !isSharpMissingError(error)) return;
     ctx.ui.notify(describeVisionImageError(error, this.t), "error");
@@ -161,7 +157,6 @@ export class VisionBridge {
     return note;
   }
 
-  /** 让主模型针对最近一张截图自由追问辅助视觉模型。 */
   async queryLatest(question: string, ctx: ExtensionContext): Promise<VisionAnswer> {
     const normalizedQuestion = question.trim();
     if (!normalizedQuestion) return { ok: false, json: this.t("module.vision.queryEmpty") };
@@ -226,7 +221,6 @@ export class VisionBridge {
   }
 }
 
-/** context 注入钩子：只有模块启用时才会被注册（装配器负责按 enabled 跳过） */
 export function registerVisionContext(pi: ExtensionAPI, bridge: VisionBridge): void {
   pi.on("context", async (event, ctx) => ({ messages: await bridge.prepare(event.messages, ctx) }));
 }

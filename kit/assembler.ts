@@ -1,8 +1,3 @@
-// 装配器：把模块定义按配置落成实际注册。
-// 关键约束：enabled=false 的模块在这里被完全跳过，register 与 menuItems 都不会被触碰；
-// 例外是声明 alwaysAssemble: true 的模块（工单 01）：关闭时同样装配并 register，
-// 好让用户仍能从一级菜单打开它的设置页把模块重新打开，运行期行为由模块自行旁路。
-
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ToolkitConfig } from "./config.ts";
 import type { ConfigWriteHooks } from "./config-transaction.ts";
@@ -18,7 +13,6 @@ import {
 } from "./module.ts";
 import type { ServiceRegistry } from "./services.ts";
 
-/** 通过校验并成功注册的模块 */
 export interface ActiveModule {
   readonly definition: ModuleDefinition;
 }
@@ -35,7 +29,7 @@ export interface ModuleContextOptions {
   readonly getModuleConfig: (moduleId: string) => ModuleConfigRecord;
   readonly reloadConfig: () => Promise<void>;
   readonly setModuleConfig: (moduleId: string, key: string, value: ModuleConfigScalar) => Promise<ModuleConfigScalar>;
-  /** 结构化配置写入事务入口：模块配置节补丁 → 落盘 → 内存重载 → reapply */
+
   readonly saveModuleSection: (
     moduleId: string,
     patch: ModuleConfigRecord,
@@ -61,11 +55,6 @@ export function moduleDefaults(definition: ModuleDefinition): ModuleConfigRecord
   return defaults;
 }
 
-/**
- * schema 默认值 + 磁盘取值。
- * schema 声明的键做规范化（非法值丢弃并用默认值兜底）；schema 之外的键原样透传，
- * 供模块读取自己的结构化配置（如视觉路由），菜单不渲染这些键。
- */
 export function resolveModuleConfig(
   definition: ModuleDefinition,
   stored: ModuleConfigRecord | undefined,
@@ -88,7 +77,6 @@ export function isModuleEnabled(config: ModuleConfigRecord): boolean {
   return config[ENABLED_FIELD] !== false;
 }
 
-/** 模块菜单项 id：`<moduleId>.<field>`，模块自定义行自行避让该前缀 */
 export function moduleFieldId(moduleId: string, field: string): string {
   return `${moduleId}.${field}`;
 }

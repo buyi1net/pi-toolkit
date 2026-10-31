@@ -15,17 +15,17 @@ interface MessageContext {
     getSessionId(): string;
     getSessionDir(): string;
   };
-  /** Parent session cwd; needed when a legacy loadout did not persist cwd. */
+
   cwd?: string;
 }
 
 export interface SubagentMessageToolDeps {
-  /** 启动事务：resume 的会话/授权校验、拼装、进程启动、登记与 watcher 启动。 */
+
   startup: SubagentStartup;
-  /** 运行态登记表：运行中/保留中的路由查询与等待解除标记。 */
+
   registry: RuntimeRegistry;
   handleSubagentSteer: (params: { name?: string; message?: string }) => unknown;
-  /** 结果提取（非启动职责：启动只负责把运行态与 watcher 交给调用方）。 */
+
   extractSubagentResult: (
     sessionFile: string,
     result: Pick<SubagentResult, "exitCode" | "summary" | "errorMessage">,
@@ -38,7 +38,7 @@ export interface SubagentMessageToolDeps {
     options?: { sessionPreserved?: boolean },
   ) => string;
   updateWidget: () => void;
-  /** 终态行显示语汇取词（工单 44，可选）：缺席回退本模块英文表；只影响 renderResult 显示。 */
+
   t?: SubagentsTranslate;
 }
 
@@ -139,8 +139,7 @@ export function registerSubagentMessageTool(
     },
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx: MessageContext) {
-      // 与 spawn 路径同規则 normalize:不改变已干净的名称,但多余空白/超长
-      // 名称在 steer 与 resume 两条路径上的寻址行为一致。
+
       const requestedName = normalizeSubagentName(params.name?.trim() ?? "", "");
       if (!requestedName) {
         const error = "Provide the subagent's `name` to steer (if running) or resume (if finished).";
@@ -151,7 +150,7 @@ export function registerSubagentMessageTool(
         const error = "Provide a non-empty `message` to steer or resume a subagent.";
         return { content: [{ type: "text" as const, text: error }], details: { error } };
       }
-      // timeoutMs 校验(信任边界:模型传参);非法值在拉起任何进程前拒绝。
+
       const timeoutError = validateTimeoutMs(params.timeoutMs);
       if (timeoutError) {
         return { content: [{ type: "text" as const, text: timeoutError }], details: { error: timeoutError } };
@@ -161,8 +160,7 @@ export function registerSubagentMessageTool(
         const steerResult = deps.handleSubagentSteer({ name: requestedName, message: params.message }) as
           | { content?: Array<{ type: string; text?: string }>; details?: Record<string, unknown> }
           | undefined;
-        // 持久成员的 steer 不是一次性任务语义:新轮工作必须走 team_dispatch,
-        // 轮次结果由 round watcher 回注——这里补充不误导的指引。
+
         if (runningMatch.member && !steerResult?.details?.error) {
           const base = Array.isArray(steerResult?.content) && steerResult.content[0]?.type === "text"
             ? (steerResult.content[0].text ?? "")
@@ -187,14 +185,13 @@ export function registerSubagentMessageTool(
         const error = `Subagent "${name}" is already being launched or resumed. Wait for that operation to finish.`;
         return { content: [{ type: "text" as const, text: error }], details: { error } };
       }
-      // 启动事务第一阶段（resume）：名字解析、会话文件存在性、锚定 loadout
-      // 与目标合法性校验都在启动模块内完成；命中同会话的运行态交回工具 steer。
+
       const planned = deps.startup.planResume(
         { name, message, timeoutMs: params.timeoutMs },
         ctx,
       );
       if (planned.kind === "steer") {
-        // handleSubagentSteer 的返回形状由宿主决定，与上面的运行中路由同一兑底。
+
         return deps.handleSubagentSteer({ name: planned.name, message: params.message }) as any;
       }
       if (planned.kind === "error") {
@@ -210,16 +207,14 @@ export function registerSubagentMessageTool(
       const cohortDetails = plan.cohortId ? { cohortId: plan.cohortId } : {};
 
       deps.registry.reserveName(name);
-      // resume 同样是依赖提供者:名字确定后、真正拉起进程前登记完成记录,
-      // 下游 spawn 的 dependsOn 即可等待本次 resume 的终态。
+
       announceCompletion(name, { interactive: false });
       let started: ResumeStartedRun;
       try {
-        // 启动事务第二阶段:清理旧 sidecar、拼装环境与 argv、启动进程、登记、
-        // 按运行类别启动 watcher；失败自清理由启动模块负责。
+
         started = await deps.startup.resume(plan, ctx, pi);
       } catch (error) {
-        // resume 启动失败也必须释放完成记录:等待者拿到明确失败,不永久挂起。
+
         settleCompletionFromResult(name, {
           exitCode: 1,
           errorMessage: error instanceof Error ? error.message : String(error),
@@ -230,31 +225,20 @@ export function registerSubagentMessageTool(
       const running = started.running;
       const watcherSignal = started.signal;
 
-      // resume 默认是自动子代理(resolveResumeLaunchBehavior 恒为 interactive: false):
-      // 硬等待终态,真实结果作为 tool result 返回;与 spawn 的硬屏障同语义,
-      // pi 的 sibling 并行执行保证同 turn 内多个 spawn/resume 全部落定后 turn 才继续。
-      // 若未来引入交互式 resume(interactive: true),保持异步立即返回 + steer 回注。
-      //
-      // 中止语义与 spawn 一致(Escape ≠ 取消):宿主中止等待不转发到 watcher,
-      // 子代理继续运行,本调用返回 detached 非终态;真实结果由 watcher 终态
-      // 时迟到回注一次(resume 无 retention,不清理工件)。
       if (!running.interactive) {
         const watchPromise = started.watch as Promise<SubagentResult>;
         running.watchPromise = watchPromise;
-        // 三向竞速(watcher 终态 / Escape / 可选 timeoutMs)与 spawn 的硬屏障
-        // 同源:等待解除只影响本调用,resumed 子代理继续运行,迟到回注一次。
+
         const raced = await waitForSubagentTerminal({ watchPromise, running, signal, timeoutMs: params.timeoutMs ?? undefined });
         if (typeof raced === "object" && "kind" in raced) {
           const released: WaitRelease = raced;
           running.waitReleased = released.kind;
           deps.registry.markWaitReleased(running.runtimeFile, running.id, released.kind);
-          // 主工具等待被中止:resumed 子代理仍在运行,不 settle、不提取伪结果;
-          // 迟到回注恰好一次(watcher promise 单次 resolve;handedOff 移交给
-          // 恢复路径,不回注)。
+
           watchPromise
             .then(async (late) => {
               deps.updateWidget();
-              // handed-off 的提取/回注归恢复路径;但等待者必须被唤醒。
+
               if (late.handedOff) {
                 settleCompletionFromResult(name, late);
                 return;
@@ -370,10 +354,9 @@ export function registerSubagentMessageTool(
         const watcherResult: SubagentResult = raced;
 
         deps.updateWidget();
-        // /reload 移交:显式 handed-off 语义,不提取伪结果、不报 failed;
-        // 恢复路径会在子代理结束后经 steer 消息回注真实结果。
+
         if (watcherResult.handedOff) {
-          // 等待者(如有)必须被唤醒:handed-off 也是注册表承认的终态。
+
           settleCompletionFromResult(name, watcherResult);
           deps.registry.releaseName(name);
           return {
@@ -414,8 +397,7 @@ export function registerSubagentMessageTool(
         const routeException = cancelled
           ? undefined
           : routeExceptionFromResult(finalResult, running.model);
-        // 终态落定完成记录:取消(含用户关闭 pane)兑 cancelled,失败/成功
-        // 按结果映射,摘要用 extract 后的真实回复文本。
+
         settleCompletionFromResult(name, finalResult, {
           ...(cancelled ? { status: "cancelled" as const } : {}),
         });
@@ -456,7 +438,7 @@ export function registerSubagentMessageTool(
           settleCompletionFromResult(name, result, {
             ...(result.userClosed ? { status: "cancelled" as const } : {}),
           });
-          // /reload 移交:恢复路径回注真实结果,这里跳过,避免伪造/重复结果。
+
           if (result.handedOff) return;
           const extracted = await deps.extractSubagentResult(
             sessionPath,
@@ -499,7 +481,7 @@ export function registerSubagentMessageTool(
         .catch((error) => {
           deps.updateWidget();
           settleCompletionFromResult(name, { exitCode: 1, errorMessage: error?.message ?? String(error) });
-          // watcher 正常不会 reject;万一 reject,真实上报错误信息。
+
           pi.sendMessage(
             {
               customType: "subagent_result",

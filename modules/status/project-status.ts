@@ -1,15 +1,3 @@
-// status 模块数据源：git 数据域（工单 07 定案 7：git 不成模块，作为 status 模块内的数据源文件）。
-//
-// 本文件是 tui/status/project-status.ts 的**数据半**（工单 11 切分）：
-// 查询（createGitStatusQuery）、解析（parseGitStatusV2）、git 状态类型与数据侧控制器。
-// 渲染半（布局 / 截断 / 颜色 / renderProjectStatusLine / formatProjectPath）留在
-// tui/status/project-status.ts。git 没有独立句柄，数据经 `status.workspace` 快照透出。
-//
-// 与迁出前的差异（工单 11 自行定案，见工单结果）：控制器不再接收宿主 FooterData
-// （ReadonlyFooterDataProvider 由 tui 的 footer 独占消费），因此去掉临时分支（provisional
-// branch）与 onBranchChange 订阅；分支在首次 git 查询返回前显示占位 "…"，
-// 之后由 1 秒轮询与 tool_execution_end 触发的刷新保持最新。
-
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { sanitizeSingleLine } from "../../shared/sanitize.ts";
 import type { RuntimeStatusSnapshot } from "./runtime-status.ts";
@@ -19,7 +7,7 @@ export type GitRefreshState = "idle" | "loading" | "ready" | "error";
 export type ProjectStatusSegmentId = "project" | "session" | "git" | "duration" | "runtime";
 
 export interface GitStatusCodeCount {
-	/** Git porcelain v2 的原始可见状态码；普通记录为 XY，未跟踪记录为 ?。 */
+
 	code: string;
 	count: number;
 	unmerged: boolean;
@@ -39,14 +27,13 @@ export interface GitStatusDetails {
 	dirty: boolean;
 }
 
-/** `status.workspace` 快照：project / git / duration / runtime 四段聚合 */
 export interface ProjectStatusSnapshot extends Partial<GitStatusDetails> {
 	cwd: string;
 	branch: string | null;
 	refreshState?: GitRefreshState;
 	runtime?: RuntimeStatusSnapshot | null;
 	duration?: TurnTimerSnapshot;
-	/** 会话短码（兼容旧项目状态布局调用，不再由 Footer 注入） */
+
 	sessionShort?: string | null;
 }
 
@@ -55,7 +42,6 @@ export type GitStatusQuery = (
 	signal: AbortSignal,
 ) => Promise<GitStatusDetails | undefined>;
 
-/** 命令失败不向界面抛错，返回 undefined 让控制器保留最后成功快照。 */
 export function createGitStatusQuery(exec: ExtensionAPI["exec"]): GitStatusQuery {
 	return async (cwd, signal) => {
 		try {
@@ -76,7 +62,6 @@ export function createGitStatusQuery(exec: ExtensionAPI["exec"]): GitStatusQuery
 			const status = parseGitStatusV2(result.stdout);
 			if (!status.detached || !status.oid) return status;
 
-			// 绑定本次 status 的 oid，避免两次命令之间 HEAD 移动导致 tag 串配。
 			const tags = await exec(
 				"git",
 				["--no-optional-locks", "tag", "--points-at", status.oid, "--sort=refname"],
@@ -191,7 +176,6 @@ export class ProjectStatusController {
 		this.pollIntervalMs = pollIntervalMs;
 	}
 
-	/** 开始查询（含 1 秒轮询）；数据变化由 `status.workspace` 快照的变更序号带出，控制器不触发重绘 */
 	connect(): void {
 		this.disconnect();
 		if (this.disposed) return;

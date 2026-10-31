@@ -1,6 +1,6 @@
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { Text } from "@earendil-works/pi-tui";
+import { compactRenderText, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import type { PublicAgentRecord, RuntimeRegistry } from "./registry.ts";
 import type { SubagentsTranslate } from "./messages/index.ts";
 
@@ -16,8 +16,6 @@ function publicStatus(record: PublicAgentRecord, live: ReturnType<RuntimeRegistr
   return live.publicStatus ?? record.status;
 }
 
-// 与 content 的两种 JSON 载荷镜像：公开代理树与软错误；软错误不走 isError，
-// 让 codemode 脚本拿到结构化 code 而不是 reject。
 const listAgentsOutputSchema = Type.Union([
   Type.Object({
     agents: Type.Array(Type.Object({
@@ -39,10 +37,6 @@ const listAgentsOutputSchema = Type.Union([
     message: Type.String(),
   }),
 ]);
-
-function compactRenderText(value: unknown): string {
-  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
-}
 
 function agentSummary(
   agents: readonly PublicAgentRecord[],
@@ -87,28 +81,32 @@ export function registerListAgentsTool(pi: ExtensionAPI, deps: ListAgentsToolDep
   pi.registerTool({
     name: "list_agents",
     label: "List Agents",
+    renderShell: "self",
     description: "List the visible agents in the current parent session as a public status tree. This tool takes no parameters.",
     promptSnippet: "List visible agents, their status, task summary, and parent paths.",
     parameters: Type.Object({}),
     outputSchema: listAgentsOutputSchema,
-    renderCall(_args, theme) {
-      return new Text(theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.list_agents.display") ?? "List subagents")), 0, 0);
+    renderCall(_args, theme, context) {
+      return renderToolCardCall({ title: deps.t?.("module.subagents.tool.list_agents.display") ?? "List subagents" }, theme, context);
     },
-    renderResult(result, options, theme) {
+    renderResult(result, options, theme, context) {
       const details = result.details as { agents?: PublicAgentRecord[]; code?: unknown; message?: unknown } | undefined;
       if (!Array.isArray(details?.agents)) {
         const reason = compactRenderText(details?.code) || "unknown error";
         const text = deps.t?.("module.subagents.tool.list_agents.result.failed", { reason }) ?? `List agents failed: ${reason}`;
-        if (!options.expanded) return new Text(theme.fg("error", text), 0, 0);
-        const contentText = result.content.find((part) => part.type === "text")?.text;
-        return new Text([theme.fg("error", text), contentText ? theme.fg("muted", contentText) : ""].filter(Boolean).join("\n"), 0, 0);
+        return renderToolCardResult({ title: deps.t?.("module.subagents.tool.list_agents.display") ?? "List subagents", status: text }, theme, options, context);
       }
       const agents = details.agents;
-      if (!options.expanded) return new Text(agentSummary(agents, theme, deps.t), 0, 0);
-      if (agents.length === 0) return new Text(theme.fg("toolOutput", deps.t?.("module.subagents.tool.list_agents.result.empty") ?? "No agents are registered in this session"), 0, 0);
-      return new Text(agents.map((agent) =>
-        `${theme.fg("toolOutput", agent.task_name)} ${theme.fg("muted", agentStatusLabel(agent.status, deps.t))}`,
-      ).join("\n"), 0, 0);
+      const summary = agentSummary(agents, theme, deps.t);
+      const rows = options.expanded
+        ? agents.map((agent) => theme.fg("toolOutput", `${agent.task_name} ${theme.fg("muted", agentStatusLabel(agent.status, deps.t))}`))
+        : [];
+      return renderToolCardResult(
+        { title: deps.t?.("module.subagents.tool.list_agents.display") ?? "List subagents", status: summary, details: rows },
+        theme,
+        options,
+        context,
+      );
     },
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       const sessionFile = ctx?.sessionManager?.getSessionFile?.();

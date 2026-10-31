@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import { readNameRegistry } from "./session.ts";
 import type { RuntimeRegistry } from "./registry.ts";
 import type { SubagentsTranslate } from "./messages/index.ts";
@@ -121,30 +121,32 @@ export function registerSendMessageTool(pi: ExtensionAPI, deps: SendMessageToolD
   pi.registerTool({
     name: "send_message",
     label: "Send Message",
+    renderShell: "self",
     description: "Deliver an immediate message to an existing subagent. target accepts agent_id, canonical_task_name, or a unique local task name. This never starts a new task round.",
     promptSnippet: "Send an immediate message using the agent_id, canonical path, or task name without starting a new round.",
     parameters: Type.Object({ target: Type.String({ minLength: 1 }), message: Type.String({ minLength: 1 }) }),
-    renderCall(args, theme) {
-      return new Text(
-        theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.send_message.display") ?? "Message subagent")) +
-          " " + theme.fg("accent", args.target ?? "(target)"),
-        0,
-        0,
+    renderCall(args, theme, context) {
+      return renderToolCardCall(
+        { title: deps.t?.("module.subagents.tool.send_message.display") ?? "Message subagent", object: args.target ?? "(target)" },
+        theme,
+        context,
       );
     },
-    renderResult(result, options, theme) {
+    renderResult(result, options, theme, context) {
       const details = result.details as any;
-      if (details?.submission_id) {
-        if (!options.expanded) return new Text("", 0, 0);
-        const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-        return new Text(
-          [theme.fg("toolOutput", deps.t?.("module.subagents.tool.send_message.result.submitted") ?? "Message submitted"), text ? theme.fg("muted", text) : ""].filter(Boolean).join("\n"),
-          0,
-          0,
-        );
-      }
       const text = result.content[0]?.type === "text" ? result.content[0].text : "Message delivery failed";
-      return new Text(theme.fg("error", text), 0, 0);
+      const success = details?.submission_id;
+      return renderToolCardResult(
+        {
+          title: deps.t?.("module.subagents.tool.send_message.display") ?? "Message subagent",
+          object: typeof details?.task_name === "string" ? details.task_name : undefined,
+          status: success ? deps.t?.("module.subagents.tool.send_message.result.submitted") ?? "Message submitted" : text,
+          details: options.expanded && success ? [text] : [],
+        },
+        theme,
+        options,
+        context,
+      );
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx: ToolContext) {
       const message = params.message.trim();

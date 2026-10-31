@@ -1,23 +1,9 @@
-// computer 模块对外契约（工单 01）：工具清单与参数/返回结构、错误码、能力字段、引用规则、动作目录。
-//
-// 本文件只放类型与常量，不注册工具、不碰 pi 宿主（工具注册在工单 05，状态层与桥在 03/04）。
-// 模型可见文本一律英文协议文本，界面与错误说明走 ./messages/ 的三语键表。
-// 权威来源：docs/pi-computer/规划书.md 第 3、4、6、10 节与工单 01；实现按这份契约写，改契约先改这里。
-//
-// 类型与 schema 的关系：入参类型从 TypeBox schema 派生（Static<typeof ...>），
-// 模型面与函数面是同一份定义，照 subagents/params.ts 的既有写法。
-
 import { Type, type Static, type TSchema } from "typebox";
 
-// ---------------------------------------------------------------------------
-// 引用与状态（规划书第 4 节、第 10 节）
-// ---------------------------------------------------------------------------
-
-/** 根引用前缀：可操作的目标单元（窗口、菜单、弹层、对话框） */
 export const COMPUTER_ROOT_REF_PREFIX = "@r";
-/** 元素引用前缀 */
+
 export const COMPUTER_ELEMENT_REF_PREFIX = "@e";
-/** 引用形态：@rN / @eN，序号从 1 起、不带前导零 */
+
 export const COMPUTER_REF_PATTERN = /^@([re])([1-9]\d*)$/;
 
 export type ComputerRefKind = "root" | "element";
@@ -31,10 +17,6 @@ export interface ComputerRefParts {
   readonly ref: ComputerRef;
 }
 
-/**
- * 解析引用；形态不合法返回 undefined。
- * 解析只认形态，不判作用域：引用属于哪份快照、是否陈旧由状态层（工单 03）判定。
- */
 export function parseComputerRef(value: unknown): ComputerRefParts | undefined {
   if (typeof value !== "string") return undefined;
   const matched = COMPUTER_REF_PATTERN.exec(value);
@@ -45,7 +27,6 @@ export function parseComputerRef(value: unknown): ComputerRefParts | undefined {
   return { kind, index, ref: value as ComputerRef };
 }
 
-/** 造引用；序号必须是正整数（调用方给错就直接抛，不产出畸形引用） */
 export function formatComputerRef(kind: ComputerRefKind, index: number): ComputerRef {
   if (!Number.isSafeInteger(index) || index < 1) {
     throw new RangeError(`引用序号必须是正整数：${String(index)}`);
@@ -54,35 +35,21 @@ export function formatComputerRef(kind: ComputerRefKind, index: number): Compute
   return `${prefix}${index}`;
 }
 
-/**
- * 快照标识，不透明字符串（参考实现用随机 id，模型只透传不解析）。
- * 一次观察产出一个 stateId；动作只接受当前快照的引用，上一份快照仅用于算差异。
- */
 export type ComputerStateId = string;
 
 export interface ComputerBounds {
-  /**
-   * 矩形的口径随载荷走：
-   * - 工具层与快照里的 bounds：同一 stateId 所绑图像的图面像素（工单 17，`screenshot_pixels`）；无图快照不带 bounds。
-   * - 原生层回执里的 bounds（observe 节点）、`capture.region` 与桥动作坐标：Windows 为桌面物理像素，macOS 为 Quartz 屏幕点。
-   * 两边的换算链见 coordinates.ts（image = (desktop − region 原点) × 各自方向的比例）。
-   */
+
   readonly x: number;
   readonly y: number;
   readonly width: number;
   readonly height: number;
 }
 
-/** 快照差异项：观察与动作回执都带它，界面变化一眼可见 */
 export interface ComputerStateChange {
   readonly kind: "added" | "updated" | "removed";
   readonly ref: ComputerRef;
   readonly summary: string;
 }
-
-// ---------------------------------------------------------------------------
-// 能力字段（规划书第 10 节；P1 用真实后端校准取值）
-// ---------------------------------------------------------------------------
 
 export const COMPUTER_PLATFORMS = ["windows", "macos", "linux", "unsupported"] as const;
 export type ComputerPlatform = (typeof COMPUTER_PLATFORMS)[number];
@@ -90,7 +57,6 @@ export type ComputerPlatform = (typeof COMPUTER_PLATFORMS)[number];
 export const COORDINATE_MODES = ["screenshot_pixels", "global_desktop"] as const;
 export type ComputerCoordinateMode = (typeof COORDINATE_MODES)[number];
 
-/** 后台控制：不支持 / 部分支持 / 完全支持（不抢焦点把输入发给目标窗口） */
 export const BACKGROUND_INPUT_LEVELS = ["none", "partial", "full"] as const;
 export type ComputerBackgroundInput = (typeof BACKGROUND_INPUT_LEVELS)[number];
 
@@ -102,19 +68,19 @@ export type ComputerPermissionState = (typeof PERMISSION_STATES)[number];
 
 export interface ComputerCapabilities {
   readonly platform: ComputerPlatform;
-  /** 无障碍树是否可读（UIA / AX / AT-SPI） */
+
   readonly accessibility: boolean;
   readonly capture: boolean;
   readonly input: boolean;
   readonly coordinateMode: ComputerCoordinateMode;
-  /** 后台键盘能力；不代表后台指针能力。 */
+
   readonly backgroundInput: ComputerBackgroundInput;
-  /** 后台鼠标/指针能力；没有跨应用证据时必须是 none 或 partial。 */
+
   readonly backgroundPointer: ComputerBackgroundInput;
-  /** partial/full 必带的结构化限制；none 时不做要求（规格 §7）。缺字段是旧 helper 的兼容状态，不是畸形。 */
+
   readonly backgroundPointerLimits?: ComputerBackgroundPointerLimits;
   readonly permissions: Readonly<Record<ComputerPermission, ComputerPermissionState>>;
-  /** 本平台或本会话的已知限制，照实上报，不藏 */
+
   readonly limits: readonly string[];
 }
 
@@ -131,14 +97,13 @@ export function computerPlatformFromNode(nodePlatform: string): ComputerPlatform
   }
 }
 
-/** 桥未就绪（P0 与原生层未接入）时的能力快照：一切如实上报为不支持，不假装有 */
 export function unavailableCapabilities(platform: ComputerPlatform): ComputerCapabilities {
   return {
     platform,
     accessibility: false,
     capture: false,
     input: false,
-    // 坐标口径未探测时按截图像素：坐标兜底只在带图的当前状态下发起，与坐标换算链（P2）同一口径
+
     coordinateMode: "screenshot_pixels",
     backgroundInput: "none",
     backgroundPointer: "none",
@@ -151,12 +116,6 @@ export function unavailableCapabilities(platform: ComputerPlatform): ComputerCap
   };
 }
 
-// ---------------------------------------------------------------------------
-// 后台指针的结构化限制（工单 47）：规格 §7 要的五要素拆成可判定的字段，取值域与 Rust helper 两侧各写一份，
-// 靠两侧测试对牢。渲染在 tools.ts，校验在 bridge.ts。
-// ---------------------------------------------------------------------------
-
-/** 证据里的窗口/目标类型标签；验证过的进 verified，没验证的进 unverified */
 export const BACKGROUND_POINTER_WINDOW_TYPES = [
   "appkit_window", // 原生 AppKit 窗口（含标题栏与边框 chrome）
   "chromium_content", // Chromium/Electron 渲染层内容（DOM 事件到达）
@@ -167,7 +126,6 @@ export const BACKGROUND_POINTER_WINDOW_TYPES = [
 ] as const;
 export type ComputerBackgroundPointerWindowType = (typeof BACKGROUND_POINTER_WINDOW_TYPES)[number];
 
-/** 证据里的鼠标事件类型标签；wheelHorizontal 尚无到达证据 */
 export const BACKGROUND_POINTER_EVENT_TYPES = [
   "move",
   "click",
@@ -180,7 +138,6 @@ export const BACKGROUND_POINTER_EVENT_TYPES = [
 ] as const;
 export type ComputerBackgroundPointerEventType = (typeof BACKGROUND_POINTER_EVENT_TYPES)[number];
 
-/** 证据覆盖到的坐标情形 */
 export const BACKGROUND_POINTER_COORDINATE_CASES = [
   "single_display_primary", // 单屏、主屏原点、Quartz 屏幕点
   "retina_scale_2", // Retina 缩放
@@ -191,65 +148,59 @@ export const BACKGROUND_POINTER_COORDINATE_CASES = [
 ] as const;
 export type ComputerBackgroundPointerCoordinateCase = (typeof BACKGROUND_POINTER_COORDINATE_CASES)[number];
 
-/** 投递点口径；现在只有一种，写成枚举是为了以后扩展时不改形状 */
 export const BACKGROUND_POINTER_COORDINATE_CONDITIONS = ["window_frame_relative"] as const;
 export type ComputerBackgroundPointerCoordinateCondition =
   (typeof BACKGROUND_POINTER_COORDINATE_CONDITIONS)[number];
 
-/** 目标类别：application 是真实应用，fixture 是自建夹具；两者证据力不同 */
 export const BACKGROUND_POINTER_TARGET_KINDS = ["application", "fixture"] as const;
 export type ComputerBackgroundPointerTargetKind = (typeof BACKGROUND_POINTER_TARGET_KINDS)[number];
 
 export interface ComputerBackgroundPointerApp {
-  /** bundle identifier；取不到时退化成进程名，此时带 "name:" 前缀以便区分 */
+
   readonly id: string;
-  /** 验证时该目标的版本（CFBundleShortVersionString）；取不到写 "unknown" */
+
   readonly version: string;
   readonly kind: ComputerBackgroundPointerTargetKind;
-  /** 该目标上验证过的窗口类型 */
+
   readonly windowTypes: readonly ComputerBackgroundPointerWindowType[];
-  /** 该目标上验证过的事件类型，不是全局并集；空数组不该出现（没有到达证据的目标不进表） */
+
   readonly eventTypes: readonly ComputerBackgroundPointerEventType[];
-  /** 应用侧判据：凭什么算到达（AX 回读、夹具视图日志、DOM 事件） */
+
   readonly verifiedBy: string;
 }
 
 export interface ComputerBackgroundPointerCoordinate {
-  /** 投递点口径：窗口 frame 相对点，含标题栏与边框 */
+
   readonly condition: ComputerBackgroundPointerCoordinateCondition;
-  /** 是否每次坐标动作都必须带坐标快照；当前恒 true */
+
   readonly requiresSnapshot: boolean;
   readonly verifiedCases: readonly ComputerBackgroundPointerCoordinateCase[];
   readonly unverifiedCases: readonly ComputerBackgroundPointerCoordinateCase[];
 }
 
 export interface ComputerBackgroundPointerLimits {
-  /** 证据版本：证据集换代时递增，格式 `<阶段>-<采集日期>.<序号>` */
+
   readonly evidenceVersion: string;
-  /** 证据采集日期 YYYY-MM-DD，给人读，不参与判定 */
+
   readonly evidenceDate: string;
-  /** 投递路线摘要，与投递门禁探针同一份来源，不允许各写一份 */
+
   readonly mechanism: string;
-  /** 有到达证据的目标清单；空数组意味着没有任何证据，此时不该报 partial */
+
   readonly apps: readonly ComputerBackgroundPointerApp[];
-  /** verified 是 apps 的并集，具体目标类型以 apps 为准 */
+
   readonly windowTypes: {
     readonly verified: readonly ComputerBackgroundPointerWindowType[];
     readonly unverified: readonly ComputerBackgroundPointerWindowType[];
   };
-  /** verified 是 apps 的并集；私有符号缺失时 wheel 会被收回到 unverified */
+
   readonly eventTypes: {
     readonly verified: readonly ComputerBackgroundPointerEventType[];
     readonly unverified: readonly ComputerBackgroundPointerEventType[];
   };
   readonly coordinate: ComputerBackgroundPointerCoordinate;
-  /** 环境级降级：运行时不满足前置时会发生什么（例如私有符号缺失时滚轮整批拒绝） */
+
   readonly degradations: readonly string[];
 }
-
-// ---------------------------------------------------------------------------
-// 错误码：说明文案在 ./messages/，键为 `module.computer.error.<code>`
-// ---------------------------------------------------------------------------
 
 export const COMPUTER_ERROR_CODES = [
   "stale_ref",
@@ -266,17 +217,13 @@ export type ComputerErrorCode = (typeof COMPUTER_ERROR_CODES)[number];
 
 export interface ComputerError {
   readonly code: ComputerErrorCode;
-  /** 失败细节（可能是原生层的原始文本），用于排查；说明文案按错误码查三语键表 */
+
   readonly detail?: string;
 }
 
 export type ComputerResult<T> =
   | { readonly ok: true; readonly data: T }
   | { readonly ok: false; readonly error: ComputerError };
-
-// ---------------------------------------------------------------------------
-// 动作目录（规划书第 3 节：变更类动作必须带显式目标；readOnly 给 P8 审批留钩子）
-// ---------------------------------------------------------------------------
 
 export const COMPUTER_ACTIONS = [
   "press",
@@ -291,47 +238,22 @@ export const COMPUTER_ACTIONS = [
 ] as const;
 export type ComputerActionName = (typeof COMPUTER_ACTIONS)[number];
 
-/** 动作投递路径：semantic 走无障碍语义接口；background 不抢用户焦点；foreground 明确允许前台输入。 */
 export const COMPUTER_ACTION_DELIVERIES = ["semantic", "background", "foreground"] as const;
 export type ComputerActionDelivery = (typeof COMPUTER_ACTION_DELIVERIES)[number];
 
-/**
- * 动作条目上除 action 之外的逻辑字段名；必填关系见 COMPUTER_ACTION_CONTRACTS.requires。
- * 逻辑字段 → 条目属性名的对应：ref → ref；point → x/y；to → toX/toY；delta → deltaX/deltaY；
- * text → text；keys → keys；button → button；count → count。条目保持扁平（抄 injacency 的动作形态），
- * 两对坐标靠不同前缀区分，所以目录里用 point/to 两个逻辑名表达「一个坐标」和「拖拽终点」。
- * button/count（工单 21）只在坐标点击上生效，元素点击带非缺省值在工具层回 invalid_params。
- */
 export const COMPUTER_ACTION_FIELDS = ["ref", "point", "to", "text", "keys", "delta", "button", "count"] as const;
 export type ComputerActionField = (typeof COMPUTER_ACTION_FIELDS)[number];
 
-/**
- * 动作要求的显式目标：
- * - element：必须给 @eN / @rN 引用
- * - element_or_point：引用或坐标二选一
- * - point：必须给坐标
- * - window：必须给目标窗口的根引用（@rN），键盘输入不接受“当前焦点”
- */
 export const COMPUTER_ACTION_TARGETS = ["element", "element_or_point", "point", "window"] as const;
 export type ComputerActionTarget = (typeof COMPUTER_ACTION_TARGETS)[number];
 
 export interface ComputerActionContract {
-  /** P8 审批的分流依据 */
+
   readonly readOnly: boolean;
   readonly target: ComputerActionTarget;
   readonly requires: readonly ComputerActionField[];
 }
 
-/**
- * 本期动作目录全部标为非只读：规划书第 10 节把只读定义为「不改变界面状态」，
- * 而这九个动作都会动到目标应用。moveMouse 不改界面内容，但会移动用户指针，审批按需介入更稳妥；
- * 真要出现纯只读动作，在这里改标记即可。
- *
- * button/count（工单 21）是 click 的可选修饰：left/1 是缺省，缺省值等价于不带字段；
- * 两个字段只在坐标点击上生效，所以 requires 里没有它们（requires 只登记必填字段）。
- * 系统键黑名单（单独 Win、Win+任意、Ctrl+Alt+Del、Alt+F4、Alt+Tab、Ctrl+Shift+Esc、Ctrl+Esc）
- * 已随工单 22 在原生 helper 的计划阶段执法，命中回 invalid_params。
- */
 export const COMPUTER_ACTION_CONTRACTS: Readonly<Record<ComputerActionName, ComputerActionContract>> = {
   press: { readOnly: false, target: "element", requires: [] },
   click: { readOnly: false, target: "element_or_point", requires: [] },
@@ -343,10 +265,6 @@ export const COMPUTER_ACTION_CONTRACTS: Readonly<Record<ComputerActionName, Comp
   drag: { readOnly: false, target: "point", requires: ["point", "to"] },
   moveMouse: { readOnly: false, target: "point", requires: ["point"] },
 };
-
-// ---------------------------------------------------------------------------
-// 各工具的返回结构（与 COMPUTER_TOOL_NAMES 一一对应，编译期保证不遗漏）
-// ---------------------------------------------------------------------------
 
 export const COMPUTER_ROOT_KINDS = ["window", "menu", "dialog", "popover"] as const;
 export type ComputerRootKind = (typeof COMPUTER_ROOT_KINDS)[number];
@@ -362,7 +280,7 @@ export interface ComputerRootSummary {
 export interface ComputerStatusData {
   readonly capabilities: ComputerCapabilities;
   readonly bridge: {
-    /** 桥协议版本；未接入原生层时为 null（版本协商由工单 04 的桥负责） */
+
     readonly protocolVersion: string | null;
     readonly ready: boolean;
   };
@@ -372,25 +290,19 @@ export interface ComputerRootsData {
   readonly roots: readonly ComputerRootSummary[];
 }
 
-// ---------------------------------------------------------------------------
-// 采集记录（工单 15/16 落地；工单 17 起是坐标换算的唯一依据，与 stateId 绑定）
-// ---------------------------------------------------------------------------
-
-/** 一台显示器：id 是枚举序号（会话内稳定），device 是系统设备名（跨次枚举稳定，读不到时可为空） */
 export interface ComputerDisplayInfo {
   readonly id: number;
   readonly device: string;
-  /** 显示器矩形，虚拟桌面物理坐标；副屏在主屏左侧/上方时可为负 */
+
   readonly originX: number;
   readonly originY: number;
   readonly width: number;
   readonly height: number;
-  /** 有效 DPI / 96；只作展示与限制说明，坐标一律按物理像素算 */
+
   readonly scaleFactor: number;
   readonly primary: boolean;
 }
 
-/** 一张采集图的元数据；scale = 图像像素 / 物理像素，必须等于 image.width / region.width */
 export interface ComputerCaptureImage {
   readonly width: number;
   readonly height: number;
@@ -399,17 +311,11 @@ export interface ComputerCaptureImage {
   readonly scale: number;
 }
 
-/** 窗口像素的来源：Windows PrintWindow/屏幕回退，或 macOS Quartz 窗口采集 */
 export type ComputerCaptureSource = "print_window" | "screen_region" | "quartz_window";
 
-/**
- * 一次采集的回执：图像使用像素，region 使用平台桌面单位（Windows 物理像素、macOS Quartz 屏幕点）。
- * 显示器采集带 display；窗口采集带 window/source/mayBeObscured（三者成组出现，不同时带 display）。
- * region + image + scale 构成图面坐标系（coordinates.ts 的 imageFrameOf），是坐标换算的唯一依据。
- */
 export interface ComputerWindowIdentity {
   readonly key: string;
-  /** 原生窗口身份快照；旧平台回执缺少时仍可读图，但坐标动作必须由原生层安全拒绝。 */
+
   readonly pid?: number;
   readonly startIdentity?: { readonly seconds: number; readonly microseconds: number };
   readonly windowId?: number;
@@ -425,14 +331,10 @@ export interface ComputerCaptureRecord {
   readonly displays?: readonly ComputerDisplayInfo[];
   readonly window?: ComputerWindowIdentity;
   readonly source?: ComputerCaptureSource;
-  /** 屏幕回退的采集可能包含遮挡物；source 为 screen_region 时为 true，窗口专用采集为 false */
+
   readonly mayBeObscured?: boolean;
 }
 
-/**
- * 带图观察回执里的截图信息（工单 19）：落盘路径、图像元数据与采集区域（坐标换算依据）。
- * 只带模型需要的东西；window/display 这类内部来源字段不外传，模型要的是路径与图面几何。
- */
 export interface ComputerObserveCapture {
   readonly path: string;
   readonly image: ComputerCaptureImage;
@@ -447,10 +349,10 @@ export interface ComputerObserveData {
   readonly outline: string;
   readonly nodeCount: number;
   readonly truncated: boolean;
-  /** 有上一份快照时给出它的 id，并只在 changes 里给差异 */
+
   readonly previousStateId?: ComputerStateId;
   readonly changes: readonly ComputerStateChange[];
-  /** 只有本次观察带图（computer_observe 传了 capture: true）时出现 */
+
   readonly capture?: ComputerObserveCapture;
 }
 
@@ -463,7 +365,7 @@ export interface ComputerNodeSummary {
 
 export interface ComputerSearchData {
   readonly matches: readonly ComputerNodeSummary[];
-  /** 命中总数；matches 只带排名靠前的若干条 */
+
   readonly total: number;
 }
 
@@ -472,22 +374,22 @@ export interface ComputerNodeInspection extends ComputerNodeSummary {
   readonly enabled: boolean;
   readonly focused: boolean;
   readonly bounds?: ComputerBounds;
-  /** 元素暴露的动作，如 invoke / setValue / focus */
+
   readonly actions: readonly string[];
 }
 
 export interface ComputerInspectData {
   readonly node: ComputerNodeInspection;
-  /** 该节点起的子树大纲（含节点自己），按观察同一套折叠规则渲染；更深的节点用 computer_inspect 继续展开 */
+
   readonly outline: string;
-  /** 子树节点总数（含节点自己），不受折叠影响 */
+
   readonly nodeCount: number;
-  /** 有节点因折叠或文本预算没进大纲时为 true */
+
   readonly truncated: boolean;
 }
 
 export interface ComputerActData {
-  /** 后继快照 id：后续动作与查询都用它，不要直接再观察 */
+
   readonly stateId: ComputerStateId;
   readonly changes: readonly ComputerStateChange[];
 }
@@ -495,7 +397,7 @@ export interface ComputerActData {
 export interface ComputerReadData {
   readonly text: string;
   readonly truncated: boolean;
-  /** 长文本的续读位置；没有再多的内容时为 undefined */
+
   readonly nextOffset?: number;
 }
 
@@ -505,14 +407,10 @@ export type ComputerWaitUntil = (typeof COMPUTER_WAIT_UNTIL)[number];
 export interface ComputerWaitData {
   readonly met: boolean;
   readonly elapsedMs: number;
-  /** 等待期间观察到的新快照 id；没有新快照时为 undefined */
+
   readonly stateId?: ComputerStateId;
 }
 
-/**
- * 单步结果（工单 30 定稿）：只回 ok 与错误。不带 stateId、也不带 changes——
- * 每步没有自己的快照（run 结束才物化恰一份），那里的 ref 没有归属状态，带上只会误导。
- */
 export interface ComputerRunStepResult {
   readonly ok: boolean;
   readonly error?: ComputerError;
@@ -521,20 +419,18 @@ export interface ComputerRunStepResult {
 export type ComputerRunStatus = "completed" | "failed" | "timeout";
 
 export interface ComputerRunData {
-  /** 结束时物化的最后可信观察；effectsUnknown=true 时它可能已过时，先 observe 再动手。
-   *  收口观察失败时缺席（与 computer_wait 的容忍口径一致）：模型要先 computer_observe 再动手。 */
+
   readonly stateId?: ComputerStateId;
   readonly status: ComputerRunStatus;
-  /** 完整走完的步数；失败步与未开跑的步不计入 */
+
   readonly completed: number;
   readonly steps: readonly ComputerRunStepResult[];
-  /** 失败或被预算截断的步号（从 1 数）；跑完时缺席 */
+
   readonly failedStep?: number;
-  /** 某步动作是否已发出而结果未知（桥超时 / 干扰中断 / 取消时在途） */
+
   readonly effectsUnknown: boolean;
 }
 
-/** 工具名 → 返回结构；键必须覆盖全部工具，漏写由 typecheck 拦下 */
 export interface ComputerToolResults {
   computer_status: ComputerStatusData;
   computer_roots: ComputerRootsData;
@@ -549,7 +445,6 @@ export interface ComputerToolResults {
 
 export type ComputerToolName = keyof ComputerToolResults & string;
 
-/** 工具清单（顺序即注册顺序，也是测试与文档的对照表） */
 export const COMPUTER_TOOL_NAMES: readonly ComputerToolName[] = [
   "computer_status",
   "computer_roots",
@@ -562,36 +457,23 @@ export const COMPUTER_TOOL_NAMES: readonly ComputerToolName[] = [
   "computer_run",
 ];
 
-// ---------------------------------------------------------------------------
-// 模型面预算（工单 18 定稿；实测方法与数字见 docs/pi-computer/issues/18-上下文预算定稿.md）。
-// 常量在这里定义，schema 与工具实现共用，避免两处各写一份数字。
-// ---------------------------------------------------------------------------
-
-/** 观察/搜索/检视等回执的字符上限（read 分页除外，其单页由 COMPUTER_READ_MAX_CHARS 管）；超了截断并指路更省的查询 */
 export const COMPUTER_TEXT_BUDGET = 8000;
-/** 观察大纲的字符预算：从总预算里留 512 字符给头部、差异列表与尾注 */
+
 export const COMPUTER_OUTLINE_BUDGET = COMPUTER_TEXT_BUDGET - 512;
-/** computer_read 不传 maxChars 时的页大小 */
+
 export const COMPUTER_READ_DEFAULT_CHARS = 4000;
-/** computer_read 单页字符上限（schema 上限由常量生成；越界参数的执法点是宿主 schema 校验） */
+
 export const COMPUTER_READ_MAX_CHARS = 20000;
-/** computer_search 不传 limit 时返回的条数 */
+
 export const COMPUTER_SEARCH_DEFAULT_LIMIT = 20;
-/** computer_search 单次最多返回的条数（schema 上限由常量生成；越界参数的执法点是宿主 schema 校验） */
+
 export const COMPUTER_SEARCH_MAX_LIMIT = 200;
 
-/** 带图观察默认采集的长边上限（像素）：给 Pi read 的 2000px 图片阈值留余量，首次采集就大概率不用重采 */
 export const COMPUTER_CAPTURE_LONG_EDGE = 1600;
-/** 缩图重采的下限长边（像素）：320 长边的 PNG 不可能再超宿主图片预算，缩到这里仍超就是别的问题，如实报错 */
-export const COMPUTER_CAPTURE_MIN_LONG_EDGE = 320;
-/** 图片的 base64 长度预算：Pi read 的图片预算是 base64 长度口径（4.5MB），不是原始字节；
- * 口径按 Pi 源码为严格小于（image-resize-core 里 inputBase64Size < maxBytes 才不缩放），等于也算超 */
-export const COMPUTER_IMAGE_BASE64_BUDGET = 4.5 * 1024 * 1024;
 
-// ---------------------------------------------------------------------------
-// 工具参数 schema：pi registerTool 直接吃这些对象，也是模型看得到的协议文本。
-// 入参类型一律由对应 schema 派生，不另写一份 interface（避免两处各改一遍）。
-// ---------------------------------------------------------------------------
+export const COMPUTER_CAPTURE_MIN_LONG_EDGE = 320;
+
+export const COMPUTER_IMAGE_BASE64_BUDGET = 4.5 * 1024 * 1024;
 
 const STATE_ID_FIELD = Type.String({
   minLength: 1,
@@ -612,7 +494,6 @@ const ELEMENT_REF_FIELD = Type.String({
     "instead of acting on whatever occupies that place now.",
 });
 
-/** 动作的目标引用：元素动作给 @eN，发给窗口的键盘输入给 @rN */
 const ACTION_REF_FIELD = Type.String({
   pattern: "^@[re][1-9][0-9]*$",
   description:
@@ -620,7 +501,6 @@ const ACTION_REF_FIELD = Type.String({
     "Refs from a previous state id are rejected instead of acting on whatever occupies that place now.",
 });
 
-/** computer_read 的文本来源：元素（文档、编辑框）或根本身（窗口、对话框） */
 const READ_REF_FIELD = Type.String({
   pattern: "^@[re][1-9][0-9]*$",
   description:
@@ -633,12 +513,8 @@ const UNTIL_SCHEMA = Type.Union(
   { description: "present (default) waits for the text or the matched root to appear; absent waits for it to disappear." },
 );
 
-/** text 的长度上限：条件行会把 text 原样回显进回执，超长 needle 不得原样回灌；500 字符对 UI 文本匹配已绰绰有余 */
 export const COMPUTER_WAIT_MAX_TEXT_LENGTH = 500;
 
-/** 等待与断言的共同文本条件；两个参数面共用，避免同一形状写两遍。
- * text 与 window 在两个参数面都是运行期互斥（wait 是三模式恰一，run 的 expect 是 text/window 恰一），
- * 复用时两边都把 text 覆写为可选；window 形状共用 WAIT_WINDOW_FIELD。delayMs 是 wait 特有的模式面，不进 expect。 */
 const WAIT_TEXT_FIELD = Type.String({
   minLength: 1,
   maxLength: COMPUTER_WAIT_MAX_TEXT_LENGTH,
@@ -650,16 +526,12 @@ const WAIT_CONDITION_PROPERTIES = {
   until: Type.Optional(UNTIL_SCHEMA),
 };
 
-// 时长护栏（工单 28 定稿）：timeoutMs 默认 30s、下限 50ms 防抖、上限 1 小时——更长的等待由模型分段，
-// 好让用户看到进度；硬砍短上限会逼模型反复重发等待，往返与 token 成本更高，还容易踩「动作可能已生效」的未知态。
 export const COMPUTER_WAIT_DEFAULT_TIMEOUT_MS = 30_000;
 export const COMPUTER_WAIT_MIN_TIMEOUT_MS = 50;
 export const COMPUTER_WAIT_MAX_TIMEOUT_MS = 3_600_000;
-/** 纯延时的上限与 timeoutMs 同一护栏（1 小时）；下限 1ms，没有防抖下限 */
+
 export const COMPUTER_WAIT_MAX_DELAY_MS = 3_600_000;
 
-// run 的预算与规模上限（工单 30 定稿）：预算默认两分钟，步数/每步动作/总动作按「够用且防呆」定，
-// 不留无上限的口子；expect 的缺省超时比 wait 短——假失败比多等几秒更添麻烦（误判会诱发重复动作）。
 export const COMPUTER_RUN_DEFAULT_TIMEOUT_MS = 120_000;
 export const COMPUTER_RUN_EXPECT_DEFAULT_TIMEOUT_MS = 10_000;
 export const COMPUTER_RUN_MAX_STEPS = 64;
@@ -680,11 +552,6 @@ const WAIT_DELAY_FIELD = Type.Integer({
     "rejected). No observation and no new stateId; call computer_observe before acting on the interface again.",
 });
 
-/**
- * window 条件（工单 28）：等某个根（窗口/菜单/弹层/对话框）出现或消失。
- * ref 是 computer_roots 的 @rN（精确按稳定身份判在场）；title/app 是子串匹配。
- * 至少给一个字段——schema 表达不了「至少一个」，运行期校验兜底。
- */
 const WAIT_WINDOW_FIELD = Type.Object(
   {
     ref: Type.Optional(
@@ -702,11 +569,9 @@ const WAIT_WINDOW_FIELD = Type.Object(
   },
 );
 
-/** 坐标点击的鼠标按钮取值域（工单 21）；left 是缺省，等价于不带字段 */
 export const COMPUTER_MOUSE_BUTTONS = ["left", "middle", "right"] as const;
 export type ComputerMouseButton = (typeof COMPUTER_MOUSE_BUTTONS)[number];
 
-/** 坐标点击的次数取值域（工单 21）；1 是缺省，2 是双击 */
 export const COMPUTER_CLICK_COUNTS = [1, 2] as const;
 export type ComputerClickCount = (typeof COMPUTER_CLICK_COUNTS)[number];
 
@@ -778,7 +643,6 @@ const COMPUTER_ACTION_SCHEMA = Type.Object(
   { additionalProperties: false },
 );
 
-/** 动作条目运行时类型：与上方 schema 的 JSON 形状一致；显式声明避免 TypeBox 1.x 对动态 union map 推导为 never。 */
 export interface ComputerAction {
   action: ComputerActionName;
   delivery?: ComputerActionDelivery;
@@ -795,14 +659,12 @@ export interface ComputerAction {
   count?: ComputerClickCount;
 }
 
-/** run 的整体预算字段：护栏与 wait 同一套（50ms 防抖 - 1 小时），默认值不同（两分钟） */
 const RUN_TIMEOUT_FIELD = Type.Integer({
   minimum: COMPUTER_WAIT_MIN_TIMEOUT_MS,
   maximum: COMPUTER_WAIT_MAX_TIMEOUT_MS,
   description: `Overall budget for the whole run in milliseconds; when it runs out the run stops and reports status "timeout" (default ${COMPUTER_RUN_DEFAULT_TIMEOUT_MS}).`,
 });
 
-/** expect 的超时字段：护栏与 wait 同一套，缺省 10s（比等待短：断言假失败会诱发重复动作） */
 const RUN_EXPECT_TIMEOUT_FIELD = Type.Integer({
   minimum: COMPUTER_WAIT_MIN_TIMEOUT_MS,
   maximum: COMPUTER_WAIT_MAX_TIMEOUT_MS,
@@ -812,7 +674,7 @@ const RUN_EXPECT_TIMEOUT_FIELD = Type.Integer({
 const COMPUTER_EXPECTATION_SCHEMA = Type.Object(
   {
     ...WAIT_CONDITION_PROPERTIES,
-    // 覆写为可选：text 与 window 恰一，互斥由运行期校验（schema 表达不了 either-or）
+
     text: Type.Optional(WAIT_TEXT_FIELD),
     window: Type.Optional(WAIT_WINDOW_FIELD),
     timeoutMs: Type.Optional(RUN_EXPECT_TIMEOUT_FIELD),
@@ -933,7 +795,7 @@ export const COMPUTER_TOOL_CONTRACTS: Readonly<Record<ComputerToolName, Computer
         role: Type.Optional(
           Type.String({ description: "Platform role to look for, e.g. button, edit, menuItem, listItem." }),
         ),
-        // 200 条以上就不是搜索而是观察了：收紧查询比翻页更省上下文（工单 18 定稿）
+
         limit: Type.Optional(
           Type.Integer({
             minimum: 1,
@@ -1007,7 +869,7 @@ export const COMPUTER_TOOL_CONTRACTS: Readonly<Record<ComputerToolName, Computer
         offset: Type.Optional(
           Type.Integer({ minimum: 0, description: "Character offset to continue from (default 0)." }),
         ),
-        // 默认页与上限见 COMPUTER_READ_DEFAULT_CHARS / COMPUTER_READ_MAX_CHARS：保持单次结果是小文本块，超长文本靠 nextOffset 续读（工单 18 定稿）
+
         maxChars: Type.Optional(
           Type.Integer({
             minimum: 1,
@@ -1054,7 +916,7 @@ export const COMPUTER_TOOL_CONTRACTS: Readonly<Record<ComputerToolName, Computer
           }),
         ),
         ...WAIT_CONDITION_PROPERTIES,
-        // 覆写：wait 的 text 可选（三模式恰一，互斥由运行期校验）；run 的 expect 仍是必填
+
         text: Type.Optional(WAIT_TEXT_FIELD),
         window: Type.Optional(WAIT_WINDOW_FIELD),
         delayMs: Type.Optional(WAIT_DELAY_FIELD),
@@ -1109,20 +971,19 @@ export const COMPUTER_TOOL_CONTRACTS: Readonly<Record<ComputerToolName, Computer
 };
 
 export interface ComputerToolContract {
-  /** 模型可见英文标题 */
+
   readonly title: string;
-  /** 模型可见英文描述：模型唯一的用法说明来源 */
+
   readonly description: string;
-  /** 系统提示「可用工具」一节的一行摘要；缺了工具就不进那段列表（工单 07） */
+
   readonly promptSnippet: string;
-  /** 系统提示 Guidelines 一节的条目：工具激活时附上，写使用时机与顺序（工单 07） */
+
   readonly promptGuidelines: readonly string[];
-  /** P8 审批的粗粒度钩子：整个工具是否只读 */
+
   readonly readOnly: boolean;
-  /** pi registerTool 用的参数 schema */
+
   readonly parameters: TSchema;
 }
 
-/** 带名字的工具清单：注册（工单 05）与文档都从这里取 */
 export const COMPUTER_TOOLS: readonly (ComputerToolContract & { readonly name: ComputerToolName })[] =
   COMPUTER_TOOL_NAMES.map((name) => ({ name, ...COMPUTER_TOOL_CONTRACTS[name] }));

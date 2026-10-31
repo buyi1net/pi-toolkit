@@ -1,60 +1,31 @@
-/**
- * 持久团队 MVP 的父会话侧协议文件(全部位于父会话 artifactDir 下):
- *
- *   team-roster.json       成员名册:每个 member 的运行状态(idle/dispatched/offline)。
- *                          父进程是唯一写者(成员侧只读),读-改-写 + tmp/rename 原子落盘。
- *   team-mailbox/<name>/   每成员一个收件箱目录;成员侧 team_send 原子投递
- *                          (<uuid>.msg.json,tmp+rename),父侧 round watcher 认领并经
- *                          RPC steer 注入目标成员后删除。
- *
- * 诚实边界(README 同步):fire-and-forget——发送成功只代表落盘成功,不保证
- * 目标在线期间消费;成员 offline 后残留消息不自动补投。无阻塞 request/response,
- * 天然不存在 A↔B 互等死锁。
- */
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { debugLog } from "./diagnostics.ts";
 import { normalizeSubagentName } from "./names.ts";
 
-/** 成员每轮结束写入的 sidecar(subagent-done.ts 的 agent_end 写入)。 */
 export interface RoundSignal {
   version: 1;
   name: string;
-  /** 进程内递增轮次序号(成员侧内存计数,仅供诊断)。 */
+
   seq: number;
   at: number;
 }
 
-// ── 派单轮关联 nonce ──────────────────────────────────────────────────
-// team_dispatch 的每一轮生成唯一 roundId,经 steer 文本携带进入成员会话
-// (成员侧无需感知);父侧 round watcher 在 .round 认领时检索会话用户消息,
-// 只有确实出现过本次派单 marker 的 .round 才属于派单轮——自发轮(成员间
-// 消息/ask 回复触发)的 .round 不会错误消费派单结果(见 index.ts
-// watchMemberRound 的关联判定)。首轮(spawn 时的初始 prompt)同样带 marker,
-// 保证语义统一。
-
-/** 派单轮关联标记文本(出现在成员会话的用户消息里)。 */
 export function teamRoundMarker(roundId: string): string {
   return `[team-round:${roundId}]`;
 }
 
-/** 组装带关联标记的派单 prompt(标记行是协议噪音,明确标注可忽略)。 */
 export function buildTeamRoundPrompt(roundId: string, task: string): string {
   return `${teamRoundMarker(roundId)} (team round protocol marker — ignore this line)\n\n${task}`;
 }
 
-/** 原子写轮次结束信号(成员侧,tmp+rename)。 */
 export function writeRoundSignal(sessionFile: string, signal: Omit<RoundSignal, "version">): void {
   const tmp = `${sessionFile}.round.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify({ version: 1, ...signal } satisfies RoundSignal), "utf-8");
   renameSync(tmp, `${sessionFile}.round`);
 }
 
-/**
- * 父侧认领并消费轮次结束信号(atomic rename claim):消费恰好一次;
- * 读取失败/格式非法时删除并返回 null(坏信号不会重复触发回注)。
- */
 export function claimRoundSignal(sessionFile: string): RoundSignal | null {
   const path = `${sessionFile}.round`;
   const claimed = `${path}.${process.pid}.${randomUUID()}.processing`;
@@ -79,11 +50,11 @@ export interface RosterMember {
   sessionFile: string;
   pid?: number;
   status: MemberStatus;
-  /** 当前在途轮次开始的时间戳(仅 dispatched)。 */
+
   dispatchedAt?: number;
-  /** 最近一次轮次完成时间戳。 */
+
   lastRoundAt?: number;
-  /** offline 原因(含 process-exited / prompt-rejected / round-association-failed / stopped / host-shutdown / host-reload)。 */
+
   offlineReason?: string;
 }
 
@@ -131,10 +102,6 @@ export function findRosterMember(path: string, name: string): RosterMember | nul
   return readRoster(path).find((member) => member.name === key) ?? null;
 }
 
-/**
- * 幂等 upsert + 状态转换。父进程单写者,无需锁;offline 是吸收态——
- * 再次登记(重新 spawn 同名 member)按新生命周期覆盖。
- */
 export function upsertRosterMember(
   path: string,
   entry: {
@@ -175,22 +142,18 @@ export function removeRosterMember(path: string, name: string): void {
   writeRosterRaw(path, { version: 1, members: filtered });
 }
 
-// ── 成员间消息(mailbox)──────────────────────────────────────────────
-
 export interface TeamMessage {
   version: 1;
-  /** 发送方成员名(成员进程 env 注入,父侧信任来源)。 */
+
   from: string;
-  /** 接收方成员名。 */
+
   to: string;
   text: string;
   sentAt: number;
 }
 
-// 同毫秒内多次投递的单调序号:文件名排序即投递顺序(父侧按序注入)。
 let mailboxSeq = 0;
 
-/** 原子投递一条 fire-and-forget 消息(tmp+rename;目录按需创建)。 */
 export function postTeamMessage(artifactDir: string, message: Omit<TeamMessage, "version">): string {
   const dir = mailboxDir(artifactDir, message.to);
   mkdirSync(dir, { recursive: true });
@@ -202,11 +165,6 @@ export function postTeamMessage(artifactDir: string, message: Omit<TeamMessage, 
   return file;
 }
 
-/**
- * 认领并读取目标成员的全部待投递消息(按文件名时间升序),认领即移出
- * mailbox(rename 到 .processing,读完删除)——消费恰好一次;失败文件
- * 留在 .processing 供人工排查,不会重复注入。
- */
 export function claimTeamMessages(artifactDir: string, memberName: string): TeamMessage[] {
   const dir = mailboxDir(artifactDir, memberName);
   if (!existsSync(dir)) return [];

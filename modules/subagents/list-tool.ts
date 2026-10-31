@@ -16,9 +16,9 @@ import type { SubagentsTranslate } from "./messages/index.ts";
 
 export interface SubagentsListDeps {
   discoverAgents: () => ListedAgentDefinition[];
-  /** scope=session/all 需要:父会话 artifact 目录解析。缺省时 session 视图明确报不可用。 */
+
   getArtifactDir?: (sessionDir: string, sessionId: string) => string;
-  /** 会话子代理视图需要：登记表提供内存实时态（缺省时 session 视图明确报不可用）。 */
+
   registry?: RuntimeRegistry;
   readNameRegistry?: (artifactDir: string) => NameRegistry;
   readSubagentLoadout?: (sessionFile: string) => SubagentLoadout | null;
@@ -28,29 +28,23 @@ export interface SubagentsListDeps {
 export interface SessionSubagentView {
   name: string;
   agent?: string | null;
-  /** running:本进程仍在运行;finished:已到终态;discarded:会话工件已被 retention 清理。 */
+
   status: "running" | "finished" | "discarded";
-  /** 持久团队成员:finished 实为 offline(running 时不区分轮次内细态)。 */
+
   member?: boolean;
-  /** running 成员的轮次状态(idle = 等待派单)。 */
+
   memberRound?: "idle" | "dispatched";
-  /** 会话文件存在且带 loadout 快照,可被 subagent_message resume。 */
+
   resumable: boolean;
   model?: string | null;
   tier?: string | null;
-  /** 模型来源（工单 08：读路由快照；旧快照缺席时缺省，维持现状）。 */
+
   modelSource?: RoutingModelOrigin;
-  /** fallback 继承原因细分；仅来源为 parent 时携带。 */
+
   inheritanceCause?: RoutingInheritanceCause;
   cohortId?: string;
 }
 
-/**
- * 从会话名字注册表(补充运行态登记)构建当前父会话的子代理只读视图:
- * 只读展示名称、运行/完成/可恢复状态与 model/tier,不泄漏凭据。
- * 工单 08：model/tier 与来源信息统一读路由快照（运行态 modelRouting、
- * 完成/离线条目的 loadout.routing），快照缺席退回零散字段（现状口径）。
- */
 export function buildSessionSubagentViews(
   registry: NameRegistry,
   runtime: RuntimeRegistry | undefined,
@@ -60,8 +54,7 @@ export function buildSessionSubagentViews(
   const consider = (name: string, entry: NameRegistryEntry) => {
     const running = runtime?.findByName(name);
     if (running) {
-      // 工单 08：model/tier/来源统一读运行态路由快照；快照在场时以它的值
-      // 为准（包括合法的 null），缺快照的旧运行态退回零散字段。
+
       const routing = running.modelRouting ?? null;
       const origin = routingModelOrigin(routing);
       const model = routing ? routing.model : running.model ?? null;
@@ -75,8 +68,7 @@ export function buildSessionSubagentViews(
         ...(model ? { model } : {}),
         ...(tier ? { tier } : {}),
         ...(origin ? { modelSource: origin } : {}),
-        // origin=parent 蕴含 fallbackReason 在场，分类函数必给值；null 兜底
-        // 只是类型层面的归一，不会出现在实际数据里。
+
         ...(origin === "parent" ? { inheritanceCause: routingInheritanceCause(routing) ?? undefined } : {}),
         ...(running.cohortId ? { cohortId: running.cohortId } : {}),
       });
@@ -84,7 +76,7 @@ export function buildSessionSubagentViews(
     }
     const sessionExists = Boolean(entry.sessionFile) && existsSync(entry.sessionFile);
     if (!sessionExists) {
-      // retention 清理或外部删除:保留登记仅供追溯,resume 已不可能。
+
       views.push({
         name,
         status: "discarded",
@@ -115,7 +107,7 @@ export function buildSessionSubagentViews(
   for (const [name, entry] of Object.entries(registry)) {
     if (entry && typeof entry.sessionFile === "string") consider(name, entry);
   }
-  // 运行态登记里可能还有尚未写入名字注册表的名字(启动竞态/reload 边界)。
+
   if (runtime) {
     const known = new Set(views.map((view) => view.name));
     for (const running of runtime.list()) {
@@ -130,7 +122,6 @@ export function buildSessionSubagentViews(
   return views;
 }
 
-/** 继承运行的标签（工单 08）：fallback 不再记成无标签；非继承路径无标签。 */
 function inheritedBadge(view: SessionSubagentView): string {
   if (view.modelSource !== "parent") return "";
   return inheritanceBadgeText(view.inheritanceCause);
@@ -216,7 +207,6 @@ export function registerSubagentsListTool(
         return { content: [{ type: "text", text: result.text }], details: result.details };
       }
 
-      // ── session 视图 ──
       const sessionFile = ctx?.sessionManager?.getSessionFile?.();
       if (!sessionFile || !deps.getArtifactDir || !deps.readNameRegistry) {
         return {
@@ -252,7 +242,6 @@ export function registerSubagentsListTool(
         };
       }
 
-      // scope === "all":两个视图一起给。
       const definitions = definitionsResult();
       const agents = definitions.details.agents;
       const text = agents.length > 0 ? definitions.text : "No subagent definitions found.";

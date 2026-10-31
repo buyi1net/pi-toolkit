@@ -1,11 +1,3 @@
-// status 模块数据源：会话状态采集（tui/status/session-status.ts 的数据半，工单 11 切分）。
-//
-// 采集（collectSessionStatus）与会话快照类型 / 段位 id 归数据模块，从 `status.session`
-// 句柄按需取快照（消费方每帧调用，采集是纯读取，无缓存）。渲染半
-// （buildEditorUsageSegments / renderSessionStatusLine）留在 tui/status/session-status.ts；
-// renderStatusLineSegments 的段位压缩已迁 modules/tui/status/segment-layout.ts（工单 20），
-// 由该模块同时供 editor 两栏与 footer 单行使用。
-
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { sanitizeSingleLine } from "../../shared/sanitize.ts";
 
@@ -19,7 +11,7 @@ export interface SessionStatusSnapshot {
 	outputTokens: number;
 	cacheReadTokens: number;
 	cacheWriteTokens: number;
-	/** 最新 assistant 消息的缓存命中率，口径与 Pi 原生 Footer 一致。 */
+
 	cacheHitPercent?: number;
 	cost: number;
 	turns: number;
@@ -63,8 +55,6 @@ export function collectSessionStatus(
 		compactions: branchEntries.filter((entry) => entry.type === "compaction").length,
 	};
 
-	// 命中率只取最新 assistant 请求，口径与 Pi 原生 Footer 一致；
-	// toolResult / compaction / branch summary / usage entry 的 usage 不参与 CH。
 	let latestCacheHitPercent: number | undefined;
 
 	for (const entry of entries) {
@@ -80,8 +70,7 @@ export function collectSessionStatus(
 		} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
 			usage = entry.message.usage as UsageValue;
 		} else if (entry.type === "usage" && entry.usage) {
-			// Pi 1.3.0 的独立 usage entry（如 cache warming）：一次独立计费的模型
-			// 调用，不挂在任何 assistant message 上，逐条累计一次即可。
+
 			usage = entry.usage as UsageValue;
 		} else if ((entry.type === "compaction" || entry.type === "branch_summary") && entry.usage) {
 			usage = entry.usage as UsageValue;
