@@ -1,5 +1,1 @@
-
-);
-fs.writeFileSync(
-  path.join(KERNEL_DIR, "usage-node.ts"),
-  
+export * from "./pkg/usage-core/index.ts";
