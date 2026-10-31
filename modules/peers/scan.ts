@@ -97,6 +97,14 @@ function headerCandidate(line: string): SessionHead | null | undefined {
   return { sessionId: entry.id, cwd };
 }
 
+function sessionIdFromFileName(fileName: string): string | null {
+  const marker = fileName.lastIndexOf("_");
+  if (marker < 0) return null;
+  const candidate = fileName.slice(marker + 1).replace(/\.jsonl$/, "");
+  if (candidate.length < 8 || candidate.length > 64) return null;
+  return /^[0-9a-f]+(?:-[0-9a-f]+)+$/.test(candidate) ? candidate : null;
+}
+
 function readSessionHead(filePath: string, stats: { bytesRead: number }): SessionHead | null {
   const fd = openSync(filePath, "r");
   try {
@@ -238,10 +246,11 @@ export function createPeersDiskScanner(options: { readonly agentDir: string }): 
         let session: PeersDiskSession | null = null;
         try {
           const head = readSessionHead(filePath, stats);
-          if (head) {
+          const fallbackSessionId = head === null ? sessionIdFromFileName(file) : null;
+          if (head !== null || fallbackSessionId !== null) {
             session = {
-              sessionId: head.sessionId,
-              cwd: head.cwd,
+              sessionId: head !== null ? head.sessionId : fallbackSessionId!,
+              cwd: head !== null ? head.cwd : null,
               sessionFile: filePath,
               modifiedAt: fileStat.mtimeMs,
               name: readSessionName(filePath, fileStat.size, stats),
