@@ -635,9 +635,9 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     );
     const targetCwdForSession = effectiveCwd ?? ctx.cwd;
 
-    // 显式模型先对齐宿主目录：唯一裸 id 规范成 provider/id，已知 provider
-    // 下的错误模型或把品牌名写成 provider 直接拒绝；目录完全不认识的自定义
-    // provider 保留原样，仍交给宿主的扩展解析。
+    // 显式模型的 legacy 路径先对齐宿主目录：唯一裸 id 规范成 provider/id，已知 provider
+    // 下的错误模型或把品牌名写成 provider 直接拒绝；Codex v2 路径已经在
+    // spawn_agent 的 /model 可用目录接缝完成解析，这里保留其 provider/id 原样。
     if (params.model !== undefined) {
       if (typeof params.model !== "string" || params.model.trim() === "") {
         return {
@@ -647,7 +647,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         };
       }
       params.model = params.model.trim();
-      if (ctx.modelRegistry) {
+      if (ctx.modelRegistry && planOptions?.protocol !== CODEX_V2_SUBAGENT_PROTOCOL) {
         const checked = resolveKnownModelReference(params.model, ctx.modelRegistry);
         if (checked && "problem" in checked) return modelReferenceError(checked.problem, "model");
         if (checked && "resolution" in checked) params.model = checked.resolution.model;
@@ -779,7 +779,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
       };
     }
     let effectiveModel = params.model ?? tierSelection?.model ?? agentDefs?.model ?? inheritedModel;
-    if (effectiveModel && ctx.modelRegistry) {
+    if (effectiveModel && ctx.modelRegistry && planOptions?.protocol !== CODEX_V2_SUBAGENT_PROTOCOL) {
       const checked = resolveKnownModelReference(effectiveModel, ctx.modelRegistry);
       if (checked && "problem" in checked) return modelReferenceError(checked.problem, "model");
       if (checked && "resolution" in checked) effectiveModel = checked.resolution.model;

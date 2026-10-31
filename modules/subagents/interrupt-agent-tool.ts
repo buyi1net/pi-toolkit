@@ -31,8 +31,8 @@ export function registerInterruptAgentTool(pi: ExtensionAPI, deps: InterruptAgen
   pi.registerTool({
     name: "interrupt_agent",
     label: "Interrupt Agent",
-    description: "Interrupt the current round of a subagent and leave its session available for followup_task.",
-    promptSnippet: "Interrupt a subagent's current round while preserving its context for a follow-up task.",
+    description: "Interrupt the current round of a subagent and leave its session available for followup_task. target accepts agent_id, canonical_task_name, or a local task name.",
+    promptSnippet: "Interrupt a subagent using its agent_id, canonical path, or task name while preserving its context for a follow-up task.",
     parameters: Type.Object({ target: Type.String({ minLength: 1 }) }),
     renderCall(args, theme) {
       return new Text("○ " + theme.fg("toolTitle", theme.bold(args.target ?? "(unknown)")) + theme.fg("dim", " — interrupt"), 0, 0);

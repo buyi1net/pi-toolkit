@@ -37,7 +37,7 @@ function displayError(mode: string): Record<string, unknown> {
   return createCodexV2LaunchError({
     code: "agent_launch_failed",
     message: `Display mode "${mode}" is unavailable in the current environment.`,
-    modelKey: null,
+    selectedModel: null,
     reasoning_effort: null,
     display_mode: mode as "auto" | "herdr" | "tmux",
     underlying_error: "display_unavailable",
@@ -50,7 +50,8 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
     name: "spawn_agent",
     label: "Spawn Agent",
     description:
-      "Start a sub-agent and return immediately. Read subagent_models first; model must be its opaque modelKey. " +
+      "Start a sub-agent and return immediately. Read subagent_models first; model accepts a unique model id/name or an exact provider/model route. " +
+      "If multiple providers expose the same name, pass the provider/model route from the directory. " +
       "The returned agent_id and canonical_task_name identify the new run.",
     promptSnippet: "Start an agent without waiting for its final result.",
     parameters: Type.Object({
@@ -81,7 +82,7 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
       if (!selected.ok) return errorResult(createCodexV2LaunchError({
         code: selected.code,
         message: selected.message,
-        modelKey: input.model,
+        selectedModel: input.model,
         reasoning_effort: input.reasoning_effort,
         display_mode: input.display_mode ?? null,
         underlying_error: selected.details,
@@ -116,7 +117,7 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
         if (planned.kind === "error") return errorResult(createCodexV2LaunchError({
           code: "agent_launch_failed",
           message: planned.error,
-          modelKey: input.model,
+          selectedModel: input.model,
           reasoning_effort: input.reasoning_effort,
           display_mode: requestedMode,
           resolved_display_mode: resolvedSurface === "background" ? null : resolvedSurface,

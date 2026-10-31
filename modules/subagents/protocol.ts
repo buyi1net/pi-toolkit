@@ -1,5 +1,9 @@
-import type { ModelDirectoryEntry, ModelDirectory } from "./model-selector.ts";
-import { resolveExplicitModelSelection } from "./model-selector.ts";
+import type {
+  ModelDirectoryEntry,
+  ModelDirectory,
+  ModelDirectoryReferenceCandidate,
+} from "./model-selector.ts";
+import { resolveDirectoryModelReference } from "./model-selector.ts";
 
 export const CODEX_V2_SUBAGENT_PROTOCOL = "codex-v2" as const;
 
@@ -87,52 +91,76 @@ export function validateCodexV2SpawnParams(
   } };
 }
 
-/** 新协议的模型选择校验；旧协议不会调用此接缝。 */
+export interface CodexV2ModelSelectionDetails {
+  selected_model: string;
+  candidates: readonly ModelDirectoryReferenceCandidate[];
+  reasoning_effort: string;
+  supported_reasoning_effort: readonly string[];
+}
+
+/** 解析当前 /model 可用目录中的可读模型引用，并校验思考等级。 */
 export function validateCodexV2ModelSelection(
   directory: ModelDirectory,
-  modelKey: string,
+  modelReference: string,
   reasoning_effort: string,
 ):
-  | { ok: true; modelKey: string; reasoning_effort: string; model: ModelDirectoryEntry }
+  | { ok: true; modelReference: string; reasoning_effort: string; model: ModelDirectoryEntry }
   | {
       ok: false;
-      code: "model_key_unknown" | "reasoning_effort_unsupported";
+      code: "model_ambiguous" | "model_not_found" | "model_key_deprecated" | "reasoning_effort_unsupported";
       message: string;
-      details: {
-        selected_model_key: string;
-        reasoning_effort: string;
-        supported_reasoning_effort: readonly string[];
-      };
+      details: CodexV2ModelSelectionDetails;
     } {
-  const result = resolveExplicitModelSelection(directory, modelKey, reasoning_effort);
-  if ("error" in result) {
+  const selected_model = modelReference.trim();
+  if (/^mk_[a-f0-9]{32}$/i.test(selected_model)) {
     return {
       ok: false,
-      code: result.error.code,
-      message: result.error.message,
+      code: "model_key_deprecated",
+      message: "modelKey is deprecated. Use a unique model name or an exact provider/model route.",
+      details: { selected_model, candidates: [], reasoning_effort, supported_reasoning_effort: [] },
+    };
+  }
+  const resolved = resolveDirectoryModelReference(directory, selected_model);
+  if ("problem" in resolved) {
+    return {
+      ok: false,
+      code: resolved.problem.code,
+      message: resolved.problem.message,
       details: {
-        selected_model_key: result.error.selected_model_key,
-        reasoning_effort: result.error.reasoning_effort,
-        supported_reasoning_effort: result.error.supported_reasoning_effort,
+        selected_model: resolved.problem.selected_model,
+        candidates: resolved.problem.candidates,
+        reasoning_effort,
+        supported_reasoning_effort: [],
       },
     };
   }
-  return {
-    ok: true,
-    modelKey: result.selection.modelKey,
-    reasoning_effort: result.selection.reasoning_effort,
-    model: result.selection.model,
-  };
+  const model = resolved.resolution.model;
+  if (!model.reasoning_effort.includes(reasoning_effort)) {
+    return {
+      ok: false,
+      code: "reasoning_effort_unsupported",
+      message:
+        `Model "${model.provider}/${model.id}" does not support reasoning_effort "${reasoning_effort}" ` +
+        `(supported: ${model.reasoning_effort.join(", ")}).`,
+      details: {
+        selected_model,
+        candidates: [],
+        reasoning_effort,
+        supported_reasoning_effort: [...model.reasoning_effort],
+      },
+    };
+  }
+  return { ok: true, modelReference: selected_model, reasoning_effort, model };
 }
 
 /**
- * 保留新协议实际选择与底层摘要的错误形状。调用方可把 provider 摘要
+ * 保留模型选择与底层摘要的错误形状。调用方可把 provider 摘要
  * 原样放入 `underlying_error`，不会被候选切换或重试逻辑覆盖。
  */
 export function createCodexV2LaunchError(params: {
   code: string;
   message: string;
-  modelKey: string | null;
+  selectedModel: string | null;
   reasoning_effort: string | null;
   display_mode?: "auto" | "herdr" | "tmux" | null;
   resolved_display_mode?: "auto" | "herdr" | "tmux" | null;
@@ -141,7 +169,7 @@ export function createCodexV2LaunchError(params: {
   return {
     code: params.code,
     message: params.message,
-    selected_model_key: params.modelKey,
+    selected_model: params.selectedModel,
     reasoning_effort: params.reasoning_effort,
     requested_display_mode: params.display_mode ?? null,
     resolved_display_mode: params.resolved_display_mode ?? null,

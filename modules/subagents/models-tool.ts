@@ -64,10 +64,9 @@ function currentModelFromContext(ctx: ExtensionContext): CatalogModel | null {
   return model as unknown as CatalogModel;
 }
 
-// 与 SubagentModelsResult 镜像：改任一侧时同步另一侧；modelKey 刻意不设 pattern，
-// 不透明键只能由目录发放，schema 不暗示脚本可自造。
+// 与 SubagentModelsResult 镜像：目录只暴露当前 /model 可用模型的可读身份；
+// Agent 用唯一 id/name 选择，跨供应商重复时传 provider/model。
 const subagentModelsOutputSchema = Type.Object({
-  catalog_version: Type.String(),
   generated_at: Type.String(),
   models: Type.Array(Type.Object({
     provider: Type.String(),
@@ -75,11 +74,8 @@ const subagentModelsOutputSchema = Type.Object({
     api: Type.String(),
     baseUrl: Type.String(),
     name: Type.String(),
-    modelKey: Type.Union([Type.String(), Type.Null()]),
     sources: Type.Array(Type.String()),
     reasoning_effort: Type.Array(Type.String()),
-    resolvable: Type.Boolean(),
-    resolution_reason: Type.Union([Type.String(), Type.Null()]),
     health: Type.Object({
       status: Type.String(),
       request_count: Type.Integer(),
@@ -88,10 +84,6 @@ const subagentModelsOutputSchema = Type.Object({
       last_error_at: Type.Union([Type.Number(), Type.Null()]),
       last_error_type: Type.Union([Type.String(), Type.Null()]),
       detail: Type.Union([Type.String(), Type.Null()]),
-    }),
-    availability: Type.Object({
-      status: Type.Union([Type.Literal("available"), Type.Literal("credentials_unavailable"), Type.Literal("unknown")]),
-      reason: Type.Union([Type.String(), Type.Null()]),
     }),
   })),
   display_modes: Type.Array(Type.Object({
@@ -115,11 +107,11 @@ export function registerSubagentModelsTool(
     name: "subagent_models",
     label: "Subagent Models",
     description:
-      "Read the current subagent model directory. Returns opaque modelKey values, " +
-      "host-supported reasoning_effort values, health summaries, and display mode availability. " +
-      "Read the directory again after a catalog refresh; model keys are versioned.",
+      "Read the current /model available subagent models. Each entry includes a provider, model id, display name, " +
+      "host-supported reasoning_effort values, health facts, and display mode availability. " +
+      "Use a unique id or name in spawn_agent; when several providers expose the same name, pass provider/model.",
     promptSnippet:
-      "Read the complete current model directory and display mode availability before choosing a model for spawn_agent.",
+      "Read the current available model directory before choosing a model for spawn_agent.",
     parameters: Type.Object({}),
     outputSchema: subagentModelsOutputSchema,
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {

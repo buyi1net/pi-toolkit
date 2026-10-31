@@ -113,7 +113,7 @@ export interface SubagentLoadout {
   toolAllowlist: string | null;
   /** Model id (without thinking suffix), or null to use the session default. */
   model: string | null;
-  /** 完整宿主执行身份；公开协议只暴露 modelKey。 */
+  /** 完整宿主执行身份；公开协议使用模型名称或 provider/model。 */
   modelIdentity?: { provider: string; id: string; api: string; baseUrl: string } | null;
   /** Resolved pane surface for nested Herdr/tmux resume. */
   surfaceKind?: "herdr" | "tmux";

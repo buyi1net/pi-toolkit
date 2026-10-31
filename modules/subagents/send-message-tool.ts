@@ -77,13 +77,24 @@ export function resolveLifecycleTarget(
   }
 
   const matches = entries.filter((entry) => entry.name === target);
+  const idMatches = entries.filter((entry) => entry.agentId === target);
+  if (idMatches.length > 1) {
+    return { error: errorResult("target_ambiguous", `Agent id "${target}" matches multiple historical runs.`, { target, candidates: idMatches.map((entry) => ({ agent_id: entry.agentId, canonical_task_name: entry.canonicalTaskName })) }) };
+  }
+  if (idMatches.length === 1) {
+    const match = idMatches[0]!;
+    return { target: { name: match.name, agentId: match.agentId, canonicalTaskName: match.canonicalTaskName } };
+  }
   if (matches.length > 1) {
     return { error: errorResult("target_ambiguous", `Local task name "${target}" is ambiguous.`, { target, candidates: matches.map((entry) => ({ agent_id: entry.agentId, canonical_task_name: entry.canonicalTaskName })) }) };
   }
   if (matches.length === 1) {
     return { target: { name: target, agentId: matches[0]!.agentId, canonicalTaskName: matches[0]!.canonicalTaskName } };
   }
-  return { error: errorResult("target_not_found", `No subagent matches target "${target}".`, { target }) };
+  return { error: errorResult("target_not_found", `No subagent matches target "${target}".`, {
+    target,
+    candidates: entries.map((entry) => ({ agent_id: entry.agentId || null, canonical_task_name: entry.canonicalTaskName, task_name: entry.name })),
+  }) };
 }
 
 export function lifecycleQueue(deps: SendMessageToolDeps, ctx: ToolContext) {
@@ -108,8 +119,8 @@ export function registerSendMessageTool(pi: ExtensionAPI, deps: SendMessageToolD
   pi.registerTool({
     name: "send_message",
     label: "Send Message",
-    description: "Deliver an immediate message to an existing subagent. This never starts a new task round.",
-    promptSnippet: "Send an immediate message to an existing subagent without starting a new round.",
+    description: "Deliver an immediate message to an existing subagent. target accepts agent_id, canonical_task_name, or a unique local task name. This never starts a new task round.",
+    promptSnippet: "Send an immediate message using the agent_id, canonical path, or task name without starting a new round.",
     parameters: Type.Object({ target: Type.String({ minLength: 1 }), message: Type.String({ minLength: 1 }) }),
     renderCall(args, theme) { return new Text("○ " + theme.fg("toolTitle", theme.bold(args.target ?? "(unknown)")) + theme.fg("dim", " — message"), 0, 0); },
     renderResult(result, _opts, theme) {

@@ -2431,7 +2431,7 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
   });
 
   // 目录快照按宿主 modelRegistry 实例和路由配置缓存；models/spawn 在同一父会话
-  // 共享这份快照，只有宿主显式替换目录实例时才失效旧 modelKey。
+  // 共享这份可用模型快照，解析和展示都只读当前 /model 可选集合。
   const modelDirectoryCache = new WeakMap<object, Map<string, ReturnType<typeof buildSubagentModelsResult>>>();
   const getSharedModelDirectory = (ctx: ExtensionContext) => {
     const registry = ctx.modelRegistry as object;

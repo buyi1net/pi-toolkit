@@ -33,8 +33,8 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
   pi.registerTool({
     name: "followup_task",
     label: "Follow Up Task",
-    description: "Start the next task round for an existing subagent while preserving its session context.",
-    promptSnippet: "Continue an existing subagent session with a new task round.",
+    description: "Start the next task round for an existing subagent while preserving its session context. target accepts agent_id, canonical_task_name, or a local task name.",
+    promptSnippet: "Continue an existing subagent session with a new task round using its agent_id, canonical path, or task name.",
     parameters: Type.Object({ target: Type.String({ minLength: 1 }), message: Type.String({ minLength: 1 }) }),
     renderCall(args, theme) { return new Text("○ " + theme.fg("toolTitle", theme.bold(args.target ?? "(unknown)")) + theme.fg("dim", " — follow-up"), 0, 0); },
     renderResult(result, _opts, theme) {
