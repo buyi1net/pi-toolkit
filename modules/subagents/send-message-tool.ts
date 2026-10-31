@@ -4,12 +4,14 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { readNameRegistry } from "./session.ts";
 import type { RuntimeRegistry } from "./registry.ts";
+import type { SubagentsTranslate } from "./messages/index.ts";
 import { createParentUpdateQueue, createParentUpdateProducers, type ParentSessionUpdate } from "./parent-update-queue.ts";
 
 export interface SendMessageToolDeps {
   registry: RuntimeRegistry;
   getArtifactDir: (sessionDir: string, sessionId: string) => string;
   handleSubagentSteer: (params: { name?: string; message?: string }) => unknown;
+  readonly t?: SubagentsTranslate;
 }
 
 export interface ToolContext {
@@ -122,7 +124,7 @@ export function registerSendMessageTool(pi: ExtensionAPI, deps: SendMessageToolD
     description: "Deliver an immediate message to an existing subagent. target accepts agent_id, canonical_task_name, or a unique local task name. This never starts a new task round.",
     promptSnippet: "Send an immediate message using the agent_id, canonical path, or task name without starting a new round.",
     parameters: Type.Object({ target: Type.String({ minLength: 1 }), message: Type.String({ minLength: 1 }) }),
-    renderCall(args, theme) { return new Text("○ " + theme.fg("toolTitle", theme.bold(args.target ?? "(unknown)")) + theme.fg("dim", " — message"), 0, 0); },
+    renderCall(args, theme) { return new Text("○ " + theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.send_message.display") ?? "Message subagent")) + theme.fg("dim", ` — ${args.target ?? "(target)"}`), 0, 0); },
     renderResult(result, _opts, theme) {
       const details = result.details as any;
       if (details?.submission_id) return new Text(theme.fg("success", "✓") + " " + theme.fg("toolTitle", theme.bold(details.task_name)) + theme.fg("dim", " — message submitted"), 0, 0);

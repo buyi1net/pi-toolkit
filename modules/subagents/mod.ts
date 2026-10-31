@@ -2478,11 +2478,13 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
       return resolveDisplayMode({ requested, context: detectDisplayContext(), config: section });
     },
     getModelDirectory: getSharedModelDirectory,
+    t: widgetText,
     deliverTerminal: (running, result, source, deliveryId) => deliverSpawnTerminal(running, result, pi, deliveryId, source),
   });
 
   registerWaitAgentTool(pi, {
     getArtifactDir,
+    t: widgetText,
   });
 
   registerFollowupTaskTool(pi, {
@@ -2490,18 +2492,21 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
     registry: runtimeRegistry,
     getArtifactDir,
     handleSubagentSteer,
+    t: widgetText,
     deliverTerminal: (running, result, source, deliveryId) => deliverSpawnTerminal(running, result, pi, deliveryId, source),
   });
   registerSendMessageTool(pi, {
     registry: runtimeRegistry,
     getArtifactDir,
     handleSubagentSteer,
+    t: widgetText,
   });
 
   registerInterruptAgentTool(pi, {
     registry: runtimeRegistry,
     getArtifactDir,
     handleSubagentSteer,
+    t: widgetText,
     interruptCurrentRound: (running) => {
       // RPC 子进程支持只中止当前 provider 请求；pane 通过 Ctrl-C 结束当前轮次。
       if (running.kind === "headless") {
@@ -2518,6 +2523,7 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
   registerListAgentsTool(pi, {
     registry: runtimeRegistry,
     getArtifactDir,
+    t: widgetText,
   });
   registerSubagentModelsTool(pi, {
     getPools: (cwd: string) => {
@@ -2534,6 +2540,7 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
     getHealth: (pool) => hostOptions.modelHealth?.read(pool) ?? new Map(),
     getDisplayModes: () => detectDisplayModeAvailability(),
     getModelDirectory: getSharedModelDirectory,
+    t: widgetText,
   });
   // 迁移快照仍由恢复层读取，但不再注册旧工具。
   registerSubagentRenderers(pi, widgetText);

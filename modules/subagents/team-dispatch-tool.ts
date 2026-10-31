@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeSubagentName } from "./names.ts";
 import { buildTeamRoundPrompt, findRosterMember, rosterPath, upsertRosterMember, type RosterMember } from "./team.ts";
 import type { RuntimeRegistry } from "./registry.ts";
+import type { SubagentsTranslate } from "./messages/index.ts";
 
 export interface TeamDispatchToolDeps {
   /** 运行态登记表(member 查找与在线判定)。 */
@@ -17,6 +18,7 @@ export interface TeamDispatchToolDeps {
     entry: Parameters<typeof upsertRosterMember>[1],
   ) => RosterMember;
   countSessionEntryLines: (sessionFile: string) => number;
+  readonly t?: SubagentsTranslate;
 }
 
 interface DispatchContext {
@@ -64,7 +66,8 @@ export function registerTeamDispatchTool(pi: ExtensionAPI, deps: TeamDispatchToo
     renderCall(args, theme) {
       const target = typeof (args as any).name === "string" ? (args as any).name : "(unknown)";
       return new Text(
-        "○ " + theme.fg("toolTitle", theme.bold(target)) + theme.fg("dim", " — team dispatch"),
+        "○ " + theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.team_dispatch.display") ?? "Dispatch to team")) +
+          theme.fg("dim", ` — ${target}`),
         0,
         0,
       );

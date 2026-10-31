@@ -23,6 +23,7 @@ import {
   type SubagentLoadout,
 } from "./session.ts";
 import { normalizeSubagentName as normalizeName } from "./names.ts";
+import type { SubagentsTranslate } from "./messages/index.ts";
 import { peekExitSidecar } from "./surface.ts";
 import { modelOwnThinkingSuffix } from "./routing.ts";
 import {
@@ -136,6 +137,7 @@ export interface SubagentInspectDeps {
   /** 没有复用器或表面不支持探测时返回 null。 */
   probeSurface?: (surface: string) => boolean | null;
   readRosterMember?: (name: string, artifactDir: string) => InspectRosterMember | null;
+  readonly t?: SubagentsTranslate;
 }
 
 interface InspectRecord {
@@ -724,7 +726,7 @@ export function registerSubagentInspectTool(pi: ExtensionAPI, deps: SubagentInsp
         ? (args as any).name.trim()
         : "all running";
       return new Text(
-        "○ " + theme.fg("toolTitle", theme.bold("inspect ")) + theme.fg("dim", name),
+        "○ " + theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent_inspect.display") ?? "Inspect subagent")) + theme.fg("dim", ` — ${name}`),
         0,
         0,
       );

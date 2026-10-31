@@ -16,10 +16,12 @@ const EN = {
   "module.peers.problem.runtime": "Peers module runtime problem: {detail}",
 
   "module.peers.tool.list.label": "List peer sessions",
+  "module.peers.tool.list.display": "List local sessions",
 
   "module.peers.tool.send.label": "Send message to peer session",
+  "module.peers.tool.send.display": "Message {target}",
 
-  // 外部消息卡片渲染器（工单 50）：标题 / 元信息 / 正文不可用与折叠提示
+  // 外部消息卡片渲染器（工单 50）：标题 / 元信息 / 正文不可用
   "module.peers.renderer.title": "External session",
   "module.peers.renderer.instance": "instance {id}",
   "module.peers.renderer.sentAt": "Sent {time}",
@@ -27,7 +29,6 @@ const EN = {
   "module.peers.renderer.replyClaimFull": "Reply relation: the sender claims this is a reply to {id}",
   "module.peers.renderer.cwd": "Working directory: {cwd}",
   "module.peers.renderer.bodyUnavailable": "Message body unavailable",
-  "module.peers.renderer.moreLines": "… {count} more lines",
 } satisfies Record<string, string>;
 
 const ZH_CN: typeof EN = {
@@ -40,8 +41,10 @@ const ZH_CN: typeof EN = {
   "module.peers.problem.runtime": "会话发现与通讯模块运行异常：{detail}",
 
   "module.peers.tool.list.label": "列出本机会话",
+  "module.peers.tool.list.display": "查询本机会话列表",
 
   "module.peers.tool.send.label": "给本机会话发消息",
+  "module.peers.tool.send.display": "发消息给 {target}",
 
   // 外部消息卡片渲染器（工单 50）
   "module.peers.renderer.title": "外部会话",
@@ -51,7 +54,6 @@ const ZH_CN: typeof EN = {
   "module.peers.renderer.replyClaimFull": "回复关系：对方声称这是对 {id} 的回复",
   "module.peers.renderer.cwd": "工作目录：{cwd}",
   "module.peers.renderer.bodyUnavailable": "正文不可用",
-  "module.peers.renderer.moreLines": "… 还有 {count} 行",
 };
 
 const ZH_TW: typeof EN = {
@@ -64,8 +66,10 @@ const ZH_TW: typeof EN = {
   "module.peers.problem.runtime": "會話發現與通訊模組執行異常：{detail}",
 
   "module.peers.tool.list.label": "列出本機會話",
+  "module.peers.tool.list.display": "查詢本機會話列表",
 
   "module.peers.tool.send.label": "給本機會話傳訊息",
+  "module.peers.tool.send.display": "發訊息給 {target}",
 
   // 外部訊息卡片渲染器（工單 50）
   "module.peers.renderer.title": "外部會話",
@@ -75,7 +79,6 @@ const ZH_TW: typeof EN = {
   "module.peers.renderer.replyClaimFull": "回覆關係：對方聲稱這是對 {id} 的回覆",
   "module.peers.renderer.cwd": "工作目錄：{cwd}",
   "module.peers.renderer.bodyUnavailable": "內文無法取得",
-  "module.peers.renderer.moreLines": "… 還有 {count} 行",
 };
 
 /** 本键表：全部模块键表在 modules/index.ts 聚合登记 */

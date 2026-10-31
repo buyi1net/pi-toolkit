@@ -89,7 +89,9 @@ export function registerSubagentMessageTool(
     renderCall(args, theme) {
       const target = args.name ?? "(unknown)";
       return new Text(
-        "○ " + theme.fg("toolTitle", theme.bold(target)) + theme.fg("dim", " — message"),
+        "○ " +
+          theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent_message.display") ?? "Message subagent")) +
+          theme.fg("dim", ` — ${target}`),
         0,
         0,
       );

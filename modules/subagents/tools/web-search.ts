@@ -10,7 +10,9 @@
  * 时可能空手而归——此时返回明确的原因与状态码，不编造结果。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { subagentsTableTranslator, type SubagentsTranslate } from "../messages/index.ts";
 import { assertFetchableUrl, decodeDuckRedirect, htmlToText } from "./web-html.ts";
 import { BROWSER_USER_AGENT, FETCH_TIMEOUT_MS } from "./web-fetch.ts";
 
@@ -95,7 +97,7 @@ async function searchDuckDuckGo(query: string, maxResults: number): Promise<stri
   );
 }
 
-export default function webSearchExtension(pi: ExtensionAPI) {
+export default function webSearchExtension(pi: ExtensionAPI, t: SubagentsTranslate = subagentsTableTranslator("en")) {
   pi.registerTool({
     name: "web_search",
     label: "web_search",
@@ -122,6 +124,10 @@ export default function webSearchExtension(pi: ExtensionAPI) {
         }),
       ),
     }),
+    renderCall(args, theme) {
+      const query = typeof args.query === "string" ? args.query.replace(/\s+/g, " ").trim() : "(query)";
+      return new Text("○ " + theme.fg("toolTitle", theme.bold(t("module.subagents.tool.web_search.display"))) + theme.fg("dim", ` — ${query}`), 0, 0);
+    },
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const query = String((params as { query?: unknown }).query ?? "").trim();
       if (!query) throw new Error("web_search requires a non-empty query.");

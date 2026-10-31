@@ -8,6 +8,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { Text } from "@earendil-works/pi-tui";
+import { subagentsTableTranslator, type SubagentsTranslate } from "../messages/index.ts";
 
 const DANGEROUS_PATTERNS = [
 	/\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?(-[a-zA-Z]*r[a-zA-Z]*\s+)?(\/|~\/?\s|~\/?\b)/,
@@ -47,7 +49,7 @@ function isDangerous(command: string): string | null {
 
 export const __test__ = { isDangerous };
 
-export default function (pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI, t: SubagentsTranslate = subagentsTableTranslator("en")) {
 	const bashTool = createBashTool(process.cwd());
 
 	pi.registerTool({
@@ -61,6 +63,15 @@ export default function (pi: ExtensionAPI) {
 				Type.Number({ description: "Timeout in seconds (optional)" }),
 			),
 		}),
+		renderCall(args, theme) {
+			const command = typeof args.command === "string" ? args.command.replace(/\s+/g, " ").trim() : "(command)";
+			return new Text(
+				"○ " + theme.fg("toolTitle", theme.bold(t("module.subagents.tool.safe_bash.display"))) +
+					theme.fg("dim", ` — ${command}`),
+				0,
+				0,
+			);
+		},
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const danger = isDangerous(params.command);
 			if (danger) {

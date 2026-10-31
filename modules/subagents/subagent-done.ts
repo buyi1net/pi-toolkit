@@ -26,6 +26,7 @@ function writeSidecar(path: string, data: string): void {
 import { createSubagentActivityRecorder } from "./activity.ts";
 import { postTeamMessage, readRoster, rosterPath, writeRoundSignal } from "./team.ts";
 import { normalizeSubagentName } from "./names.ts";
+import { subagentsTableTranslator } from "./messages/index.ts";
 
 export function shouldMarkUserTookOver(agentStarted: boolean): boolean {
   return agentStarted;
@@ -131,6 +132,7 @@ export function shouldWriteRoundSignal(
 }
 
 export default function (pi: ExtensionAPI) {
+  const toolText = subagentsTableTranslator("en");
   let toolNames: string[] = [];
   let denied: string[] = [];
   let expanded = false;
@@ -498,8 +500,9 @@ export default function (pi: ExtensionAPI) {
 
     renderCall(args, theme) {
       const text =
-        theme.fg("toolTitle", theme.bold("ask_question ")) +
-        theme.fg("muted", String((args as any).question ?? ""));
+        "○ " +
+        theme.fg("toolTitle", theme.bold(toolText("module.subagents.tool.ask_question.display"))) +
+        theme.fg("muted", ` — ${String((args as any).question ?? "")}`);
       return new Text(text, 0, 0);
     },
   });
@@ -589,7 +592,9 @@ export default function (pi: ExtensionAPI) {
       renderCall(args, theme) {
         const to = String((args as any).to ?? "?");
         return new Text(
-          theme.fg("toolTitle", theme.bold("team_send → ")) + theme.fg("muted", to),
+          "○ " +
+          theme.fg("toolTitle", theme.bold(toolText("module.subagents.tool.team_send.display"))) +
+          theme.fg("muted", ` — ${to}`),
           0,
           0,
         );

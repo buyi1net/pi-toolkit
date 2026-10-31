@@ -12,7 +12,9 @@
  * 旧 Node 上该变量是 no-op，fetch 直连（目标不可达时报清晰的 fetch 失败）。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { subagentsTableTranslator, type SubagentsTranslate } from "../messages/index.ts";
 import { assertFetchableUrl, htmlToText, urlForMessage } from "./web-html.ts";
 
 export const BROWSER_USER_AGENT =
@@ -109,7 +111,7 @@ export async function fetchUrlAsText(
   );
 }
 
-export default function webFetchExtension(pi: ExtensionAPI) {
+export default function webFetchExtension(pi: ExtensionAPI, t: SubagentsTranslate = subagentsTableTranslator("en")) {
   pi.registerTool({
     name: "web_fetch",
     label: "web_fetch",
@@ -134,6 +136,10 @@ export default function webFetchExtension(pi: ExtensionAPI) {
         }),
       ),
     }),
+    renderCall(args, theme) {
+      const url = typeof args.url === "string" ? args.url.trim() : "(url)";
+      return new Text("○ " + theme.fg("toolTitle", theme.bold(t("module.subagents.tool.web_fetch.display"))) + theme.fg("dim", ` — ${url}`), 0, 0);
+    },
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const url = String((params as { url?: unknown }).url ?? "");
       const raw = Boolean((params as { raw?: unknown }).raw);

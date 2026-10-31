@@ -11,6 +11,7 @@
 // 已接线九个工具（computer_run 随工单 30 落地：PRE-BATCH 冻结 + 逐步执行 + 结束物化恰一份快照）。
 
 import { join } from "node:path";
+import { Text } from "@earendil-works/pi-tui";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-coding-agent";
 import type { Translator } from "../../i18n/index.ts";
 import type { ModuleContext } from "../../kit/module.ts";
@@ -199,6 +200,9 @@ export function registerComputerTools(
     description: contracts.computer_status.description,
     ...promptMeta(contracts.computer_status),
     parameters: contracts.computer_status.parameters,
+    renderCall(_args, theme) {
+      return new Text("○ " + theme.fg("toolTitle", theme.bold(t("module.computer.tool.computer_status.display"))), 0, 0);
+    },
     executionMode: "sequential",
     async execute(): Promise<AgentToolResult<ToolDetails<ComputerStatusData>>> {
       const result = await backend.status();
@@ -214,6 +218,9 @@ export function registerComputerTools(
     description: contracts.computer_roots.description,
     ...promptMeta(contracts.computer_roots),
     parameters: contracts.computer_roots.parameters,
+    renderCall(_args, theme) {
+      return new Text("○ " + theme.fg("toolTitle", theme.bold(t("module.computer.tool.computer_roots.display"))), 0, 0);
+    },
     executionMode: "sequential",
     async execute(): Promise<AgentToolResult<ToolDetails<ComputerRootsData>>> {
       const discovered = await backend.roots();
@@ -230,6 +237,9 @@ export function registerComputerTools(
     description: contracts.computer_observe.description,
     ...promptMeta(contracts.computer_observe),
     parameters: contracts.computer_observe.parameters,
+    renderCall(_args, theme) {
+      return new Text("○ " + theme.fg("toolTitle", theme.bold(t("module.computer.tool.computer_observe.display"))), 0, 0);
+    },
     executionMode: "sequential",
     async execute(
       _toolCallId: string,
@@ -315,6 +325,9 @@ export function registerComputerTools(
     description: contracts.computer_search.description,
     ...promptMeta(contracts.computer_search),
     parameters: contracts.computer_search.parameters,
+    renderCall(_args, theme) {
+      return new Text("○ " + theme.fg("toolTitle", theme.bold(t("module.computer.tool.computer_search.display"))), 0, 0);
+    },
     executionMode: "sequential",
     async execute(
       _toolCallId: string,
@@ -345,6 +358,9 @@ export function registerComputerTools(
     description: contracts.computer_inspect.description,
     ...promptMeta(contracts.computer_inspect),
     parameters: contracts.computer_inspect.parameters,
+    renderCall(_args, theme) {
+      return new Text("○ " + theme.fg("toolTitle", theme.bold(t("module.computer.tool.computer_inspect.display"))), 0, 0);
+    },
     executionMode: "sequential",
     async execute(
       _toolCallId: string,
@@ -364,6 +380,9 @@ export function registerComputerTools(
     description: contracts.computer_act.description,
     ...promptMeta(contracts.computer_act),
     parameters: contracts.computer_act.parameters,
+    renderCall(_args, theme) {
+      return new Text("○ " + theme.fg("toolTitle", theme.bold(t("module.computer.tool.computer_act.display"))), 0, 0);
+    },
     executionMode: "sequential",
     async execute(_toolCallId: string, params: ActParams): Promise<AgentToolResult<ToolDetails<ComputerActData>>> {
       const snapshot = currentSnapshot(state, params.stateId);
@@ -412,6 +431,9 @@ export function registerComputerTools(
     description: contracts.computer_read.description,
     ...promptMeta(contracts.computer_read),
     parameters: contracts.computer_read.parameters,
+    renderCall(_args, theme) {
+      return new Text("○ " + theme.fg("toolTitle", theme.bold(t("module.computer.tool.computer_read.display"))), 0, 0);
+    },
     executionMode: "sequential",
     async execute(
       _toolCallId: string,
@@ -446,6 +468,9 @@ export function registerComputerTools(
     description: contracts.computer_wait.description,
     ...promptMeta(contracts.computer_wait),
     parameters: contracts.computer_wait.parameters,
+    renderCall(_args, theme) {
+      return new Text("○ " + theme.fg("toolTitle", theme.bold(t("module.computer.tool.computer_wait.display"))), 0, 0);
+    },
     executionMode: "sequential",
     // 等待可能占用几十秒：signal 供宿主取消（Esc），onUpdate 供它推进度行；两者都是宿主传入的运行时参数
     async execute(
@@ -464,6 +489,9 @@ export function registerComputerTools(
     description: contracts.computer_run.description,
     ...promptMeta(contracts.computer_run),
     parameters: contracts.computer_run.parameters,
+    renderCall(_args, theme) {
+      return new Text("○ " + theme.fg("toolTitle", theme.bold(t("module.computer.tool.computer_run.display"))), 0, 0);
+    },
     executionMode: "sequential",
     // 整批可能占用几分钟：signal 供宿主取消（Esc）；动作在途时被取消要回 effectsUnknown 回执而不是抛错
     async execute(

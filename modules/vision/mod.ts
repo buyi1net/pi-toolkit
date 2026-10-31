@@ -52,7 +52,7 @@ function registerVision(context: ModuleContext, facade: VisionRouteFacade): void
     queryLatest: (question: string, ctx: ExtensionContext) => bridge.queryLatest(question, ctx),
   } satisfies VisionService);
 
-  registerVisionQuery(context.pi, bridge);
+  registerVisionQuery(context.pi, bridge, context.t);
   registerVisionContext(context.pi, bridge);
 
   context.pi.on("session_start", async (_event, ctx) => {

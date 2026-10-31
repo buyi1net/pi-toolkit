@@ -36,7 +36,7 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
     description: "Start the next task round for an existing subagent while preserving its session context. target accepts agent_id, canonical_task_name, or a local task name.",
     promptSnippet: "Continue an existing subagent session with a new task round using its agent_id, canonical path, or task name.",
     parameters: Type.Object({ target: Type.String({ minLength: 1 }), message: Type.String({ minLength: 1 }) }),
-    renderCall(args, theme) { return new Text("○ " + theme.fg("toolTitle", theme.bold(args.target ?? "(unknown)")) + theme.fg("dim", " — follow-up"), 0, 0); },
+    renderCall(args, theme) { return new Text("○ " + theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.followup_task.display") ?? "Follow-up task")) + theme.fg("dim", ` — ${args.target ?? "(target)"}`), 0, 0); },
     renderResult(result, _opts, theme) {
       const details = result.details as any;
       if (details?.submission_id) return new Text(theme.fg("accent", "⟳") + " " + theme.fg("toolTitle", theme.bold(details.task_name)) + theme.fg("dim", " — follow-up started"), 0, 0);

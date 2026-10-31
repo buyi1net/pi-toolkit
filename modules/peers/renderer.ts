@@ -13,14 +13,10 @@
 // 是唯一实现），不信任详情里可能过时的短码字段。
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { keyHint } from "@earendil-works/pi-coding-agent";
 import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { deriveSessionShortId } from "../../shared/short-id.ts";
 import { PEERS_BODY_BEGIN_MARKER, PEERS_MESSAGE_CUSTOM_TYPE, sanitizePeersEnvelopeField, type PeersMessageDetails } from "./messaging.ts";
 import { peersTableTranslator, type PeersTranslate } from "./messages/index.ts";
-
-/** 折叠态正文预览行数（对齐 subagents 终态行的 5 行口径） */
-const BODY_PREVIEW_LINES = 5;
 
 /** 渲染器文案键清单：测试据此校验三语齐全，并能发现「表里加键但渲染器没用」的漂移 */
 export const PEERS_RENDERER_MESSAGE_KEYS = [
@@ -31,7 +27,6 @@ export const PEERS_RENDERER_MESSAGE_KEYS = [
   "module.peers.renderer.replyClaimFull",
   "module.peers.renderer.cwd",
   "module.peers.renderer.bodyUnavailable",
-  "module.peers.renderer.moreLines",
 ] as const;
 
 /** begin 标记的字节形式：正文起点按字节（UTF-8）定位，不按字符偏移 */
@@ -44,7 +39,7 @@ const BODY_BEGIN_MARKER_BYTES = Buffer.from(PEERS_BODY_BEGIN_MARKER, "utf8");
  * 封套侧已清洗的值再洗一次无副作用（幂等）。
  */
 function cardField(value: unknown): string | null {
-  if (typeof value !== "string" || value === "") return null;
+  if (typeof value !== "string" || value.trim() === "") return null;
   return sanitizePeersEnvelopeField(value);
 }
 
@@ -153,39 +148,29 @@ export function registerPeersRenderers(
       ];
       const source = cardSource(data);
       if (source !== null) headerParts.push(theme.fg("toolTitle", source));
-      if (data !== null && data.instanceId !== null) {
-        headerParts.push(theme.fg("dim", t("module.peers.renderer.instance", { id: data.instanceId })));
-      }
       const contentLines = [headerParts.join(theme.fg("dim", " · "))];
 
-      const lineWidth = Math.max(0, width - 6);
-      if (data !== null && data.sentAt !== null) {
-        const time = new Date(data.sentAt).toISOString();
-        contentLines.push(theme.fg("dim", truncateToWidth(t("module.peers.renderer.sentAt", { time }), lineWidth)));
-      }
-      const replyLine = data !== null ? cardReplyLine(data, t) : null;
-      if (replyLine !== null) contentLines.push(theme.fg("dim", truncateToWidth(replyLine, lineWidth)));
-      if (options.expanded && data !== null && data.cwd !== null) {
-        contentLines.push(theme.fg("dim", truncateToWidth(t("module.peers.renderer.cwd", { cwd: data.cwd }), lineWidth)));
-      }
-
-      if (body === null) {
-        // 异常路径 / 详情缺失：只给结构化字段 + 正文不可用；绝不渲染完整消息文本
-        contentLines.push("", theme.fg("warning", t("module.peers.renderer.bodyUnavailable")));
-      } else if (options.expanded) {
-        contentLines.push("", ...body.split("\n").map((line) => truncateToWidth(line, lineWidth)));
-      } else {
-        const bodyLines = body.split("\n");
-        contentLines.push(
-          "",
-          ...bodyLines.slice(0, BODY_PREVIEW_LINES).map((line) => theme.fg("dim", truncateToWidth(line, lineWidth))),
-        );
-        if (bodyLines.length > BODY_PREVIEW_LINES) {
-          contentLines.push(
-            theme.fg("muted", t("module.peers.renderer.moreLines", { count: bodyLines.length - BODY_PREVIEW_LINES })),
-          );
+      if (options.expanded) {
+        const lineWidth = Math.max(0, width - 6);
+        if (data !== null && data.instanceId !== null) {
+          contentLines.push(theme.fg("dim", truncateToWidth(t("module.peers.renderer.instance", { id: data.instanceId }), lineWidth)));
         }
-        contentLines.push(theme.fg("muted", keyHint("app.tools.expand", "to expand")));
+        if (data !== null && data.sentAt !== null) {
+          const time = new Date(data.sentAt).toISOString();
+          contentLines.push(theme.fg("dim", truncateToWidth(t("module.peers.renderer.sentAt", { time }), lineWidth)));
+        }
+        const replyLine = data !== null ? cardReplyLine(data, t) : null;
+        if (replyLine !== null) contentLines.push(theme.fg("dim", truncateToWidth(replyLine, lineWidth)));
+        if (data !== null && data.cwd !== null) {
+          contentLines.push(theme.fg("dim", truncateToWidth(t("module.peers.renderer.cwd", { cwd: data.cwd }), lineWidth)));
+        }
+
+        if (body === null) {
+          // 异常路径 / 详情缺失：只给结构化字段 + 正文不可用；绝不渲染完整消息文本
+          contentLines.push("", theme.fg("warning", t("module.peers.renderer.bodyUnavailable")));
+        } else {
+          contentLines.push("", ...body.split("\n").map((line) => truncateToWidth(line, lineWidth)));
+        }
       }
 
       const box = new Box(1, 1, (text: string) => theme.bg("customMessageBg", text));

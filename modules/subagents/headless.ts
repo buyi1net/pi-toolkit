@@ -152,6 +152,7 @@ export function parseHeadlessSurface(surface: string): number | null {
  * Windows 上 process.kill(pid, 0) 走 OpenProcess 探测,同样可用。
  */
 export function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;

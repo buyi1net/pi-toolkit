@@ -2,10 +2,12 @@ import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-ag
 import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
 import type { PublicAgentRecord, RuntimeRegistry } from "./registry.ts";
+import type { SubagentsTranslate } from "./messages/index.ts";
 
 export interface ListAgentsToolDeps {
   registry: RuntimeRegistry;
   getArtifactDir: (sessionDir: string, sessionId: string) => string;
+  readonly t?: SubagentsTranslate;
 }
 
 function publicStatus(record: PublicAgentRecord, live: ReturnType<RuntimeRegistry["get"]>): PublicAgentRecord["status"] {
@@ -38,6 +40,21 @@ const listAgentsOutputSchema = Type.Union([
   }),
 ]);
 
+function compactRenderText(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+function agentSummary(agents: readonly PublicAgentRecord[], theme: { fg(color: string, text: string): string }): string {
+  const counts = new Map<string, number>();
+  for (const agent of agents) counts.set(agent.status, (counts.get(agent.status) ?? 0) + 1);
+  const order = ["starting", "running", "waiting", "completed", "failed", "interrupted", "handed_off"];
+  const parts = order
+    .filter((status) => (counts.get(status) ?? 0) > 0)
+    .map((status) => `${counts.get(status)} ${status}`);
+  const icon = counts.get("failed") || counts.get("interrupted") ? theme.fg("warning", "•") : theme.fg("success", "✓");
+  return `${icon} ${parts.length > 0 ? parts.join(" · ") : "0 agents"}`;
+}
+
 export function registerListAgentsTool(pi: ExtensionAPI, deps: ListAgentsToolDeps): void {
   pi.registerTool({
     name: "list_agents",
@@ -46,9 +63,18 @@ export function registerListAgentsTool(pi: ExtensionAPI, deps: ListAgentsToolDep
     promptSnippet: "List visible agents, their status, task summary, and parent paths.",
     parameters: Type.Object({}),
     outputSchema: listAgentsOutputSchema,
-    renderResult(result, _opts, theme) {
-      const details = result.details as { agents?: PublicAgentRecord[] } | undefined;
-      const agents = details?.agents ?? [];
+    renderCall(_args, theme) {
+      return new Text("○ " + theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.list_agents.display") ?? "List subagents")), 0, 0);
+    },
+    renderResult(result, options, theme) {
+      const details = result.details as { agents?: PublicAgentRecord[]; code?: unknown; message?: unknown } | undefined;
+      if (!Array.isArray(details?.agents)) {
+        const contentText = result.content.find((part) => part.type === "text")?.text;
+        const text = compactRenderText(contentText ?? details?.message) || "list_agents failed";
+        return new Text(theme.fg("error", `✗ ${text}`), 0, 0);
+      }
+      const agents = details.agents;
+      if (!options.expanded) return new Text(agentSummary(agents, theme), 0, 0);
       if (agents.length === 0) return new Text(theme.fg("dim", "No agents are registered in this session."), 0, 0);
       return new Text(agents.map((agent) =>
         `${theme.fg("toolTitle", theme.bold(agent.task_name))} ${theme.fg("dim", `— ${agent.status}`)}`,

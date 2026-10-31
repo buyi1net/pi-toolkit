@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { readNameRegistry, registerName } from "./session.ts";
 import { validateCodexV2ModelSelection, validateCodexV2SpawnParams, createCodexV2LaunchError, type CodexV2SpawnParams } from "./protocol.ts";
@@ -8,6 +9,7 @@ import type { SubagentStartup } from "./startup.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
 import { detectDisplayModeAvailability, resolveDisplaySurface } from "./surface.ts";
 import { createParentUpdateQueue, createParentUpdateProducers } from "./parent-update-queue.ts";
+import type { SubagentsTranslate } from "./messages/index.ts";
 
 const DEFAULT_AGENT_TYPE = "general-purpose";
 
@@ -21,6 +23,7 @@ export interface SpawnAgentToolDeps {
   readonly resolveDisplayMode?: (ctx: ExtensionContext, requested?: unknown) => "auto" | "herdr" | "tmux";
   readonly getModelDirectory: (ctx: ExtensionContext) => ModelDirectory;
   readonly deliverTerminal?: DeliverTerminal;
+  readonly t?: SubagentsTranslate;
 }
 
 function parentTaskDepth(): number {
@@ -44,6 +47,10 @@ function displayError(mode: string): Record<string, unknown> {
   });
 }
 
+function compactRenderText(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
 /** Codex v2 的启动接缝：只负责协议映射、启动前校验和立即回执。 */
 export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDeps): void {
   pi.registerTool({
@@ -63,6 +70,47 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
       reasoning_effort: Type.String({ minLength: 1 }),
       display_mode: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("herdr"), Type.Literal("tmux")])),
     }),
+    renderCall(args, theme) {
+      const taskName = truncateToWidth(compactRenderText(args.task_name) || "(unknown)", 24, "…");
+      return new Text(
+        "○ " +
+          theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.spawn_agent.display") ?? "Spawn subagent")) +
+          theme.fg("dim", ` — ${taskName}`),
+        0,
+        0,
+      );
+    },
+    renderResult(result, options, theme) {
+      const details = result.details as {
+        task_name?: unknown;
+        status?: unknown;
+        message?: unknown;
+        code?: unknown;
+        resolved?: {
+          model?: unknown;
+          reasoning_effort?: unknown;
+          agent_type?: unknown;
+        };
+      } | undefined;
+      const fullTaskName = compactRenderText(details?.task_name) || "spawn_agent";
+      const taskName = options.expanded ? fullTaskName : truncateToWidth(fullTaskName, 24, "…");
+      const succeeded = details?.status === "running";
+      const fullAgentType = compactRenderText(details?.resolved?.agent_type) || "general-purpose";
+      const agentType = options.expanded ? fullAgentType : truncateToWidth(fullAgentType, 16, "…");
+      const icon = succeeded ? theme.fg("success", "✓") : theme.fg("error", "✗");
+      const headline = succeeded
+        ? `${taskName} started (${agentType})`
+        : `${taskName} — ${compactRenderText(details?.message) || compactRenderText(details?.code) || "launch failed"}`;
+      const summary = icon + " " + theme.fg("toolTitle", theme.bold(headline));
+      if (!options.expanded || !succeeded) return new Text(summary, 0, 0);
+      const model = compactRenderText(details?.resolved?.model);
+      const reasoning = compactRenderText(details?.resolved?.reasoning_effort);
+      const metadata = [
+        model ? `model: ${model}` : "",
+        reasoning ? `reasoning_effort: ${reasoning}` : "",
+      ].filter(Boolean).join("\n");
+      return new Text(metadata ? `${summary}\n${theme.fg("dim", metadata)}` : summary, 0, 0);
+    },
     async execute(_toolCallId, raw, _signal, _onUpdate, ctx) {
       if (parentTaskDepth() >= 2) {
         return errorResult({

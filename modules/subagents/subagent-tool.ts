@@ -1290,7 +1290,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       const task = typeof partialArgs.task === "string" ? partialArgs.task : "";
       const agent = agentName && name !== agentName ? theme.fg("dim", ` (${agentName})`) : "";
       const cwdHint = typeof partialArgs.cwd === "string" && partialArgs.cwd ? theme.fg("dim", ` in ${partialArgs.cwd}`) : "";
-      let text = "○ " + theme.fg("toolTitle", theme.bold(name)) + agent + cwdHint;
+      let text = "○ " + theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent.display") ?? "Run subagent")) + theme.fg("dim", ` — ${name}`) + agent + cwdHint;
       if (task) {
         const firstLine = task.split("\n").find((line: string) => line.trim()) ?? "";
         const preview = firstLine.length > 100 ? firstLine.slice(0, 100) + "…" : firstLine;

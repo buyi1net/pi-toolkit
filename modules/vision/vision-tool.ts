@@ -3,6 +3,8 @@
 // 信封里的原因说明走 i18n 键表（视觉桥负责本地化）。
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
+import type { Translator } from "../../i18n/index.ts";
 import type { VisionBridge } from "./vision-bridge.ts";
 
 const VisionQueryParams = {
@@ -27,7 +29,11 @@ interface VisionQueryDetails {
   backend?: string;
 }
 
-export function registerVisionQuery(pi: ExtensionAPI, visionBridge: VisionBridge): void {
+export function registerVisionQuery(
+  pi: ExtensionAPI,
+  visionBridge: VisionBridge,
+  t?: Translator,
+): void {
   pi.registerTool({
     name: "vision_query",
     executionMode: "sequential",
@@ -36,6 +42,13 @@ export function registerVisionQuery(pi: ExtensionAPI, visionBridge: VisionBridge
     promptSnippet: "Ask the auxiliary vision model a focused question about the most recent screenshot",
     promptGuidelines: ["Use after computer_screenshot when the current visual state needs a specific answer. Ask any task-relevant question; do not guess if the answer is uncertain. You can call this tool repeatedly for follow-up questions."],
     parameters: VisionQueryParams,
+    renderCall(_args, theme) {
+      return new Text(
+        "○ " + theme.fg("toolTitle", theme.bold(t?.("module.vision.tool.vision_query.display") ?? "Visual query")),
+        0,
+        0,
+      );
+    },
     async execute(
       _toolCallId: string,
       params: { question: string },

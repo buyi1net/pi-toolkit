@@ -398,6 +398,7 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
     refresh: () => runtime.refresh(),
     getInstanceId: () => heartbeat.instanceId(),
     label: context.t("module.peers.tool.list.label"),
+    t: context.t,
   });
 
   // 模型侧发送工具（工单 39 + 40 + 51）：寻址分两段可替换入口——注册层只读注册文件（命中即
@@ -435,6 +436,7 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
     rateGuard,
     now: moduleOptions.now,
     label: context.t("module.peers.tool.send.label"),
+    t: context.t,
   });
 
   // 外部消息卡片渲染器（工单 50）：context.t 读当前语言，语言切换后无需重新注册；

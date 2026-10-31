@@ -38,6 +38,14 @@ export function registerSubagentRenderers(
         const modelTag = stats?.model ? theme.fg("dim", ` (${stats.model})`) : "";
         const lateTag = late ? theme.fg("accent", ` ${t("module.subagents.widget.result.late")}`) : "";
         const title = `${icon} ${theme.fg("toolTitle", theme.bold(name))}${agentTag}${modelTag} ${theme.fg("dim", "—")} `;
+        const compactStatus = userClosed
+          ? t("module.subagents.widget.result.closedByUser")
+          : failed
+            ? (errorMessage
+              ? t("module.subagents.widget.result.failedProvider")
+              : t("module.subagents.widget.result.failedExit", { code: exitCode }))
+            : t("module.subagents.widget.result.completed");
+        const compactHeader = `${icon} ${theme.fg("toolTitle", theme.bold(name))} ${theme.fg(userClosed ? "warning" : failed ? "error" : "dim", compactStatus)}`;
 
         let header: string;
         if (userClosed) {
@@ -74,8 +82,8 @@ export function registerSubagentRenderers(
           .replace(`Sub-agent "${name}" failed (exit code ${exitCode}).\n\n`, "")
           .replace(new RegExp(`^Sub-agent "${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}" failed after ${elapsed} \\(provider/agent error — auto-retry exhausted\\)\\.\\n\\n`), "");
 
-        const contentLines = [header];
-        if (usageLine) contentLines.push(usageLine);
+        const contentLines = [options.expanded ? header : compactHeader];
+        if (options.expanded && usageLine) contentLines.push(usageLine);
         if (options.expanded) {
           if (summary) contentLines.push(...summary.split("\n").map((line) => truncateToWidth(line, Math.max(0, width - 6))));
           if (details.name || details.sessionFile) {
@@ -89,7 +97,6 @@ export function registerSubagentRenderers(
             contentLines.push(...previewLines.map((line) => theme.fg("dim", truncateToWidth(line, Math.max(0, width - 6)))));
             if (summary.split("\n").length > 5) contentLines.push(theme.fg("muted", `… ${summary.split("\n").length - 5} more lines`));
           }
-          contentLines.push(theme.fg("muted", keyHint("app.tools.expand", "to expand")));
         }
 
         const box = new Box(1, 1, bgFn);

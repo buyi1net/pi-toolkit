@@ -9,10 +9,12 @@
 // （英文），不随界面语言变化；人类界面的工具显示名走三语键表（mod.ts 装配时解析）。
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { deriveSessionShortId } from "../../shared/short-id.ts";
 import type { PeersDiscoverySnapshot, PeersSnapshotError } from "./api.ts";
 import { peerDisplayStatus, type PeerDisplayStatus } from "./discovery.ts";
+import type { PeersTranslate } from "./messages/index.ts";
 
 export interface PeersListToolDeps {
   /** 快照读出：与 peers.discovery 句柄同一 runtime 的 snapshot */
@@ -23,6 +25,8 @@ export interface PeersListToolDeps {
   readonly getInstanceId: () => string | null;
   /** 工具显示名（三语键表在装配时解析） */
   readonly label: string;
+  /** TUI 调用行展示译者 */
+  readonly t?: PeersTranslate;
 }
 
 /** 一条列表输出的结构化视图（details 载荷与文本行的同一数据） */
@@ -184,6 +188,23 @@ export function registerPeersListTool(pi: ExtensionAPI, deps: PeersListToolDeps)
     promptSnippet:
       "List local peer pi sessions (active/offline) with short id, session id, instance id, name, cwd, file path and status",
     parameters: Type.Object({}),
+    renderCall(_args, theme) {
+      return new Text(
+        "○ " +
+          theme.fg("toolTitle", theme.bold(deps.t?.("module.peers.tool.list.display") ?? "List local sessions")),
+        0,
+        0,
+      );
+    },
+    renderResult(result, options, theme) {
+      const details = result.details as PeersListOutput | undefined;
+      const online = details?.entries.online.length ?? 0;
+      const offline = details?.entries.offline.length ?? 0;
+      const summary = theme.fg("success", "✓") + " " + theme.fg("dim", `${online} online · ${offline} offline`);
+      if (!options.expanded) return new Text(summary, 0, 0);
+      const text = result.content.find((part) => part.type === "text")?.text ?? "";
+      return new Text(text || summary, 0, 0);
+    },
 
     async execute(
       _toolCallId: string,

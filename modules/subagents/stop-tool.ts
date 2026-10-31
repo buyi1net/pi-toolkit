@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
 import { debugLog } from "./diagnostics.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
+import type { SubagentsTranslate } from "./messages/index.ts";
 
 export interface SubagentStopToolDeps {
   /** 按名字解析本会话运行中的子代理(含空名/未知名/重名的明确错误)。 */
@@ -14,6 +15,7 @@ export interface SubagentStopToolDeps {
   settleTimeoutMs?: number;
   /** 持久成员终止(成员 watcher 不兑终态,由这里直接 kill + roster offline)。 */
   stopMember?: (running: RunningSubagent) => void;
+  readonly t?: SubagentsTranslate;
 }
 
 /**
@@ -62,7 +64,8 @@ export function registerSubagentStopTool(pi: ExtensionAPI, deps: SubagentStopToo
     renderCall(args, theme) {
       const target = typeof (args as any).name === "string" ? (args as any).name : "(unknown)";
       return new Text(
-        "○ " + theme.fg("toolTitle", theme.bold(target)) + theme.fg("dim", " — stop"),
+        "○ " + theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent_stop.display") ?? "Stop subagent")) +
+          theme.fg("dim", ` — ${target}`),
         0,
         0,
       );

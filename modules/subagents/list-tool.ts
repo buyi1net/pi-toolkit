@@ -12,6 +12,7 @@ import {
   type RoutingInheritanceCause,
   type RoutingModelOrigin,
 } from "./routing-snapshot.ts";
+import type { SubagentsTranslate } from "./messages/index.ts";
 
 export interface SubagentsListDeps {
   discoverAgents: () => ListedAgentDefinition[];
@@ -21,6 +22,7 @@ export interface SubagentsListDeps {
   registry?: RuntimeRegistry;
   readNameRegistry?: (artifactDir: string) => NameRegistry;
   readSubagentLoadout?: (sessionFile: string) => SubagentLoadout | null;
+  readonly t?: SubagentsTranslate;
 }
 
 export interface SessionSubagentView {
@@ -181,6 +183,10 @@ export function registerSubagentsListTool(
         ),
       ),
     }),
+
+    renderCall(_args, theme) {
+      return new Text("○ " + theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagents_list.display") ?? "List subagents")), 0, 0);
+    },
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const scope = params?.scope ?? "definitions";

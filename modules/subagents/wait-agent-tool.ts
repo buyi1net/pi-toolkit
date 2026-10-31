@@ -1,6 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { createParentUpdateQueue, type ParentSessionUpdate } from "./parent-update-queue.ts";
+import type { SubagentsTranslate } from "./messages/index.ts";
 
 /** wait_agent 的公开时限边界；工具 schema 与运行时校验共用这组值。 */
 export const WAIT_AGENT_DEFAULT_TIMEOUT_MS = 30_000;
@@ -11,6 +13,7 @@ export interface WaitAgentToolDeps {
   readonly getArtifactDir: (sessionDir: string, sessionId: string) => string;
   /** 测试接缝；生产默认短轮询以观察 watcher 写入的持久化队列。 */
   readonly pollIntervalMs?: number;
+  readonly t?: SubagentsTranslate;
 }
 
 interface WaitAgentResult {
@@ -45,6 +48,22 @@ function projectUpdate(update: ParentSessionUpdate): NonNullable<WaitAgentResult
     status: update.status,
     summary: update.summary,
   };
+}
+
+function compactRenderText(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+function collapsedRenderText(value: unknown, maxWidth: number): string {
+  return truncateToWidth(compactRenderText(value), maxWidth, "…");
+}
+
+function updateIcon(status: string, theme: { fg(color: string, text: string): string }): string {
+  if (status === "completed") return theme.fg("success", "✓");
+  if (status === "failed") return theme.fg("error", "✗");
+  if (status === "interrupted") return theme.fg("warning", "Ⅱ");
+  if (status === "running" || status === "starting") return theme.fg("accent", "●");
+  return theme.fg("dim", "•");
 }
 
 function waitForUpdate(
@@ -103,6 +122,41 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
         maximum: WAIT_AGENT_MAX_TIMEOUT_MS,
       })),
     }),
+    renderCall(_args, theme) {
+      return new Text(
+        "○ " +
+          theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.wait_agent.display") ?? "Wait for subagent")),
+        0,
+        0,
+      );
+    },
+    renderResult(result, options, theme) {
+      const details = result.details as Partial<WaitAgentResult> & {
+        code?: unknown;
+      } | undefined;
+      const update = details?.update;
+      if (!update) {
+        const fullMessage = compactRenderText(details?.message) || "No update";
+        const message = options.expanded ? fullMessage : collapsedRenderText(fullMessage, 48);
+        const cancelled = details?.code === "cancelled";
+        const icon = cancelled ? theme.fg("warning", "Ⅱ") : theme.fg("dim", "•");
+        return new Text(icon + " " + theme.fg("dim", message), 0, 0);
+      }
+      const fullTaskName = compactRenderText(update.task_name) || "subagent";
+      const fullSummary = compactRenderText(update.summary);
+      const taskName = options.expanded ? fullTaskName : collapsedRenderText(fullTaskName, 20);
+      const status = compactRenderText(update.status) || "unknown";
+      const summary = options.expanded ? fullSummary : collapsedRenderText(fullSummary, 28);
+      const headline = `${taskName} — ${status}${summary ? `: ${summary}` : ""}`;
+      const line = updateIcon(status, theme) + " " + theme.fg("toolTitle", theme.bold(headline));
+      if (!options.expanded) return new Text(line, 0, 0);
+      const metadata = [
+        `kind: ${compactRenderText(update.kind)}`,
+        `agent: ${compactRenderText(update.agent_id)}`,
+        `update: ${compactRenderText(update.update_id)}`,
+      ].join("\n");
+      return new Text(`${line}\n${theme.fg("dim", metadata)}`, 0, 0);
+    },
     async execute(_toolCallId, raw, signal, _onUpdate, ctx: ExtensionContext) {
       const requested = (raw as { timeout_ms?: unknown } | undefined)?.timeout_ms;
       const timeoutMs = requested === undefined ? WAIT_AGENT_DEFAULT_TIMEOUT_MS : requested;

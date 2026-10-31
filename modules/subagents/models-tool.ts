@@ -1,4 +1,5 @@
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
   buildModelDirectory,
@@ -10,6 +11,7 @@ import type { ModelHealthMap } from "./model-health.ts";
 import type { ModelTier } from "./routing.ts";
 import type { ListedAgentDefinition } from "./agents.ts";
 import { detectDisplayModeAvailability, type DisplayModeAvailability } from "./surface.ts";
+import type { SubagentsTranslate } from "./messages/index.ts";
 
 export interface AgentTypeSummary {
   readonly name: string;
@@ -39,6 +41,7 @@ export interface SubagentModelsToolDeps {
   readonly getDisplayModes?: () => readonly DisplayModeAvailability[];
   /** 可选的宿主共享目录快照；spawn 与 models 必须复用同一接缝。 */
   readonly getModelDirectory?: (ctx: ExtensionContext) => SubagentModelsResult;
+  readonly t?: SubagentsTranslate;
 }
 
 /** 组合模型目录、健康摘要和显示模式，保持三个来源读口独立。 */
@@ -62,6 +65,12 @@ function currentModelFromContext(ctx: ExtensionContext): CatalogModel | null {
   const model = ctx.model;
   if (!model) return null;
   return model as unknown as CatalogModel;
+}
+
+function modelRenderLine(model: SubagentModelsResult["models"][number]): string {
+  const route = `${model.provider}/${model.id}`.replace(/\s+/g, " ");
+  const reasoning = model.reasoning_effort.length > 0 ? model.reasoning_effort.join(", ") : "none";
+  return `${route} — reasoning: ${reasoning}`;
 }
 
 // 与 SubagentModelsResult 镜像：目录只暴露当前 /model 可用模型的可读身份；
@@ -114,6 +123,23 @@ export function registerSubagentModelsTool(
       "Read the current available model directory before choosing a model for spawn_agent.",
     parameters: Type.Object({}),
     outputSchema: subagentModelsOutputSchema,
+    renderCall(_args, theme) {
+      return new Text(
+        "○ " +
+          theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent_models.display") ?? "Read available models")),
+        0,
+        0,
+      );
+    },
+    renderResult(result, options, theme) {
+      const details = result.details as Partial<SubagentModelsResult> | undefined;
+      const models = Array.isArray(details?.models) ? details.models : [];
+      const summary = `${models.length} available model${models.length === 1 ? "" : "s"}`;
+      const header = theme.fg("success", "✓") + " " + theme.fg("dim", summary);
+      if (!options.expanded) return new Text(header, 0, 0);
+      const rows = models.map((model) => modelRenderLine(model)).join("\n");
+      return new Text(rows ? `${header}\n${rows}` : header, 0, 0);
+    },
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       const cwd = ctx.cwd ?? process.cwd();
       const pools = deps.getPools(cwd);

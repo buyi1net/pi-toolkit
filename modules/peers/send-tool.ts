@@ -6,12 +6,16 @@
 // 只做参数形状与结果呈现，不含判定逻辑。
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { describePeersReason, deliverPeersMessage, type PeersSendDeps, type PeersSendReport, type PeersTargetStatusSnapshot } from "./messaging.ts";
+import type { PeersTranslate } from "./messages/index.ts";
 
 export interface PeersSendToolDeps extends PeersSendDeps {
   /** 工具显示名（三语键表在装配时解析） */
   readonly label: string;
+  /** TUI 调用行展示译者 */
+  readonly t?: PeersTranslate;
 }
 
 /** 寻址时刻对端状态快照的模型可见文案（新增文案用英文）：注册候选给活性 / 活动 /
@@ -48,6 +52,28 @@ function formatSendReport(report: PeersSendReport, target: string): string {
     return `${head}: NOT DELIVERED (rejected: ${reasonText}${stageText}).${statusText} ${report.detail}`;
   }
   return `${head}: DELIVERY FAILED (error: ${reasonText}${stageText}).${statusText} ${report.detail}`;
+}
+
+/** 把折叠态动态字段压成单行，完整回执仍保留给展开态。 */
+function compactRenderText(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+/** 把发送回执折成只含目标与结果的 UI 摘要。 */
+function sendRenderSummary(
+  result: { details?: unknown },
+  theme: { fg(color: string, text: string): string; bold(text: string): string },
+): string {
+  const details = result.details as (Partial<PeersSendReport> & { target?: unknown }) | undefined;
+  const target = compactRenderText(details?.target) || "(unknown)";
+  if (details?.result === "accepted") {
+    return `${theme.fg("success", "✓")} ${theme.fg("toolTitle", theme.bold(`delivered ${target}`))}`;
+  }
+  const reason = typeof details?.reason === "string"
+    ? describePeersReason(details.reason as Parameters<typeof describePeersReason>[0])
+    : compactRenderText(details?.detail) || compactRenderText(details?.result) || "delivery failed";
+  const icon = details?.result === "rejected" ? theme.fg("warning", "•") : theme.fg("error", "✗");
+  return `${icon} ${theme.fg("toolTitle", theme.bold(`${target} — ${truncateToWidth(reason, 64, "…")}`))}`;
 }
 
 export function registerPeersSendTool(pi: ExtensionAPI, deps: PeersSendToolDeps): void {
@@ -88,6 +114,22 @@ export function registerPeersSendTool(pi: ExtensionAPI, deps: PeersSendToolDeps)
         }),
       ),
     }),
+    renderCall(args, theme) {
+      const rawTarget = typeof args.target === "string" ? args.target : "";
+      const target = rawTarget.trim() || "(target)";
+      return new Text(
+        "○ " +
+          theme.fg("toolTitle", theme.bold(deps.t?.("module.peers.tool.send.display", { target }) ?? `Message ${target}`)),
+        0,
+        0,
+      );
+    },
+    renderResult(result, options, theme) {
+      const summary = sendRenderSummary(result, theme);
+      if (!options.expanded) return new Text(summary, 0, 0);
+      const text = result.content.find((part) => part.type === "text")?.text ?? "";
+      return new Text(text ? `${summary}\n${text}` : summary, 0, 0);
+    },
 
     async execute(
       _toolCallId: string,
