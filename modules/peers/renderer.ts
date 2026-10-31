@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, MouseRegion, Text, truncateToWidth, stripTerminalSequences, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { deriveSessionShortId } from "../../shared/short-id.ts";
-import { expandedToolCardIds as expandedPeersMessageIds, formatToolCardLine } from "../../kit/tool-card.ts";
+import { expandedToolCardIds as expandedPeersMessageIds, formatToolCardLine, cardBackground } from "../../kit/tool-card.ts";
 import { PEERS_BODY_BEGIN_MARKER, PEERS_MESSAGE_CUSTOM_TYPE, sanitizePeersEnvelopeField, type PeersMessageDetails } from "./messaging.ts";
 import { peersTableTranslator, type PeersTranslate } from "./messages/index.ts";
 
@@ -136,7 +136,7 @@ export function registerPeersRenderers(
           }
         }
 
-        const box = new Box(1, 1, (text: string) => theme.bg("toolSuccessBg", text));
+        const box = new Box(1, 1, cardBackground(theme, "toolSuccessBg"));
         box.addChild(new Text(contentLines.join("\n"), 0, 0));
         return ["", ...box.render(width)];
       },

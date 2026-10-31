@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { renameSync, writeFileSync } from "node:fs";
-import { compactRenderText, renderToolCardCall, renderToolCardResult, toolCardText } from "../../kit/tool-card.ts";
+import { compactRenderText, renderToolCardCall, renderToolCardResult, toolCardText, cardBackground } from "../../kit/tool-card.ts";
 
 function writeSidecar(path: string, data: string): void {
   const tmp = `${path}.${process.pid}.tmp`;
@@ -114,7 +114,7 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setWidget(
       "subagent-tools",
       (_tui: any, theme: any) => {
-        const box = new Box(1, 0, (text: string) => theme.bg("toolSuccessBg", text));
+        const box = new Box(1, 0, cardBackground(theme, "toolSuccessBg"));
 
         const label = subagentAgent || subagentName;
         const agentTag = label ? theme.bold(theme.fg("accent", `[${label}]`)) : "";

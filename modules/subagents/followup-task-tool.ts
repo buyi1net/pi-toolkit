@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
+import { toolCardFailureReason, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import type { RuntimeRegistry } from "./registry.ts";
 import type { SubagentStartup } from "./startup.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
@@ -59,7 +59,7 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
       }
       const text = result.content[0]?.type === "text" ? result.content[0].text : "Follow-up failed";
       return renderToolCardResult(
-        { title: t?.("module.subagents.tool.followup_task.display") ?? "Follow-up task", object: target, status: text },
+        { title: t?.("module.subagents.tool.followup_task.display") ?? "Follow-up task", object: target, status: toolCardFailureReason(text, result.details), details: options.expanded ? [text] : [] },
         theme,
         options,
         context,

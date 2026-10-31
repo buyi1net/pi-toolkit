@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
+import { toolCardFailureReason, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import { readNameRegistry } from "./session.ts";
 import type { RuntimeRegistry } from "./registry.ts";
 import type { SubagentsTranslate } from "./messages/index.ts";
@@ -87,6 +87,11 @@ export function resolveLifecycleTarget(
     const match = idMatches[0]!;
     return { target: { name: match.name, agentId: match.agentId, canonicalTaskName: match.canonicalTaskName } };
   }
+  const runningMatches = matches.filter((entry) => entry.running);
+  if (matches.length > 1 && runningMatches.length === 1) {
+    const match = runningMatches[0]!;
+    return { target: { name: match.name, agentId: match.agentId, canonicalTaskName: match.canonicalTaskName } };
+  }
   if (matches.length > 1) {
     return { error: errorResult("target_ambiguous", `Local task name "${target}" is ambiguous.`, { target, candidates: matches.map((entry) => ({ agent_id: entry.agentId, canonical_task_name: entry.canonicalTaskName })) }) };
   }
@@ -139,9 +144,9 @@ export function registerSendMessageTool(pi: ExtensionAPI, deps: SendMessageToolD
       return renderToolCardResult(
         {
           title: deps.t?.("module.subagents.tool.send_message.display") ?? "Message subagent",
-          object: typeof details?.task_name === "string" ? details.task_name : undefined,
-          status: success ? deps.t?.("module.subagents.tool.send_message.result.submitted") ?? "Message submitted" : text,
-          details: options.expanded && success ? [text] : [],
+          object: typeof details?.task_name === "string" ? details.task_name : typeof details?.target === "string" ? details.target : undefined,
+          status: success ? deps.t?.("module.subagents.tool.send_message.result.submitted") ?? "Message submitted" : toolCardFailureReason(text, details),
+          details: options.expanded ? [text] : [],
         },
         theme,
         options,
@@ -154,7 +159,7 @@ export function registerSendMessageTool(pi: ExtensionAPI, deps: SendMessageToolD
       const resolved = resolveLifecycleTarget(deps, ctx, params.target);
       if ("error" in resolved) return resolved.error;
       const target = resolved.target;
-      if (!target.agentId) return errorResult("target_not_receivable", `Subagent "${target.name}" is not running and cannot receive an immediate message.`, { target: params.target, task_name: target.name });
+      if (!target.agentId || !deps.registry.has(target.agentId)) return errorResult("target_not_receivable", `Subagent "${target.name}" is not running and cannot receive an immediate message.`, { target: params.target, task_name: target.name });
       const delivered = deps.handleSubagentSteer({ name: target.name, message }) as any;
       if (delivered?.details?.error) return errorResult("target_not_receivable", String(delivered.details.error), { target: params.target, agent_id: target.agentId, task_name: target.name });
       const submissionId = `message-${randomUUID()}`;

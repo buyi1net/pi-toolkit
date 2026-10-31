@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
+import { toolCardFailureReason, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import type { RuntimeRegistry } from "./registry.ts";
 import type { RunningSubagent } from "./types.ts";
 import {
@@ -50,8 +50,8 @@ export function registerInterruptAgentTool(pi: ExtensionAPI, deps: InterruptAgen
         {
           title: deps.t?.("module.subagents.tool.interrupt_agent.display") ?? "Interrupt subagent",
           object: typeof details?.task_name === "string" ? details.task_name : undefined,
-          status: success ? deps.t?.("module.subagents.tool.interrupt_agent.result.interrupted") ?? "Interrupted" : text || "Interrupt failed",
-          details: options.expanded && success && text ? [text] : [],
+          status: success ? deps.t?.("module.subagents.tool.interrupt_agent.result.interrupted") ?? "Interrupted" : toolCardFailureReason(text || "Interrupt failed", details),
+          details: options.expanded && text ? [text] : [],
         },
         theme,
         options,

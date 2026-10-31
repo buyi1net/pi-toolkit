@@ -25,6 +25,23 @@ export interface ToolCardContent {
   readonly details?: readonly string[];
 }
 
+type BackgroundToken = Parameters<Theme["bg"]>[0];
+
+/**
+ * 卡片背景函数：内层文本（如 truncateToWidth 的省略号）带完整重置码 \x1b[0m 时，
+ * 背景会在该处中断，行尾露出终端底色。每个重置码后重新铺回背景。
+ */
+export function cardBackground(theme: Theme, token: BackgroundToken): (text: string) => string {
+  if (typeof (theme as Theme & { bg?: unknown }).bg !== "function") return (text) => text;
+  return (text) => {
+    const wrapped = theme.bg(token, "\u0000");
+    const at = wrapped.indexOf("\u0000");
+    if (at <= 0) return theme.bg(token, text);
+    const start = wrapped.slice(0, at);
+    return theme.bg(token, text.replace(/\x1b\[(?:0|49)?m/g, (reset) => reset + start));
+  };
+}
+
 function statusToken(
   context: ToolCardRenderContext | undefined,
   fallback: ToolCardStatus,
@@ -69,6 +86,13 @@ export function compactSegment(value: string | undefined, width: number): string
   return text ? truncateToWidth(text, width, "…") : undefined;
 }
 
+/** 失败结果折叠态的单行原因：优先结构化 code，其次文本首行；完整文本放展开区。 */
+export function toolCardFailureReason(text: string, details?: unknown, maxWidth = 60): string {
+  const code = (details as { code?: unknown } | undefined)?.code;
+  const raw = typeof code === "string" && code !== "" ? code : text;
+  return truncateToWidth(compactRenderText(raw), maxWidth, "…");
+}
+
 export interface ToolCardTextPart {
   readonly type?: unknown;
   readonly text?: unknown;
@@ -97,9 +121,7 @@ function cardBox(
 ): Component {
   const lines = [formatToolCardLine(content, theme, context?.isError === true || fallbackStatus === "error")];
   if (expanded && content.details && content.details.length > 0) lines.push(...content.details);
-  const bg = typeof (theme as Theme & { bg?: unknown }).bg === "function"
-    ? (text: string) => theme.bg(statusToken(context, fallbackStatus), text)
-    : (text: string) => text;
+  const bg = cardBackground(theme, statusToken(context, fallbackStatus));
   const box = new Box(context?.outputPad ?? 1, 1, bg);
   box.addChild(new Text(lines.join("\n"), 0, 0));
   return box;
@@ -121,7 +143,9 @@ export function renderToolCardCall(
   theme: Theme,
   context?: ToolCardRenderContext,
 ): Component {
-  if (context?.executionStarted) return new Text("", 0, 0);
+  // 执行已开始，或结果已落定（刷新/回放历史时 executionStarted 为 false，isPartial 为 false）：
+  // 结果卡片已经承载信息，调用行不再占一行。
+  if (context?.executionStarted || context?.isPartial === false) return new Text("", 0, 0);
   return cardBox(content, theme, context, "pending", false);
 }
 

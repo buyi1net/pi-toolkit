@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, MouseRegion, Text, truncateToWidth, stripTerminalSequences, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
-import { expandedToolCardIds as expandedCardIds, formatToolCardLine } from "../../kit/tool-card.ts";
+import { expandedToolCardIds as expandedCardIds, formatToolCardLine, cardBackground } from "../../kit/tool-card.ts";
 import type { SessionStats } from "./session.ts";
 import { contextWindowFor, formatContextUsage, formatElapsed, formatUsageSegments } from "./display.ts";
 import { subagentsTableTranslator, type SubagentsTranslate } from "./messages/index.ts";
@@ -100,7 +100,7 @@ export function registerSubagentRenderers(
           }
         }
 
-        const box = new Box(1, 1, (text: string) => theme.bg(bgToken, text));
+        const box = new Box(1, 1, cardBackground(theme, bgToken));
         box.addChild(new Text(contentLines.join("\n"), 0, 0));
         return ["", ...box.render(width)];
       },
@@ -152,7 +152,7 @@ export function registerSubagentRenderers(
         }
 
         const bgToken = anyFailed ? "toolErrorBg" : "toolSuccessBg";
-        const box = new Box(1, 1, (text: string) => theme.bg(bgToken, text));
+        const box = new Box(1, 1, cardBackground(theme, bgToken));
         box.addChild(new Text(contentLines.join("\n"), 0, 0));
         return ["", ...box.render(width)];
       },
@@ -186,7 +186,7 @@ export function registerSubagentRenderers(
           }
         }
 
-        const box = new Box(1, 1, (text: string) => theme.bg(stalled ? "toolErrorBg" : "toolSuccessBg", text));
+        const box = new Box(1, 1, cardBackground(theme, stalled ? "toolErrorBg" : "toolSuccessBg"));
         box.addChild(new Text(contentLines.join("\n"), 0, 0));
         return ["", ...box.render(width)];
       },
@@ -219,7 +219,7 @@ export function registerSubagentRenderers(
           contentLines.push("", ...questionLines, "", theme.fg("dim", `Reply: send_message({ target: "${name}", message: "…" })`));
         }
 
-        const box = new Box(1, 1, (text: string) => theme.bg("toolPendingBg", text));
+        const box = new Box(1, 1, cardBackground(theme, "toolPendingBg"));
         box.addChild(new Text(contentLines.join("\n"), 0, 0));
         return ["", ...box.render(width)];
       },
