@@ -124,7 +124,7 @@ function formatEntryLine(entry: PeersListEntryView, truncated: boolean): string 
     `cwd ${entry.cwd !== null && entry.cwd !== "" ? entry.cwd : "(unknown)"}`,
     `file ${file}`,
   ];
-  if (entry.ownInstance) segments.push("you");
+  if (entry.ownInstance) segments.push("you (self-delivery not supported)");
   else if (entry.self) segments.push("you (another instance of this session)");
   if (entry.shortId === null) segments.push("no valid short id");
   if (entry.duplicateShortId) segments.push("duplicate short id");
@@ -174,6 +174,7 @@ export function registerPeersListTool(pi: ExtensionAPI, deps: PeersListToolDeps)
       "Two sections: ACTIVE sessions (running instances, with liveness/activity status) and OFFLINE sessions (recently exited, discovered from session files). " +
       "Each entry carries: 6-char short id (like #62nvbt), full session id, instance id (empty for offline), name, working directory, session file path and status. " +
       "Entries are annotated for: yourself, multiple instances of one session, duplicate short ids, missing session files, and list truncation. " +
+      "The entry marked you is informational and cannot be used as a peers_send target. " +
       "An offline entry never makes a target ambiguous: a target matching both live and offline sessions is delivered to the live instance, and only multiple live instances refuse as ambiguous-address. ",
     promptSnippet:
       "List local peer pi sessions (active/offline) with short id, session id, instance id, name, cwd, file path and status",

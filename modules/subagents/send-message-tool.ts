@@ -159,9 +159,9 @@ export function registerSendMessageTool(pi: ExtensionAPI, deps: SendMessageToolD
       const resolved = resolveLifecycleTarget(deps, ctx, params.target);
       if ("error" in resolved) return resolved.error;
       const target = resolved.target;
-      if (!target.agentId || !deps.registry.has(target.agentId)) return errorResult("target_not_receivable", `Subagent "${target.name}" is not running and cannot receive an immediate message.`, { target: params.target, task_name: target.name });
+      if (!target.agentId || !deps.registry.has(target.agentId)) return errorResult("target_not_receivable", `Subagent "${target.name}" is not running and cannot receive an immediate message. If its session context is recoverable, use followup_task to start a new round.`, { target: params.target, task_name: target.name });
       const delivered = deps.handleSubagentSteer({ name: target.name, message }) as any;
-      if (delivered?.details?.error) return errorResult("target_not_receivable", String(delivered.details.error), { target: params.target, agent_id: target.agentId, task_name: target.name });
+      if (delivered?.details?.error) return errorResult("target_not_receivable", `${String(delivered.details.error)} If its session context is recoverable, use followup_task to start a new round.`, { target: params.target, agent_id: target.agentId, task_name: target.name });
       const submissionId = `message-${randomUUID()}`;
       const update = lifecycleQueue(deps, ctx).message({
         agent_id: target.agentId,

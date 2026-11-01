@@ -40,7 +40,10 @@ function formatSendReport(report: PeersSendReport, target: string): string {
       ? ` Target status at resolution: ${formatTargetStatus(report.targetStatus)}.`
       : "";
   if (report.result === "rejected") {
-    return `${head}: NOT DELIVERED (rejected: ${reasonText}${stageText}).${statusText} ${report.detail}`;
+    const recoveryHint = report.reason === "self-delivery"
+      ? " Choose another peer target from peers_list; this session cannot send a peers message to itself."
+      : "";
+    return `${head}: NOT DELIVERED (rejected: ${reasonText}${stageText}).${statusText} ${report.detail}${recoveryHint}`;
   }
   return `${head}: DELIVERY FAILED (error: ${reasonText}${stageText}).${statusText} ${report.detail}`;
 }

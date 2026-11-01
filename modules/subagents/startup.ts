@@ -478,11 +478,19 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
 
     const currentAgent = process.env.PI_SUBAGENT_AGENT;
     if (params.agent && currentAgent && params.agent === currentAgent) {
+      const alternativeAgent = currentAgent === "general-purpose"
+        ? "explore"
+        : currentAgent === "explore"
+          ? "general-purpose"
+          : null;
+      const alternativeHint = alternativeAgent
+        ? ` If a separate nested task is needed, choose the other available agent type "${alternativeAgent}" explicitly.`
+        : "";
       return {
         kind: "error",
         error:
           `You are the ${currentAgent} agent — do not start another ${currentAgent}. ` +
-          `You were spawned to do this work yourself. Complete the task directly.`,
+          `You were spawned to do this work yourself. Complete the task directly.${alternativeHint}`,
         details: { error: "self-spawn blocked" },
       };
     }
