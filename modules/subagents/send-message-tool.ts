@@ -22,6 +22,7 @@ export interface Target {
   name: string;
   agentId: string;
   canonicalTaskName: string;
+  status: string | null;
 }
 
 function canonicalParent(): string {
@@ -37,17 +38,19 @@ function errorResult(code: string, message: string, details: Record<string, unkn
   return { content: [{ type: "text" as const, text: JSON.stringify(error) }], details: error, isError: true };
 }
 
-function targetNames(deps: SendMessageToolDeps, ctx: ToolContext): Array<{ name: string; agentId: string; canonicalTaskName: string; running: boolean }> {
+function targetNames(deps: SendMessageToolDeps, ctx: ToolContext): Array<{ name: string; agentId: string; canonicalTaskName: string; status: string | null; updatedAt: number; running: boolean }> {
   const live = deps.registry.list().map((entry) => ({
     name: entry.name,
     agentId: entry.id,
     canonicalTaskName: entry.canonicalTaskName ?? canonicalFor(entry.name),
+    status: entry.publicStatus ?? (entry.waitMode === "recovered" ? "waiting" : "running"),
+    updatedAt: entry.startTime,
     running: true,
   }));
   const artifactDir = deps.getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId());
   const publicRecords = deps.registry.listPublic(deps.registry.publicPathFor(artifactDir));
-  const historical = publicRecords.map((record) => ({ name: record.task_name, agentId: record.agent_id, canonicalTaskName: record.canonical_task_name, running: false }));
-  const entries = historical.length > 0 ? historical : Object.keys(readNameRegistry(artifactDir)).map((name) => ({ name, agentId: "", canonicalTaskName: canonicalFor(name), running: false }));
+  const historical = publicRecords.map((record) => ({ name: record.task_name, agentId: record.agent_id, canonicalTaskName: record.canonical_task_name, status: record.status, updatedAt: record.updated_at, running: false }));
+  const entries = historical.length > 0 ? historical : Object.keys(readNameRegistry(artifactDir)).map((name) => ({ name, agentId: "", canonicalTaskName: canonicalFor(name), status: null, updatedAt: 0, running: false }));
   const seen = new Set<string>();
   return [...entries, ...live].filter((entry) => {
     const key = `${entry.agentId}:${entry.canonicalTaskName}`;
@@ -61,42 +64,47 @@ export function resolveLifecycleTarget(
   deps: SendMessageToolDeps,
   ctx: ToolContext,
   rawTarget: string,
+  options: { preferLatestHistorical?: boolean } = {},
 ): { target: Target } | { error: ReturnType<typeof errorResult> } {
   const target = rawTarget.trim();
   if (!target) return { error: errorResult("target_not_found", "A non-empty target is required.", { target: rawTarget }) };
   const liveById = deps.registry.get(target);
-  if (liveById) return { target: { name: liveById.name, agentId: liveById.id, canonicalTaskName: canonicalFor(liveById.name) } };
+  if (liveById) return { target: { name: liveById.name, agentId: liveById.id, canonicalTaskName: liveById.canonicalTaskName ?? canonicalFor(liveById.name), status: liveById.publicStatus ?? "running" } };
 
   const entries = targetNames(deps, ctx);
   if (target.startsWith("/")) {
     const matches = entries.filter((entry) => entry.canonicalTaskName === target);
 
     if (matches.length === 1) {
-      return { target: { name: matches[0]!.name, agentId: matches[0]!.agentId, canonicalTaskName: matches[0]!.canonicalTaskName } };
+      return { target: { name: matches[0]!.name, agentId: matches[0]!.agentId, canonicalTaskName: matches[0]!.canonicalTaskName, status: matches[0]!.status } };
     }
     if (matches.length > 1) return { error: errorResult("target_ambiguous", `Canonical task path "${target}" matches multiple targets.`, { target, candidates: matches.map((entry) => entry.name) }) };
     return { error: errorResult("target_not_found", `No subagent matches canonical task path "${target}".`, { target }) };
   }
 
-  const matches = entries.filter((entry) => entry.name === target);
+  const matches = entries.filter((entry) => entry.name === target && entry.status !== "closed");
   const idMatches = entries.filter((entry) => entry.agentId === target);
   if (idMatches.length > 1) {
     return { error: errorResult("target_ambiguous", `Agent id "${target}" matches multiple historical runs.`, { target, candidates: idMatches.map((entry) => ({ agent_id: entry.agentId, canonical_task_name: entry.canonicalTaskName })) }) };
   }
   if (idMatches.length === 1) {
     const match = idMatches[0]!;
-    return { target: { name: match.name, agentId: match.agentId, canonicalTaskName: match.canonicalTaskName } };
+    return { target: { name: match.name, agentId: match.agentId, canonicalTaskName: match.canonicalTaskName, status: match.status } };
   }
   const runningMatches = matches.filter((entry) => entry.running);
   if (matches.length > 1 && runningMatches.length === 1) {
     const match = runningMatches[0]!;
-    return { target: { name: match.name, agentId: match.agentId, canonicalTaskName: match.canonicalTaskName } };
+    return { target: { name: match.name, agentId: match.agentId, canonicalTaskName: match.canonicalTaskName, status: match.status } };
   }
   if (matches.length > 1) {
+    if (options.preferLatestHistorical && runningMatches.length === 0) {
+      const match = [...matches].sort((left, right) => right.updatedAt - left.updatedAt)[0]!;
+      return { target: { name: match.name, agentId: match.agentId, canonicalTaskName: match.canonicalTaskName, status: match.status } };
+    }
     return { error: errorResult("target_ambiguous", `Local task name "${target}" is ambiguous.`, { target, candidates: matches.map((entry) => ({ agent_id: entry.agentId, canonical_task_name: entry.canonicalTaskName })) }) };
   }
   if (matches.length === 1) {
-    return { target: { name: target, agentId: matches[0]!.agentId, canonicalTaskName: matches[0]!.canonicalTaskName } };
+    return { target: { name: target, agentId: matches[0]!.agentId, canonicalTaskName: matches[0]!.canonicalTaskName, status: matches[0]!.status } };
   }
   return { error: errorResult("target_not_found", `No subagent matches target "${target}".`, {
     target,
@@ -159,9 +167,19 @@ export function registerSendMessageTool(pi: ExtensionAPI, deps: SendMessageToolD
       const resolved = resolveLifecycleTarget(deps, ctx, params.target);
       if ("error" in resolved) return resolved.error;
       const target = resolved.target;
-      if (!target.agentId || !deps.registry.has(target.agentId)) return errorResult("target_not_receivable", `Subagent "${target.name}" is not running and cannot receive an immediate message. If its session context is recoverable, use followup_task to start a new round.`, { target: params.target, task_name: target.name });
+      if (!target.agentId || !deps.registry.has(target.agentId)) {
+        const status = target.status;
+        const message = status === "waiting"
+          ? `Subagent "${target.name}" had its current round interrupted and is waiting; immediate messages cannot be delivered. Use followup_task with this message to start the next round.`
+          : status === "closed"
+            ? `Subagent "${target.name}" is closed; if you need to continue, spawn a new subagent.`
+          : status && ["completed", "failed", "interrupted"].includes(status)
+            ? `Subagent "${target.name}" has already finished (${status}) and cannot receive an immediate message. Use followup_task to start a new round if its context is recoverable.`
+            : `Subagent "${target.name}" is not running and cannot receive an immediate message. If its session context is recoverable, use followup_task to start a new round.`;
+        return errorResult(status === "closed" ? "agent_closed" : "target_not_receivable", message, { target: params.target, task_name: target.name, status: status ?? null });
+      }
       const delivered = deps.handleSubagentSteer({ name: target.name, message }) as any;
-      if (delivered?.details?.error) return errorResult("target_not_receivable", `${String(delivered.details.error)} If its session context is recoverable, use followup_task to start a new round.`, { target: params.target, agent_id: target.agentId, task_name: target.name });
+      if (delivered?.details?.error) return errorResult("target_not_receivable", `${String(delivered.details.error)} If its session context is recoverable, use followup_task to start a new round.`, { target: params.target, agent_id: target.agentId, task_name: target.name, status: target.status ?? null });
       const submissionId = `message-${randomUUID()}`;
       const update = lifecycleQueue(deps, ctx).message({
         agent_id: target.agentId,

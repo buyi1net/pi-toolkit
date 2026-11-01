@@ -58,13 +58,13 @@ export function validateCodexV2SpawnParams(
     return { ok: false, errors: [{ code: "invalid_params", field: "params", message: "parameters must be an object" }] };
   }
   const input = value as Record<string, unknown>;
-  for (const field of ["task_name", "message", "model", "reasoning_effort"] as const) {
+  for (const field of ["message", "model", "reasoning_effort"] as const) {
     if (typeof input[field] !== "string" || input[field].trim() === "") {
       errors.push({ code: "invalid_params", field, message: `${field} is required` });
     }
   }
-  if (typeof input.task_name === "string" && !/^[a-z0-9_]{1,72}$/.test(input.task_name)) {
-    errors.push({ code: "invalid_params", field: "task_name", message: "task_name must use lowercase letters, numbers, and underscores (max 72)" });
+  if (typeof input.task_name !== "string") {
+    errors.push({ code: "invalid_params", field: "task_name", message: "task_name is required" });
   }
   if (input.fork_turns !== "all" && input.fork_turns !== "none") {
     errors.push({ code: "invalid_params", field: "fork_turns", message: "fork_turns is required; choose none or all" });

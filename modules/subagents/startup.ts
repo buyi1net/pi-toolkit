@@ -185,6 +185,7 @@ export interface SpawnPlan {
 export interface ResumePlan {
   name: string;
   message: string;
+  agentId?: string;
   timeoutMs?: number;
   sessionPath: string;
   resumedSessionId: string;
@@ -285,7 +286,7 @@ export interface SubagentStartup {
     options?: { surface?: string },
   ): Promise<StartedRun>;
 
-  planResume(request: { name: string; message: string; timeoutMs?: number }, ctx: ResumeContext): ResumePlanOutcome;
+  planResume(request: { name: string; message: string; timeoutMs?: number; agentId?: string }, ctx: ResumeContext): ResumePlanOutcome;
 
   resume(plan: ResumePlan, ctx: ResumeContext, pi: ExtensionAPI): Promise<ResumeStartedRun>;
 
@@ -475,25 +476,6 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     const cohortId = normalizeCohortId(params.cohortId);
     if (cohortId) params.cohortId = cohortId;
     else delete params.cohortId;
-
-    const currentAgent = process.env.PI_SUBAGENT_AGENT;
-    if (params.agent && currentAgent && params.agent === currentAgent) {
-      const alternativeAgent = currentAgent === "general-purpose"
-        ? "explore"
-        : currentAgent === "explore"
-          ? "general-purpose"
-          : null;
-      const alternativeHint = alternativeAgent
-        ? ` If a separate nested task is needed, choose the other available agent type "${alternativeAgent}" explicitly.`
-        : "";
-      return {
-        kind: "error",
-        error:
-          `You are the ${currentAgent} agent — do not start another ${currentAgent}. ` +
-          `You were spawned to do this work yourself. Complete the task directly.${alternativeHint}`,
-        details: { error: "self-spawn blocked" },
-      };
-    }
 
     const agentDefs = params.agent ? deps.loadAgentDefaults(params.agent, ctx.cwd) : null;
 
@@ -1208,7 +1190,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
   }
 
   function planResume(
-    request: { name: string; message: string; timeoutMs?: number },
+    request: { name: string; message: string; timeoutMs?: number; agentId?: string },
     ctx: ResumeContext,
   ): ResumePlanOutcome {
     const { name, message } = request;
@@ -1257,6 +1239,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
       plan: {
         name,
         message,
+        ...(request.agentId ? { agentId: request.agentId } : {}),
         ...(request.timeoutMs != null ? { timeoutMs: request.timeoutMs } : {}),
         sessionPath: sessionPath.path,
         resumedSessionId,
@@ -1277,10 +1260,11 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     if (effectiveLoadout.surfaceKind) setActiveSurfaceKind(effectiveLoadout.surfaceKind);
     const { autoExit, interactive } = deps.resolveResumeLaunchBehavior();
     const startTime = Date.now();
-    const id = Math.random().toString(16).slice(2, 10);
+    const id = plan.agentId ?? Math.random().toString(16).slice(2, 10);
     const launchPlan = createCodexV2LaunchPlanMetadata(`codex-v2-resume-${randomUUID()}`);
     const sentinelToken = `__PI_SUBAGENT_DONE_${randomUUID()}__`;
     const activityFile = getSubagentActivityFile(artifactDir, id);
+    rmSync(activityFile, { force: true });
     mkdirSync(dirname(activityFile), { recursive: true });
 
     const resumeEnv: Record<string, string> = createSubagentLaunchEnv();

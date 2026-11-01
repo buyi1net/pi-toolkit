@@ -92,6 +92,21 @@ function spawnFailureReason(
   }
 }
 
+function suggestedTaskName(value: string): string {
+  const suggested = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 72);
+  return suggested || "task";
+}
+
+function invalidTaskName(value: unknown) {
+  const raw = typeof value === "string" ? value : "";
+  return errorResult({
+    code: "invalid_params",
+    message: `task_name must use only lowercase letters, digits, and underscores, with a maximum length of 72 characters. Choose a name such as "${suggestedTaskName(raw)}".`,
+    field: "task_name",
+    suggested_task_name: suggestedTaskName(raw),
+  });
+}
+
 export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDeps): void {
   pi.registerTool({
     name: "spawn_agent",
@@ -105,7 +120,7 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
       "The returned agent_id and canonical_task_name identify the new run.",
     promptSnippet: "Start an agent, choose fork_turns explicitly (none or all), and do not omit it.",
     parameters: Type.Object({
-      task_name: Type.String({ minLength: 1, maxLength: 72, pattern: "^[a-z0-9_]+$" }),
+      task_name: Type.String({ description: "Use only lowercase letters, digits, and underscores; maximum 72 characters. Empty and overlong names are rejected by the plugin with a suggested_task_name." }),
       message: Type.String({ minLength: 1 }),
       agent_type: agentTypeParameterSchema(deps.discoverAgents),
       fork_turns: Type.Union([Type.Literal("none"), Type.Literal("all")]),
@@ -172,6 +187,7 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
       const validated = validateCodexV2SpawnParams(raw);
       if (!validated.ok) return errorResult({ code: "invalid_params", message: "Invalid spawn_agent parameters.", details: validated.errors });
       const input: CodexV2SpawnParams = validated.value;
+      if (typeof input.task_name !== "string" || !/^[a-z0-9_]{1,72}$/.test(input.task_name)) return invalidTaskName(input.task_name);
       const agent = input.agent_type ?? DEFAULT_AGENT_TYPE;
       const allowed = new Set(deps.discoverAgents().map((candidate) => candidate.name));
       if (!allowed.has(agent)) {
@@ -212,8 +228,23 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
       const sessionFile = ctx.sessionManager.getSessionFile();
       if (!sessionFile) return errorResult({ code: "agent_launch_failed", message: "A persistent parent session is required." });
       const artifactDir = deps.getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId());
-      if (deps.registry.isNameTaken(input.task_name) || Object.prototype.hasOwnProperty.call(readNameRegistry(artifactDir), input.task_name)) {
-        return errorResult({ code: "task_name_conflict", message: `Task name "${input.task_name}" is already in use.`, task_name: input.task_name });
+      const existing = deps.registry.findByName(input.task_name);
+      const reserved = deps.registry.isNameTaken(input.task_name);
+      const historical = deps.registry.listPublic(deps.registry.publicPathFor(artifactDir))
+        .filter((record) => record.task_name === input.task_name)
+        .sort((left, right) => right.updated_at - left.updated_at)[0];
+      if (reserved || existing || (historical && historical.status !== "closed") || Object.prototype.hasOwnProperty.call(readNameRegistry(artifactDir), input.task_name)) {
+        const occupant = existing
+          ? { agent_id: existing.id, canonical_task_name: existing.canonicalTaskName ?? `/root/${existing.name}`, status: existing.publicStatus ?? "running" }
+          : historical
+            ? { agent_id: historical.agent_id, canonical_task_name: historical.canonical_task_name, status: historical.status }
+            : { agent_id: null, canonical_task_name: null, status: null };
+        const next = occupant.status === "running"
+          ? "Wait for it to finish or choose a different name."
+          : occupant.status && ["completed", "failed", "interrupted", "waiting"].includes(occupant.status)
+            ? "Use followup_task to continue it, or use close_agent to close it and reuse the name."
+            : "Choose a different name.";
+        return errorResult({ code: "task_name_conflict", message: `Task name "${input.task_name}" is already in use. ${next}`, task_name: input.task_name, ...occupant });
       }
       deps.registry.reserveName(input.task_name);
       try {
@@ -257,6 +288,7 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
         registerName(artifactDir, input.task_name, {
           sessionFile: started.running.sessionFile,
           sessionId: null,
+          agentId: started.running.id,
           anchored: started.running.anchoredLoadout,
         });
         const producers = createParentUpdateProducers(createParentUpdateQueue(
@@ -265,6 +297,7 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
         producers.spawnStatus({ agent_id: started.running.id, task_name: input.task_name, status: "starting", summary: "Spawn accepted and starting.", update_id: `spawn:${started.running.id}:starting` });
         producers.spawnStatus({ agent_id: started.running.id, task_name: input.task_name, status: "running", summary: "Subagent is running.", update_id: `spawn:${started.running.id}:running` });
         void started.watch.then((watchResult: any) => {
+          if (started.running.closed) return;
           if (watchResult?.interruptedRound || watchResult?.handedOff) return;
           const status = watchResult?.userClosed || watchResult?.stopped ? "interrupted" : watchResult?.exitCode === 0 ? "completed" : "failed";
           const update = (watchResult?.userClosed ? producers.surfaceClosed : producers.watcherTerminal)({ agent_id: started.running.id, task_name: input.task_name, status, summary: watchResult?.summary || watchResult?.errorMessage || "Subagent finished.", update_id: `spawn:${started.running.id}:terminal`, final_text: watchResult?.summary || watchResult?.errorMessage || undefined });

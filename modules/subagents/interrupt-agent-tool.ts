@@ -62,6 +62,7 @@ export function registerInterruptAgentTool(pi: ExtensionAPI, deps: InterruptAgen
       const resolved = resolveLifecycleTarget(deps, ctx, params.target);
       if ("error" in resolved) return resolved.error;
       const target = resolved.target;
+      if (target.status === "closed") return errorResult("agent_closed", `Subagent "${target.name}" is closed; if you need to continue, spawn a new subagent.`, { target: params.target, agent_id: target.agentId, task_name: target.name, status: "closed" });
       const running = target.agentId ? deps.registry.get(target.agentId) : undefined;
       if (!running) {
         const status = target.agentId ? historicalStatus(deps, ctx, target.agentId) : null;

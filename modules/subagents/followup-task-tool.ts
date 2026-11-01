@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { registerName } from "./session.ts";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { toolCardFailureReason, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
@@ -68,9 +69,10 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
     async execute(_toolCallId, params, _signal, _onUpdate, ctx: ToolContext) {
       const message = params.message.trim();
       if (!message) return errorResult("invalid_params", "message must be non-empty.");
-      const resolved = resolveLifecycleTarget(deps, ctx, params.target);
+      const resolved = resolveLifecycleTarget(deps, ctx, params.target, { preferLatestHistorical: true });
       if ("error" in resolved) return resolved.error;
       const target = resolved.target;
+      if (target.status === "closed") return errorResult("agent_closed", `Subagent "${target.name}" is closed; if you need to continue, spawn a new subagent.`, { target: params.target, agent_id: target.agentId, task_name: target.name, status: "closed" });
       const liveTarget = target.agentId ? deps.registry.get(target.agentId) : undefined;
       if (liveTarget && !targetRunningInterrupted(deps.registry, target.agentId)) {
         return errorResult("agent_already_running", `Subagent "${target.name}" is already running; wait for its current round before starting a follow-up.`, {
@@ -84,7 +86,7 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
         return errorResult("agent_already_running", `A follow-up for "${target.name}" is already being started.`, { target: params.target, task_name: target.name });
       }
 
-      const planned = deps.startup.planResume({ name: target.name, message }, ctx as any);
+      const planned = deps.startup.planResume({ name: target.name, message, agentId: target.agentId || undefined }, ctx as any);
       if (planned.kind === "steer") {
         return errorResult("agent_already_running", `Subagent "${target.name}" became active while the follow-up was being prepared.`, { target: params.target, task_name: target.name });
       }
@@ -98,6 +100,12 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
       deps.registry.reserveName(target.name);
       try {
         const started = await deps.startup.resume(planned.plan, ctx as any, pi);
+        registerName(deps.getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId()), target.name, {
+          sessionFile: started.running.sessionFile,
+          sessionId: started.resumedSessionId,
+          agentId: started.running.id,
+          anchored: started.running.anchoredLoadout,
+        });
         const running = started.running;
         running.interruptRequested = false;
         const statusUpdate = lifecycleQueue(deps, ctx).followupStatus({
@@ -109,6 +117,7 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
         });
         const details = lifecycleUpdateDetails(statusUpdate, { ...target, agentId: running.id }, submissionId);
         void started.watch.then((result) => {
+          if (running.closed) return;
           if (!result) {
             const terminal: SubagentResult = { exitCode: 1, errorMessage: "Follow-up watcher ended without a terminal result." } as SubagentResult;
             const update = lifecycleQueue(deps, ctx).watcherTerminal({
@@ -134,6 +143,7 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
           });
           deps.deliverTerminal?.(running, result, "followup", update.delivery_id);
         }).catch((error) => {
+          if (running.closed) return;
           const terminal: SubagentResult = { exitCode: 1, errorMessage: error instanceof Error ? error.message : String(error) } as SubagentResult;
           const update = lifecycleQueue(deps, ctx).watcherTerminal({
             agent_id: running.id,

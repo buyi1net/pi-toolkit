@@ -413,6 +413,34 @@ function referenceCandidate(entry: ModelDirectoryEntry): ModelDirectoryReference
   };
 }
 
+function modelReferenceDistance(left: string, right: string): number {
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i += 1) {
+    const current = [i];
+    for (let j = 1; j <= right.length; j += 1) {
+      current[j] = Math.min(
+        current[j - 1]! + 1,
+        previous[j]! + 1,
+        previous[j - 1]! + (left[i - 1] === right[j - 1] ? 0 : 1),
+      );
+    }
+    for (let j = 0; j <= right.length; j += 1) previous[j] = current[j]!;
+  }
+  return previous[right.length]!;
+}
+
+function suggestModelReferences(directory: ModelDirectory, raw: string): ModelDirectoryReferenceCandidate[] {
+  const query = raw.toLowerCase();
+  const entries = directory.models.map((entry) => ({ entry, values: [`${entry.provider}/${entry.id}`, entry.id, entry.name].map((value) => value.toLowerCase()) }));
+  const substring = entries.filter(({ values }) => values.some((value) => value.includes(query) || query.includes(value)));
+  const ranked = substring.length >= 3
+    ? substring
+    : [...substring, ...entries
+      .filter((item) => !substring.includes(item))
+      .sort((a, b) => Math.min(...a.values.map((value) => modelReferenceDistance(query, value))) - Math.min(...b.values.map((value) => modelReferenceDistance(query, value))))];
+  return ranked.slice(0, 3).map(({ entry }) => referenceCandidate(entry));
+}
+
 export function resolveDirectoryModelReference(
   directory: ModelDirectory,
   modelRef: string,
@@ -439,12 +467,15 @@ export function resolveDirectoryModelReference(
       },
     };
   }
+  const suggestions = suggestModelReferences(directory, raw);
   return {
     problem: {
       code: "model_not_found",
       selected_model: raw,
-      candidates: [],
-      message: `Model reference "${raw}" is not in the current /model available list.`,
+      candidates: suggestions,
+      message: `Model reference "${raw}" is not in the current /model available list.${suggestions.length > 0
+        ? ` Available candidates: ${suggestions.map((candidate) => `${candidate.provider}/${candidate.id}`).join(", ")}.`
+        : " Call subagent_models to view the complete available model list."}`,
     },
   };
 }

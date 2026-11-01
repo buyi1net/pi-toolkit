@@ -74,6 +74,7 @@ function agentStatusLabel(status: PublicAgentRecord["status"], t?: SubagentsTran
     case "failed": return t?.("module.subagents.tool.list_agents.result.status.failed", { count: 1 }) ?? "failed";
     case "interrupted": return t?.("module.subagents.tool.list_agents.result.status.interrupted", { count: 1 }) ?? "interrupted";
     case "handed_off": return t?.("module.subagents.tool.list_agents.result.status.handedOff", { count: 1 }) ?? "handed off";
+    case "closed": return "closed";
   }
 }
 
@@ -123,6 +124,7 @@ export function registerListAgentsTool(pi: ExtensionAPI, deps: ListAgentsToolDep
       const path = deps.registry.publicPathFor(artifactDir);
       const live = new Map(deps.registry.list().map((entry) => [entry.id, entry]));
       const agents = deps.registry.listPublic(path)
+        .filter((record) => record.status !== "closed")
         .map((record) => ({ ...record, status: publicStatus(record, live.get(record.agent_id)) }))
         .sort((a, b) => a.canonical_task_name.localeCompare(b.canonical_task_name));
       return {

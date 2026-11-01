@@ -56,6 +56,7 @@ export interface RunningSubagent {
   canonicalTaskName?: string;
   parentCanonicalTaskName?: string | null;
   publicStatus?: "starting" | "running" | "waiting" | "completed" | "failed" | "interrupted" | "handed_off";
+  closed?: boolean;
   parentId?: string | null;
 
   timeoutMs?: number;

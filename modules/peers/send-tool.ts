@@ -55,7 +55,7 @@ function sendRenderStatus(
   const details = result.details as (Partial<PeersSendReport> & { target?: unknown }) | undefined;
   const target = compactRenderText(details?.target) || "(target)";
   if (details?.result === "accepted") {
-    return t?.("module.peers.tool.send.result.delivered", { target }) ?? `Delivered ${target}`;
+    return t?.("module.peers.tool.send.result.delivered", { target }) ?? "Delivered";
   }
   const reason = typeof details?.reason === "string"
     ? describePeersReason(details.reason as Parameters<typeof describePeersReason>[0])

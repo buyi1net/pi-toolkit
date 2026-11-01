@@ -112,6 +112,7 @@ export function classifyWatcherFailure(input: {
 }
 
 function updatePublicAgent(running: RunningSubagent, status: import("./registry.ts").PublicAgentStatus, summary?: string): void {
+  if (running.closed) return;
   runtimeRegistry.updatePublicStatus(runtimeRegistry.publicPathFor(dirname(running.runtimeFile)), running.id, status, summary);
 }
 
@@ -328,7 +329,7 @@ export function publishTerminalUpdate(artifactDir: string, running: RunningSubag
 }
 
 export function deliverSpawnTerminal(running: RunningSubagent, result: SubagentResult, pi: ExtensionAPI, deliveryId?: string, source: "spawn" | "followup" | "recovered-exit" | "recovered-headless" | "recovered-pane" = "spawn"): void {
-  if (result.handedOff || result.interruptedRound) return;
+  if (running.closed || result.handedOff || result.interruptedRound) return;
   const failed = result.exitCode !== 0 || !!result.errorMessage;
   const routeException = routeExceptionFromResult(result, running.model);
   const content = resolveResultPresentation(result, running.name);

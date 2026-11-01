@@ -267,6 +267,8 @@ export interface NameRegistryEntry {
 
   sessionId: string | null;
 
+  agentId?: string;
+
   cohortId?: string;
 
   anchored?: boolean;
@@ -309,6 +311,19 @@ export function registerName(
   }
 }
 
+export function unregisterName(artifactDir: string, name: string): void {
+  try {
+    const registry = readNameRegistry(artifactDir);
+    if (!Object.prototype.hasOwnProperty.call(registry, name)) return;
+    delete registry[name];
+    const p = nameRegistryPath(artifactDir);
+    const tmp = `${p}.tmp-${process.pid}-${Math.random().toString(16).slice(2, 8)}`;
+    writeFileSync(tmp, JSON.stringify(registry, null, 2), "utf8");
+    renameSync(tmp, p);
+  } catch (error) {
+    debugLog(`Could not unregister subagent name ${name}`, error);
+  }
+}
 export function resolveNameInRegistry(
   artifactDir: string,
   name: string,

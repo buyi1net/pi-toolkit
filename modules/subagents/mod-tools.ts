@@ -13,9 +13,9 @@ import {
 import { runtimeRegistry, handleSubagentSteer } from "./mod.ts";
 import { updateWidget } from "./mod-widget.ts";
 import { deliverSpawnTerminal } from "./mod-delivery.ts";
-import {
-  registerFollowupTaskTool,
-} from "./followup-task-tool.ts";
+import { registerCloseAgentTool } from "./close-agent-tool.ts";
+import { registerFollowupTaskTool } from "./followup-task-tool.ts";
+
 import { registerInterruptAgentTool } from "./interrupt-agent-tool.ts";
 import { registerListAgentsTool } from "./list-agents-tool.ts";
 import { registerSendMessageTool } from "./send-message-tool.ts";
@@ -108,16 +108,30 @@ export function registerSubagentTools(pi: ExtensionAPI, startup: SubagentStartup
     handleSubagentSteer,
     t: widgetText,
     interruptCurrentRound: (running) => {
-
       if (running.kind === "headless") {
         running.headlessChild?.abort();
         if (running.pid != null) terminateHeadlessProcess(running.pid);
       } else sendCommand(running.surface, "\u0003");
-
       runtimeRegistry.remove(running.id, { keepRecord: true });
       updateWidget();
     },
   });
+
+  registerCloseAgentTool(pi, {
+    registry: runtimeRegistry,
+    getArtifactDir,
+    handleSubagentSteer,
+    t: widgetText,
+    interruptCurrentRound: (running) => {
+      if (running.kind === "headless") {
+        running.headlessChild?.abort();
+        if (running.pid != null) terminateHeadlessProcess(running.pid);
+      } else sendCommand(running.surface, "\u0003");
+      runtimeRegistry.remove(running.id, { keepRecord: true });
+      updateWidget();
+    },
+  });
+
 
   registerListAgentsTool(pi, {
     registry: runtimeRegistry,
