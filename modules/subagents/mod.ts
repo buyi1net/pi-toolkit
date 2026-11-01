@@ -352,13 +352,20 @@ export function handleSubagentSteer(
 function startStatusRefresh(pi: ExtensionAPI) {
   if (!isStatusEnabled() || statusInterval) return;
 
+  const stop = () => {
+    if (!statusInterval) return;
+    clearInterval(statusInterval);
+    statusInterval = null;
+    (globalThis as any)[STATUS_INTERVAL_KEY] = null;
+  };
+
   statusInterval = setInterval(() => {
+    if ((globalThis as any)[MODULE_INSTANCE_KEY] !== moduleInstanceId || latestPi !== pi) {
+      stop();
+      return;
+    }
     if (runtimeRegistry.list().length === 0) {
-      if (statusInterval) {
-        clearInterval(statusInterval);
-        statusInterval = null;
-        (globalThis as any)[STATUS_INTERVAL_KEY] = null;
-      }
+      stop();
       return;
     }
 
@@ -385,15 +392,19 @@ function startStatusRefresh(pi: ExtensionAPI) {
 
     if (transitionLines.length > 0) {
       const capped = capStatusLines(transitionLines, statusConfig.lineLimit);
-      pi.sendMessage(
-        {
-          customType: "subagent_status",
-          content: formatStatusAggregate(transitionLines, statusConfig.lineLimit, widgetText),
-          display: true,
-          details: { lines: capped.visibleLines, overflow: capped.overflow, tone: stalledTransition ? "error" : "success" },
-        },
-        { triggerTurn: true, deliverAs: "steer" },
-      );
+      try {
+        pi.sendMessage(
+          {
+            customType: "subagent_status",
+            content: formatStatusAggregate(transitionLines, statusConfig.lineLimit, widgetText),
+            display: true,
+            details: { lines: capped.visibleLines, overflow: capped.overflow, tone: stalledTransition ? "error" : "success" },
+          },
+          { triggerTurn: true, deliverAs: "steer" },
+        );
+      } catch {
+        stop();
+      }
     }
   }, 1000);
 
@@ -458,6 +469,7 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
   latestPi = pi;
 
   pi.on("session_start", (_event, ctx) => {
+    if ((globalThis as any)[MODULE_INSTANCE_KEY] !== moduleInstanceId) return;
     latestCtx = ctx;
 
     widgetRuntime.tree?.dispose();
@@ -501,7 +513,10 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
-    if (ctx?.hasUI) ctx.ui.setWidget("subagent-status", undefined);
+    if ((globalThis as any)[MODULE_INSTANCE_KEY] !== moduleInstanceId) return;
+    try {
+      if (ctx?.hasUI) ctx.ui.setWidget("subagent-status", undefined);
+    } catch {}
     latestCtx = null;
     latestPi = null;
     widgetRuntime.tree?.dispose();

@@ -1,5 +1,5 @@
 import { visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
-import { runtimeRegistry, latestCtx, latestPi } from "./mod.ts";
+import { runtimeRegistry, latestCtx, latestPi, MODULE_INSTANCE_KEY, moduleInstanceId } from "./mod.ts";
 import { widgetText } from "./mod-host.ts";
 import {
   buildFirstLayerOnlySnapshot,
@@ -197,8 +197,34 @@ export function renderSubagentWidgetLines(
   );
 }
 
+function currentUiContext(): typeof latestCtx {
+  if ((globalThis as any)[MODULE_INSTANCE_KEY] !== moduleInstanceId) return null;
+  const ctx = latestCtx;
+  if (!ctx) return null;
+  try {
+    return ctx.hasUI ? ctx : null;
+  } catch {
+    return null;
+  }
+}
+
+function currentThinkingLevel(): string | undefined {
+  if ((globalThis as any)[MODULE_INSTANCE_KEY] !== moduleInstanceId) return undefined;
+  try {
+    if (typeof latestPi?.getThinkingLevel === "function") return latestPi.getThinkingLevel();
+  } catch {
+    return undefined;
+  }
+  try {
+    return latestCtx?.thinkingLevel;
+  } catch {
+    return undefined;
+  }
+}
+
 export function updateWidget() {
-  if (!latestCtx?.hasUI) return;
+  const ctx = currentUiContext();
+  if (!ctx) return;
 
   const firstLayer = runtimeRegistry.list();
   const snapshot = widgetRuntime.tree
@@ -207,7 +233,11 @@ export function updateWidget() {
   widgetRuntime.snapshot = snapshot;
 
   if (snapshot.counts.allCount === 0) {
-    latestCtx.ui.setWidget("subagent-status", undefined);
+    try {
+      ctx.ui.setWidget("subagent-status", undefined);
+    } catch {
+      return;
+    }
     if (widgetRuntime.interval) {
       clearInterval(widgetRuntime.interval);
       widgetRuntime.interval = null;
@@ -216,27 +246,29 @@ export function updateWidget() {
     return;
   }
 
-  latestCtx.ui.setWidget(
-    "subagent-status",
-    (_tui: any, theme: any) => {
-      return {
-        invalidate() {},
-        render(width: number) {
-          return widgetRuntime.snapshot
-          ? renderWidgetSnapshotLines(
-              widgetRuntime.snapshot,
-              width,
-              theme,
-              typeof latestPi?.getThinkingLevel === "function"
-                ? latestPi.getThinkingLevel()
-                : latestCtx?.thinkingLevel,
-            )
-          : [];
-        },
-      };
-    },
-    { placement: "aboveEditor" },
-  );
+  try {
+    ctx.ui.setWidget(
+      "subagent-status",
+      (_tui: any, theme: any) => {
+        return {
+          invalidate() {},
+          render(width: number) {
+            return widgetRuntime.snapshot
+            ? renderWidgetSnapshotLines(
+                widgetRuntime.snapshot,
+                width,
+                theme,
+                currentThinkingLevel(),
+              )
+            : [];
+          },
+        };
+      },
+      { placement: "aboveEditor" },
+    );
+  } catch {
+    return;
+  }
 }
 
 export function startWidgetRefresh() {

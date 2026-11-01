@@ -1442,13 +1442,19 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
       deps.getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId()),
     );
     const recovered: RecoveredRun[] = [];
+    const publicPath = deps.registry.publicPathFor(dirname(runtimeFile));
+    const waitingIds = new Set(
+      deps.registry.listPublic(publicPath)
+        .filter((entry) => entry.status === "waiting")
+        .map((entry) => entry.agent_id),
+    );
     for (const record of deps.registry.recoverableRecords(runtimeFile)) {
 
       try {
         if ((record.kind ?? "pane") === "headless") {
 
           const pid = record.pid ?? parseHeadlessSurface(record.surface);
-          if (record.interruptedRound) {
+          if (record.interruptedRound || waitingIds.has(record.id)) {
             if (pid != null && deps.isPidAlive(pid)) {
               deps.terminateHeadlessProcess(pid);
             }
@@ -1547,7 +1553,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
           continue;
         }
 
-        if (record.interruptedRound) {
+        if (record.interruptedRound || waitingIds.has(record.id)) {
           try {
             deps.closeSurface(record.surface);
           } catch (error) {
