@@ -93,17 +93,23 @@ export function makeAcpSearchTool(deps: AcpSearchToolDeps): ToolDefinition<typeo
       if (!deps.isSessionActive(ctx)) return acpToolUnavailable(t);
       const engine = deps.engine();
       if (!engine) return acpToolUnavailable(t);
-      const outcome = await engine.executeSearch(
-        {
-          query: params.query,
-          ...(params.limit === undefined ? {} : { limit: params.limit }),
-        },
-        ctx,
-      );
-      return {
-        details: { matches: outcome.matches } satisfies AcpSearchToolDetails,
-        content: [{ type: "text", text: outcome.text }],
-      };
+      try {
+        const outcome = await engine.executeSearch(
+          {
+            query: params.query,
+            ...(params.limit === undefined ? {} : { limit: params.limit }),
+          },
+          ctx,
+        );
+        return {
+          details: { matches: outcome.matches } satisfies AcpSearchToolDetails,
+          content: [{ type: "text", text: outcome.text }],
+          isError: outcome.failed === true,
+        };
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        return { details: { error: text }, content: [{ type: "text", text }], isError: true };
+      }
     },
   };
 }

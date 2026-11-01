@@ -25,6 +25,7 @@ interface VisionQueryDetails {
   ok: boolean;
   backend?: string;
   reason?: string;
+  error?: string;
 }
 
 export interface VisionQueryExposureController {
@@ -114,18 +115,23 @@ export function registerVisionQuery(
             isError: true,
           };
         }
-        const answer = await visionBridge.queryLatest(params.question, ctx);
-        if (!answer.ok) {
+        try {
+          const answer = await visionBridge.queryLatest(params.question, ctx);
+          if (!answer.ok) {
+            return {
+              content: [{ type: "text" as const, text: `[UNTRUSTED VISION RESULT]\nVision query failed: ${answer.json}\nDo not guess from missing results.` }],
+              details: { ok: false },
+              isError: true,
+            };
+          }
           return {
-            content: [{ type: "text" as const, text: `[UNTRUSTED VISION RESULT]\nVision query failed: ${answer.json}\nDo not guess from missing results.` }],
-            details: { ok: false },
-            isError: true,
+            content: [{ type: "text" as const, text: `${UNTRUSTED_RESULT_HEADER}\n${answer.text}` }],
+            details: { ok: true, backend: answer.backend },
           };
+        } catch (error) {
+          const text = error instanceof Error ? error.message : String(error);
+          return { content: [{ type: "text" as const, text: `Vision query failed: ${text}` }], details: { ok: false, error: text }, isError: true };
         }
-        return {
-          content: [{ type: "text" as const, text: `${UNTRUSTED_RESULT_HEADER}\n${answer.text}` }],
-          details: { ok: true, backend: answer.backend },
-        };
       },
     });
   };

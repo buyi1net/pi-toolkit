@@ -69,7 +69,7 @@ export function registerSubagentStopTool(pi: ExtensionAPI, deps: SubagentStopToo
       const rawName = typeof params?.name === "string" ? params.name.trim() : "";
       if (!rawName) {
         const error = "Provide the exact `name` of the running subagent to stop.";
-        return { content: [{ type: "text", text: error }], details: { error } };
+        return { content: [{ type: "text", text: error }], details: { error }, isError: true };
       }
       const resolved = deps.resolveRunningByName(rawName);
       if ("error" in resolved) {
@@ -82,6 +82,7 @@ export function registerSubagentStopTool(pi: ExtensionAPI, deps: SubagentStopToo
               `Use subagents_list with scope "session" to see what is running.`,
           }],
           details: { error: resolved.error, name: rawName },
+          isError: true,
         };
       }
 

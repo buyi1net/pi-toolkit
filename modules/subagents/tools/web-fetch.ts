@@ -153,11 +153,16 @@ export default function webFetchExtension(pi: ExtensionAPI, t: SubagentsTranslat
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const url = String((params as { url?: unknown }).url ?? "");
       const raw = Boolean((params as { raw?: unknown }).raw);
-      const text = await fetchUrlAsText(url, { raw });
-      return {
-        content: [{ type: "text" as const, text }],
-        details: { url, raw },
-      };
+      try {
+        const text = await fetchUrlAsText(url, { raw });
+        return {
+          content: [{ type: "text" as const, text }],
+          details: { url, raw },
+        };
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text" as const, text }], details: { url, raw, error: text }, isError: true };
+      }
     },
   });
 }

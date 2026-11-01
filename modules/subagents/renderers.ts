@@ -57,12 +57,10 @@ export function registerSubagentRenderers(
               : t("module.subagents.widget.result.failedExit", { code: exitCode }))
             : t("module.subagents.widget.result.completed");
         const lateTag = late ? ` ${t("module.subagents.widget.result.late")}` : "";
-        const object = typeof details.agent === "string" && details.agent !== ""
-          ? details.agent
-          : stats?.model ?? undefined;
+        const object = [name, stats?.model].filter(Boolean).join(" · ") || undefined;
 
         const expanded = options.expanded || (key !== null && expandedCardIds.has(key));
-        const contentLines = [formatToolCardLine({ title: name, object, status: `${status}${lateTag}` }, theme, failed)];
+        const contentLines = [formatToolCardLine({ title: t("module.subagents.widget.result.title"), object, status: `${status}${lateTag}` }, theme, failed)];
 
         if (expanded) {
           const meta = [
@@ -130,14 +128,13 @@ export function registerSubagentRenderers(
             const failed = (entry.exitCode ?? 0) !== 0 || !!entry.errorMessage;
             const icon = failed ? theme.fg("error", "✗") : theme.fg("success", "✓");
             const elapsed = entry.elapsed != null ? formatElapsed(entry.elapsed) : "?";
-            const agentTag = entry.agent ? theme.fg("dim", ` (${entry.agent})`) : "";
             const reason = failed
               ? (entry.errorMessage
                 ? t("module.subagents.widget.result.failedProvider")
                 : t("module.subagents.widget.result.failedExit", { code: entry.exitCode }))
               : t("module.subagents.widget.result.completed");
             contentLines.push(
-              `${icon} ${theme.fg("toolTitle", theme.bold(entry.name ?? "subagent"))}${agentTag}` +
+              `${icon} ${theme.fg("toolTitle", theme.bold(entry.name ?? "subagent"))}` +
                 theme.fg(failed ? "error" : "dim", ` — ${reason}`) +
                 theme.fg("dim", ` · ${elapsed}`),
             );
@@ -203,10 +200,9 @@ export function registerSubagentRenderers(
       invalidate() {},
       render(width: number): string[] {
         const name = details.name ?? "subagent";
-        const object = typeof details.agent === "string" && details.agent !== "" ? details.agent : undefined;
         const contentLines = [formatToolCardLine({
-          title: name,
-          object,
+          title: t("module.subagents.widget.question.title"),
+          object: name,
           status: t("module.subagents.widget.question.asks"),
         }, theme)];
 

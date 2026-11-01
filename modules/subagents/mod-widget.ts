@@ -1,6 +1,6 @@
 import { visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
 import { runtimeRegistry, latestCtx, latestPi } from "./mod.ts";
-import { discoverAgentDefinitions, widgetText } from "./mod-host.ts";
+import { widgetText } from "./mod-host.ts";
 import {
   buildFirstLayerOnlySnapshot,
   type DescendantsTracker,
@@ -96,12 +96,6 @@ function widgetBorderColor(
   return (text: string) => theme.fg("border", text);
 }
 
-function displayAgentName(agent: string | undefined): string | null {
-  if (!agent) return null;
-  const definition = discoverAgentDefinitions(latestCtx?.cwd ?? process.cwd()).find((candidate) => candidate.name === agent);
-  return definition?.displayName ?? agent;
-}
-
 function rowIdentityAndMetadata(
   row: WidgetSnapshot["rows"][number],
   tier: ReturnType<typeof subagentTreeTier>,
@@ -115,9 +109,7 @@ function rowIdentityAndMetadata(
     ? ` ${icon}  `
     : ` ${subagentTreePrefix(row.depth, row.lastFlags, row.isLast, tier, muted ?? ((text) => text))}`;
   const name = row.depth === 0 ? row.name : truncateToWidth(row.name, DESCENDANT_NAME_LIMIT, "…");
-  const displayAgent = displayAgentName(row.agent ?? undefined);
-  const role = displayAgent ? truncateToWidth(displayAgent, DESCENDANT_NAME_LIMIT, "…") : null;
-  const metadata = level === "hidden" ? null : buildSubagentMetadataSegment(row.model, row.thinking, role, level);
+  const metadata = level === "hidden" ? null : buildSubagentMetadataSegment(row.model, row.thinking, level);
   const identity = `${formatElapsedMMSS(row.startTime)}  ${name}`;
   const left = metadata ? `${identity}  ${metadata.text}` : identity;
 

@@ -149,16 +149,21 @@ export default function webSearchExtension(pi: ExtensionAPI, t: SubagentsTransla
     },
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const query = String((params as { query?: unknown }).query ?? "").trim();
-      if (!query) throw new Error("web_search requires a non-empty query.");
+      if (!query) return { content: [{ type: "text" as const, text: "web_search requires a non-empty query." }], details: { query, error: "invalid_params" }, isError: true };
       const requested = Number((params as { max_results?: unknown }).max_results ?? DEFAULT_MAX_RESULTS);
       const maxResults = Number.isInteger(requested)
         ? Math.min(Math.max(requested, 1), HARD_MAX_RESULTS)
         : DEFAULT_MAX_RESULTS;
-      const text = await searchDuckDuckGo(query, maxResults);
-      return {
-        content: [{ type: "text" as const, text }],
-        details: { query, maxResults },
-      };
+      try {
+        const text = await searchDuckDuckGo(query, maxResults);
+        return {
+          content: [{ type: "text" as const, text }],
+          details: { query, maxResults },
+        };
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text" as const, text }], details: { query, maxResults, error: text }, isError: true };
+      }
     },
   });
 }

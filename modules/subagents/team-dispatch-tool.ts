@@ -83,11 +83,11 @@ export function registerTeamDispatchTool(pi: ExtensionAPI, deps: TeamDispatchToo
       const task = typeof params?.task === "string" ? params.task.trim() : "";
       if (!rawName) {
         const error = "Provide the team member's `name` (spawned with member: true) and a non-empty `task`.";
-        return { content: [{ type: "text", text: error }], details: { error } };
+        return { content: [{ type: "text", text: error }], details: { error }, isError: true };
       }
       if (!task) {
         const error = "Provide a non-empty `task` for this round.";
-        return { content: [{ type: "text", text: error }], details: { error, name: rawName } };
+        return { content: [{ type: "text", text: error }], details: { error, name: rawName }, isError: true };
       }
       const name = normalizeSubagentName(rawName, "");
 
@@ -116,6 +116,7 @@ export function registerTeamDispatchTool(pi: ExtensionAPI, deps: TeamDispatchToo
                 `one-shot task with subagent_message({ name: "${name}", message: "…" }).`,
             }],
             details: { error: "member-offline", name, roster: rosterEntry },
+            isError: true,
           };
         }
         return {
@@ -127,6 +128,7 @@ export function registerTeamDispatchTool(pi: ExtensionAPI, deps: TeamDispatchToo
               `Regular one-shot sub-agents cannot receive team_dispatch.`,
           }],
           details: { error: "unknown-member", name },
+          isError: true,
         };
       }
 
@@ -139,6 +141,7 @@ export function registerTeamDispatchTool(pi: ExtensionAPI, deps: TeamDispatchToo
               `before dispatching again — do not queue work blindly.`,
           }],
           details: { error: "member-busy", name },
+          isError: true,
         };
       }
 
@@ -152,6 +155,7 @@ export function registerTeamDispatchTool(pi: ExtensionAPI, deps: TeamDispatchToo
               `subagent({ member: true, … }) or resume its preserved session with subagent_message.`,
           }],
           details: { error: "member-unreachable", name },
+          isError: true,
         };
       }
 
@@ -166,6 +170,7 @@ export function registerTeamDispatchTool(pi: ExtensionAPI, deps: TeamDispatchToo
             text: `Could not deliver the round to "${name}": ${error?.message ?? String(error)}. Treat it as offline.`,
           }],
           details: { error: "dispatch-failed", name, detail: error?.message ?? String(error) },
+          isError: true,
         };
       }
 

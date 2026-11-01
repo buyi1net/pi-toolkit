@@ -397,7 +397,7 @@ export function deliverRecoveredHeadless(run: StartedRun, pi: ExtensionAPI, arti
       updateWidget();
       settleCompletionFromResult(running.name, terminal);
 
-      if (terminal.handedOff) return;
+      if (terminal.handedOff || terminal.interruptedRound) return;
       const update = publishTerminalUpdate(artifactDir, running, terminal, `recover:${running.id}:terminal`);
       deliverSpawnTerminal(running, terminal, pi, update.delivery_id, recoveredSource);
     })
@@ -422,7 +422,7 @@ export function deliverRecoveredPane(run: StartedRun, pi: ExtensionAPI, artifact
         ...(terminal.userClosed ? { status: "cancelled" as const } : {}),
       });
 
-      if (terminal.handedOff) return;
+      if (terminal.handedOff || terminal.interruptedRound) return;
       const update = publishTerminalUpdate(artifactDir, running, terminal, `recover:${running.id}:terminal`);
       deliverSpawnTerminal(running, terminal, pi, update.delivery_id, recoveredSource);
     })

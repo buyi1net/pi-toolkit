@@ -110,7 +110,11 @@ function buildEntryViews(
 
 function formatEntryLine(entry: PeersListEntryView, truncated: boolean): string {
 
-  const file = entry.sessionFile ?? (truncated ? "(not in scan window)" : "(session file missing)");
+  const file = entry.sessionFile ?? (
+    entry.status === "offline"
+      ? (truncated ? "(not in scan window)" : "(session file missing)")
+      : "(session file unavailable; active session)"
+  );
   const segments = [
     `short ${entry.shortId !== null ? `#${entry.shortId}` : "(none)"}`,
     `session ${entry.sessionId}`,
@@ -201,9 +205,21 @@ export function registerPeersListTool(pi: ExtensionAPI, deps: PeersListToolDeps)
     ): Promise<{
       content: { type: "text"; text: string }[];
       details: PeersListOutput;
+      isError?: boolean;
     }> {
 
-      await deps.refresh();
+      try {
+        await deps.refresh();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const output: PeersListOutput = {
+          text: `PEER DISCOVERY PROBLEM (scan-failed): ${detail}`,
+          entries: { online: [], offline: [] },
+          truncated: false,
+          error: { kind: "scan-failed", detail },
+        };
+        return { content: [{ type: "text", text: output.text }], details: output, isError: true };
+      }
       const snapshot = deps.getSnapshot();
       const ownSessionId = ctx?.sessionManager?.getSessionId?.() ?? null;
       const output = buildPeersListOutput(snapshot, {

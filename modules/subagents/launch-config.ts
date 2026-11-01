@@ -40,7 +40,7 @@ export function declaredMcpTools(toolAllowlist: string | null | undefined): stri
 
 export function describeMcpIsolation(toolAllowlist: string | null | undefined): string {
   if (toolAllowlist == null) {
-    return "MCP: inherited from the parent session (no role-level MCP restriction)";
+    return "MCP: inherited from the parent session (no agent-profile MCP restriction)";
   }
   const declared = declaredMcpTools(toolAllowlist);
   if (declared.length === 0) {

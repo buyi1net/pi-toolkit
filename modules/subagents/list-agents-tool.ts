@@ -115,6 +115,7 @@ export function registerListAgentsTool(pi: ExtensionAPI, deps: ListAgentsToolDep
         return {
           content: [{ type: "text" as const, text: JSON.stringify(error) }],
           details: error,
+          isError: true,
           structuredContent: error as unknown as AgentToolResult["structuredContent"],
         };
       }

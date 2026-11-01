@@ -15,15 +15,13 @@ import type { SubagentsTranslate } from "./messages/index.ts";
 
 export interface AgentTypeSummary {
   readonly name: string;
-  readonly display_name: string | null;
   readonly description: string;
   readonly capabilities: readonly string[];
 }
 
-export function summarizeAgentTypes(agents: readonly (Pick<ListedAgentDefinition, "name" | "description" | "capabilities"> & { displayName?: string | null })[]): AgentTypeSummary[] {
+export function summarizeAgentTypes(agents: readonly Pick<ListedAgentDefinition, "name" | "description" | "capabilities">[]): AgentTypeSummary[] {
   return agents.map((agent) => ({
     name: agent.name,
-    display_name: agent.displayName ?? null,
     description: agent.description ?? "",
     capabilities: agent.capabilities ? [...agent.capabilities] : [],
   }));
@@ -52,7 +50,6 @@ export function buildSubagentModelsResult(input: ModelDirectoryInput & {
     display_modes: input.display_modes ? [...input.display_modes] : [...detectDisplayModeAvailability()],
     agent_types: input.agent_types ? input.agent_types.map((agent) => ({
       name: agent.name,
-      display_name: agent.display_name,
       description: agent.description,
       capabilities: [...agent.capabilities],
     })) : [],
@@ -98,7 +95,6 @@ const subagentModelsOutputSchema = Type.Object({
   })),
   agent_types: Type.Array(Type.Object({
     name: Type.String(),
-    display_name: Type.Union([Type.String(), Type.Null()]),
     description: Type.String(),
     capabilities: Type.Array(Type.String()),
   })),
@@ -137,22 +133,31 @@ export function registerSubagentModelsTool(
       );
     },
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      const cwd = ctx.cwd ?? process.cwd();
-      const pools = deps.getPools(cwd);
-      const poolModels = Object.values(pools).flatMap((pool) => pool ?? []);
-      const health = deps.getHealth?.(poolModels);
-      const directory = deps.getModelDirectory?.(ctx) ?? buildSubagentModelsResult({
-        currentModel: currentModelFromContext(ctx),
-        pools,
-        modelRegistry: ctx.modelRegistry,
-        health,
-        display_modes: deps.getDisplayModes?.() ?? detectDisplayModeAvailability(),
-      });
-      return {
-        content: [{ type: "text", text: JSON.stringify(directory) }],
-        details: directory,
-        structuredContent: directory as unknown as AgentToolResult["structuredContent"],
-      };
+      try {
+        const cwd = ctx.cwd ?? process.cwd();
+        const pools = deps.getPools(cwd);
+        const poolModels = Object.values(pools).flatMap((pool) => pool ?? []);
+        const health = deps.getHealth?.(poolModels);
+        const directory = deps.getModelDirectory?.(ctx) ?? buildSubagentModelsResult({
+          currentModel: currentModelFromContext(ctx),
+          pools,
+          modelRegistry: ctx.modelRegistry,
+          health,
+          display_modes: deps.getDisplayModes?.() ?? detectDisplayModeAvailability(),
+        });
+        return {
+          content: [{ type: "text", text: JSON.stringify(directory) }],
+          details: directory,
+          structuredContent: directory as unknown as AgentToolResult["structuredContent"],
+        };
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: "text", text }],
+          details: { error: text },
+          isError: true,
+        };
+      }
     },
   });
 }

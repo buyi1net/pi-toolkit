@@ -37,6 +37,7 @@ export interface SkillToolDetails {
   readonly lines: number;
   readonly bundledFiles: readonly string[];
   readonly truncated: boolean;
+  readonly error?: string;
 }
 
 const DESCRIPTION = [
@@ -72,35 +73,44 @@ export function createSkillTool(
       openWorldHint: false,
     },
     async execute(_toolCallId, params): Promise<AgentToolResult<SkillToolDetails>> {
-      const registry = getRegistry();
-      if (registry === undefined) throw notIndexedError();
-      if (registry.skills.length === 0) throw noSkillsError();
+      try {
+        const registry = getRegistry();
+        if (registry === undefined) throw notIndexedError();
+        if (registry.skills.length === 0) throw noSkillsError();
 
-      const lookup = findSkill(registry.skills, params.skill);
-      if (lookup.kind === "missing") throw unknownSkillError(registry, params.skill);
-      if (lookup.kind === "ambiguous") throw ambiguousSkillError(lookup.skills, params.skill);
+        const lookup = findSkill(registry.skills, params.skill);
+        if (lookup.kind === "missing") throw unknownSkillError(registry, params.skill);
+        if (lookup.kind === "ambiguous") throw ambiguousSkillError(lookup.skills, params.skill);
 
-      const { body, truncated } = await readSkillFile(lookup.skill);
-      const bundledFiles = await listBundledFiles(lookup.skill.baseDir);
-      const text = formatSkillResult({
-        skill: lookup.skill,
-        body,
-        args: params.args,
-        bundledFiles,
-        truncated,
-      });
-
-      return {
-        content: [{ type: "text", text }],
-        details: {
-          name: lookup.skill.name,
-          filePath: lookup.skill.filePath,
-          baseDir: lookup.skill.baseDir,
-          lines: body === "" ? 0 : body.split("\n").length,
-          bundledFiles: bundledFiles.files,
+        const { body, truncated } = await readSkillFile(lookup.skill);
+        const bundledFiles = await listBundledFiles(lookup.skill.baseDir);
+        const text = formatSkillResult({
+          skill: lookup.skill,
+          body,
+          args: params.args,
+          bundledFiles,
           truncated,
-        },
-      };
+        });
+
+        return {
+          content: [{ type: "text", text }],
+          details: {
+            name: lookup.skill.name,
+            filePath: lookup.skill.filePath,
+            baseDir: lookup.skill.baseDir,
+            lines: body === "" ? 0 : body.split("\n").length,
+            bundledFiles: bundledFiles.files,
+            truncated,
+          },
+        };
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: "text", text }],
+          details: { name: params.skill, filePath: "", baseDir: "", lines: 0, bundledFiles: [], truncated: false, error: text },
+          isError: true,
+        };
+      }
     },
     renderShell: "self",
     renderCall(args: SkillToolParams, theme: Theme, context) {
@@ -115,10 +125,12 @@ export function createSkillTool(
     ) {
       const textPart = result.content.find((part) => part.type === "text");
       const fullText = textPart && textPart.type === "text" ? textPart.text : "";
-      const status = t?.("module.skills.tool.skill.result.loaded", {
-        name: result.details.name,
-        lines: result.details.lines,
-      }) ?? `Skill loaded: ${result.details.name} (${result.details.lines} lines)`;
+      const status = result.details.error
+        ? result.details.error
+        : t?.("module.skills.tool.skill.result.loaded", {
+            name: result.details.name,
+            lines: result.details.lines,
+          }) ?? `Skill loaded: ${result.details.name} (${result.details.lines} lines)`;
       return renderToolCardResult(
         { title: t?.("module.skills.tool.skill.display") ?? "skill", object: result.details.name, status, details: options.expanded ? fullText.split("\n") : [] },
         theme,

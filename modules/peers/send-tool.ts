@@ -78,6 +78,7 @@ export function registerPeersSendTool(pi: ExtensionAPI, deps: PeersSendToolDeps)
       "The send completes immediately once the target endpoint accepts it; it does not wait for the receiver's LLM to process it. " +
       "Replies from the receiver arrive automatically as new messages; do not use wait_agent or repeatedly poll peers_list for them. " +
       "Target may be: a 6-char short id with # prefix (like #62nvbt, from peers_list), a session name, a full session UUID or a unique lowercase prefix (min 4 chars), or an instance id (needed when one session runs multiple instances). " +
+      "This target namespace contains peer session identities; a spawn_agent task_name such as dup_demo is resolved by send_message or followup_task in the parent session instead. " +
       "Optional replyTo carries the full message id of the message this one replies to; omit it when there is no reply relation. It is declarative metadata and is NOT validated against existing messages. " +
       "Large bodies are supported: content over the large-content threshold (default 8192 UTF-8 bytes) is automatically written to a file in the peers shared area and delivered as a file reference with size and sha256; the receiver validates the path and hash before injecting. " +
       "If that integrity validation fails (missing file, size or hash mismatch), the receiver rejects the injection and records a local diagnostic — the sender receives only the generic rejection reason code and gets NO reverse notification about the cause, so verify or re-send on your own. " +

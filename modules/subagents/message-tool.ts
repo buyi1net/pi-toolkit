@@ -143,17 +143,17 @@ export function registerSubagentMessageTool(
       const requestedName = normalizeSubagentName(params.name?.trim() ?? "", "");
       if (!requestedName) {
         const error = "Provide the subagent's `name` to steer (if running) or resume (if finished).";
-        return { content: [{ type: "text" as const, text: error }], details: { error } };
+        return { content: [{ type: "text" as const, text: error }], details: { error }, isError: true };
       }
       const message = params.message?.trim();
       if (!message) {
         const error = "Provide a non-empty `message` to steer or resume a subagent.";
-        return { content: [{ type: "text" as const, text: error }], details: { error } };
+        return { content: [{ type: "text" as const, text: error }], details: { error }, isError: true };
       }
 
       const timeoutError = validateTimeoutMs(params.timeoutMs);
       if (timeoutError) {
-        return { content: [{ type: "text" as const, text: timeoutError }], details: { error: timeoutError } };
+        return { content: [{ type: "text" as const, text: timeoutError }], details: { error: timeoutError }, isError: true };
       }
       const runningMatch = deps.registry.findByName(requestedName);
       if (runningMatch) {
@@ -183,7 +183,7 @@ export function registerSubagentMessageTool(
       const name = requestedName;
       if (deps.registry.isNameReserved(name)) {
         const error = `Subagent "${name}" is already being launched or resumed. Wait for that operation to finish.`;
-        return { content: [{ type: "text" as const, text: error }], details: { error } };
+        return { content: [{ type: "text" as const, text: error }], details: { error }, isError: true };
       }
 
       const planned = deps.startup.planResume(
@@ -198,6 +198,7 @@ export function registerSubagentMessageTool(
         return {
           content: [{ type: "text" as const, text: planned.error }],
           details: planned.details ?? { error: planned.error },
+          isError: true,
         };
       }
       const plan = planned.plan;

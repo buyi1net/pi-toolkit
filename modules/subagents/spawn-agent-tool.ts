@@ -33,7 +33,7 @@ function parentTaskDepth(): number {
 }
 
 function errorResult(error: Record<string, unknown>) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(error) }], details: error };
+  return { content: [{ type: "text" as const, text: JSON.stringify(error) }], details: error, isError: true };
 }
 
 function displayError(mode: string): Record<string, unknown> {
@@ -133,8 +133,7 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
           context,
         );
       }
-      const agentType = compactRenderText(details.resolved?.agent_type) || "general-purpose";
-      const started = deps.t?.("module.subagents.tool.spawn_agent.result.started", { agent: agentType }) ?? `Started (${agentType})`;
+      const started = deps.t?.("module.subagents.tool.spawn_agent.result.started") ?? "Started";
       const model = compactRenderText(details.resolved?.model);
       const reasoning = compactRenderText(details.resolved?.reasoning_effort);
       return renderToolCardResult(
@@ -225,7 +224,20 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
           resolved_display_mode: resolvedSurface === "background" ? null : resolvedSurface,
           underlying_error: planned.details ?? null,
         }));
-        const started = await deps.startup.spawn(planned.plan, ctx, pi);
+        let started: Awaited<ReturnType<SubagentStartup["spawn"]>>;
+        try {
+          started = await deps.startup.spawn(planned.plan, ctx, pi);
+        } catch (error) {
+          return errorResult(createCodexV2LaunchError({
+            code: "agent_launch_failed",
+            message: error instanceof Error ? error.message : String(error),
+            selectedModel: input.model,
+            reasoning_effort: input.reasoning_effort,
+            display_mode: requestedMode,
+            resolved_display_mode: resolvedSurface === "background" ? null : resolvedSurface,
+            underlying_error: error instanceof Error ? error.message : String(error),
+          }));
+        }
         const canonicalParent = process.env.PI_SUBAGENT_TASK_PATH ?? "/root";
         const canonical = `${canonicalParent}/${input.task_name}`;
         registerName(artifactDir, input.task_name, {
@@ -239,6 +251,7 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
         producers.spawnStatus({ agent_id: started.running.id, task_name: input.task_name, status: "starting", summary: "Spawn accepted and starting.", update_id: `spawn:${started.running.id}:starting` });
         producers.spawnStatus({ agent_id: started.running.id, task_name: input.task_name, status: "running", summary: "Subagent is running.", update_id: `spawn:${started.running.id}:running` });
         void started.watch.then((watchResult: any) => {
+          if (watchResult?.interruptedRound || watchResult?.handedOff) return;
           const status = watchResult?.userClosed || watchResult?.stopped ? "interrupted" : watchResult?.exitCode === 0 ? "completed" : "failed";
           const update = (watchResult?.userClosed ? producers.surfaceClosed : producers.watcherTerminal)({ agent_id: started.running.id, task_name: input.task_name, status, summary: watchResult?.summary || watchResult?.errorMessage || "Subagent finished.", update_id: `spawn:${started.running.id}:terminal`, final_text: watchResult?.summary || watchResult?.errorMessage || undefined });
           deps.deliverTerminal?.(started.running, watchResult as SubagentResult, "spawn", update.delivery_id);

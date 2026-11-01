@@ -19,7 +19,7 @@ export interface InterruptAgentToolDeps extends SendMessageToolDeps {
 
 function errorResult(code: string, message: string, details: Record<string, unknown> = {}) {
   const error = { code, message, ...details };
-  return { content: [{ type: "text" as const, text: JSON.stringify(error) }], details: error };
+  return { content: [{ type: "text" as const, text: JSON.stringify(error) }], details: error, isError: true };
 }
 
 function historicalStatus(deps: SendMessageToolDeps, ctx: ToolContext, agentId: string): string | null {

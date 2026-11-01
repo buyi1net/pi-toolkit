@@ -103,6 +103,7 @@ export interface AcpDecompressArgs {
 export interface AcpDecompressOutcome {
   readonly text: string;
   readonly mode: "block-inline" | "block-file" | "message-inline" | "message-file" | "notice";
+  readonly failed?: boolean;
 
   readonly blockId?: string;
 }
@@ -117,6 +118,7 @@ export interface AcpSearchOutcome {
   readonly matches: number;
   readonly blockCount: number;
   readonly messageCount: number;
+  readonly failed?: boolean;
 }
 
 type SessionEntrySource = {
@@ -699,6 +701,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
           return {
             text: `Message ${arg} (in block ${ownerBlock.blockId}) has no restorable text content in the session log.`,
             mode: "notice",
+            failed: true,
             blockId: ownerBlock.blockId,
           };
         }
@@ -720,7 +723,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
           };
         }
         const targetPath = toFile ? acpResolveRestoreFilePath(toFile) : acpAutoRestoreFilePath(`msg-${rawId}`);
-        if (typeof targetPath === "object") return { text: targetPath.error, mode: "notice" };
+        if (typeof targetPath === "object") return { text: targetPath.error, mode: "notice", failed: true };
         await acpWriteRestoreFile(targetPath, found.text);
         return {
           text: [
@@ -740,6 +743,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
         return {
           text: `Invalid blockId: ${JSON.stringify(args.blockId)}. Expected a block id like "b5"/"5", or a message ref (e.g. "m00012") from search_context results.`,
           mode: "notice",
+          failed: true,
         };
       }
       const block = state.blocks.find((b) => b.blockId === blockId);
@@ -748,6 +752,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
         return {
           text: `Block ${blockId} not found. Active blocks: ${active || "(none)"}.`,
           mode: "notice",
+          failed: true,
         };
       }
 
@@ -767,6 +772,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
         return {
           text: `Block ${blockId} has no restorable message content.`,
           mode: "notice",
+          failed: true,
           blockId,
         };
       }
@@ -791,7 +797,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
       }
 
       const targetPath = toFile ? acpResolveRestoreFilePath(toFile) : acpAutoRestoreFilePath(blockId);
-      if (typeof targetPath === "object") return { text: targetPath.error, mode: "notice", blockId };
+      if (typeof targetPath === "object") return { text: targetPath.error, mode: "notice", failed: true, blockId };
       await acpWriteRestoreFile(targetPath, collected.text);
       const itemWord = collected.count === 1 ? "item" : "items";
       return {
@@ -826,6 +832,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
             matches: 0,
             blockCount: 0,
             messageCount: 0,
+            failed: true,
           };
         }
         throw error;
@@ -843,6 +850,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
           matches: 0,
           blockCount: 0,
           messageCount: 0,
+          failed: true,
         };
       }
       const report = acpRunSearch(slot.state, projection.entries, query, limit);

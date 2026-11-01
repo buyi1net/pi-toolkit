@@ -106,19 +106,17 @@ export type SubagentMetadataLevel = "full" | "compact" | "hidden";
 export function buildSubagentMetadataSegment(
   model: string | null | undefined,
   thinking: string | null | undefined,
-  role: string | null | undefined,
   _level: Exclude<SubagentMetadataLevel, "hidden">,
 ): StatusSegment | null {
   const modelRef = typeof model === "string" && model.trim() ? baseModelRef(model.trim()) : "";
   const modelText = compactModelRef(modelRef);
   const thinkingText = typeof thinking === "string" && thinking.trim() ? thinking.trim() : "";
-  const roleText = typeof role === "string" && role.trim() ? role.trim().toLowerCase() : "";
-  if (!modelText && !thinkingText && !roleText) return null;
+  if (!modelText && !thinkingText) return null;
 
   const parts = [modelText, thinkingText].filter(Boolean);
   return {
     id: "metadata",
-    text: `${parts.join(":")}${roleText ? `(${roleText})` : ""}`,
+    text: parts.join(":"),
     priority: SUBAGENT_WIDGET_SEGMENT_PRIORITIES.model,
     required: true,
   };

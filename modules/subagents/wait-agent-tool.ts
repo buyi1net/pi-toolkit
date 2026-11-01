@@ -33,9 +33,11 @@ interface WaitAgentResult {
 }
 
 function result(value: WaitAgentResult, details: Record<string, unknown> = {}) {
+  const isError = typeof details.code === "string";
   return {
     content: [{ type: "text" as const, text: JSON.stringify(value) }],
     details: { ...value, ...details },
+    ...(isError ? { isError: true } : {}),
   };
 }
 

@@ -129,23 +129,29 @@ export function makeAcpDecompressTool(deps: AcpDecompressToolDeps): ToolDefiniti
       const engine = deps.engine();
       if (!engine) return acpToolUnavailable(t);
 
-      const outcome = await engine.executeDecompress(
-        {
-          blockId: params.blockId,
-          ...(params.full === undefined ? {} : { full: params.full }),
-          ...(params.toFile === undefined ? {} : { toFile: params.toFile }),
-          ...(params.inline === undefined ? {} : { inline: params.inline }),
-        },
-        ctx,
-        toolCallId,
-      );
-      return {
-        details: {
-          mode: outcome.mode,
-          ...(outcome.blockId === undefined ? {} : { blockId: outcome.blockId }),
-        } satisfies AcpDecompressToolDetails,
-        content: [{ type: "text", text: outcome.text }],
-      };
+      try {
+        const outcome = await engine.executeDecompress(
+          {
+            blockId: params.blockId,
+            ...(params.full === undefined ? {} : { full: params.full }),
+            ...(params.toFile === undefined ? {} : { toFile: params.toFile }),
+            ...(params.inline === undefined ? {} : { inline: params.inline }),
+          },
+          ctx,
+          toolCallId,
+        );
+        return {
+          details: {
+            mode: outcome.mode,
+            ...(outcome.blockId === undefined ? {} : { blockId: outcome.blockId }),
+          } satisfies AcpDecompressToolDetails,
+          content: [{ type: "text", text: outcome.text }],
+          isError: outcome.failed === true,
+        };
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        return { details: { error: text }, content: [{ type: "text", text }], isError: true };
+      }
     },
   };
 }

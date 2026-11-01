@@ -189,9 +189,11 @@ export function exceptionKindForOutcome(status: DependencyOutcomeStatus): Depend
 export function dependencyExceptionResult(exception: DependencyException): {
   content: Array<{ type: "text"; text: string }>;
   details: Record<string, unknown>;
+  isError: true;
 } {
   return {
     content: [{ type: "text", text: exception.message }],
     details: { error: "dependency_exception", dependencyException: exception },
+    isError: true,
   };
 }

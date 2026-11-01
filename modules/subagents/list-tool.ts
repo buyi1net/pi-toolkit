@@ -137,11 +137,10 @@ function formatSessionViewLine(view: SessionSubagentView): string {
     view.status === "running" && !view.member ? " (running)"
       : view.status === "discarded" ? " (discarded)" : "";
   const resumable = view.status === "finished" ? (view.resumable ? " [resumable]" : " [not resumable]") : "";
-  const agent = view.agent ? ` — ${view.agent}` : "";
   const model = view.model ? ` [${view.model}]` : "";
   const tier = view.tier ? ` [tier: ${view.tier}]` : "";
   const cohort = view.cohortId ? ` [cohort: ${view.cohortId}]` : "";
-  return `• ${view.name}${memberBadge}${badge}${resumable}${agent}${model}${tier}${inheritedBadge(view)}${cohort}`;
+  return `• ${view.name}${memberBadge}${badge}${resumable}${model}${tier}${inheritedBadge(view)}${cohort}`;
 }
 
 export function registerSubagentsListTool(
@@ -217,6 +216,7 @@ export function registerSubagentsListTool(
               "Start pi with a persistent session to see registered subagents.",
           }],
           details: { scope, error: "session-unavailable" },
+          isError: true,
         };
       }
       const artifactDir = deps.getArtifactDir(
@@ -299,14 +299,13 @@ export function registerSubagentsListTool(
                   ? theme.fg("success", " [resumable]")
                   : theme.fg("dim", " [not resumable]")
                 : "";
-            const agent = view.agent ? theme.fg("dim", ` — ${view.agent}`) : "";
             const model = view.model ? theme.fg("dim", ` [${view.model}]`) : "";
             const tier = view.tier ? theme.fg("dim", ` [tier: ${view.tier}]`) : "";
             const inherited = view.modelSource === "parent"
               ? theme.fg("warning", inheritanceBadgeText(view.inheritanceCause))
               : "";
             const cohort = view.cohortId ? theme.fg("dim", ` [cohort: ${view.cohortId}]`) : "";
-            return `  ${theme.fg("toolTitle", theme.bold(view.name))}${theme.fg(statusColor, badge)}${resumable}${agent}${model}${tier}${inherited}${cohort}`;
+            return `  ${theme.fg("toolTitle", theme.bold(view.name))}${theme.fg(statusColor, badge)}${resumable}${model}${tier}${inherited}${cohort}`;
           })
           .join("\n");
       };

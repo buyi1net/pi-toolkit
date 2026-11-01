@@ -34,7 +34,7 @@ function canonicalFor(name: string): string {
 
 function errorResult(code: string, message: string, details: Record<string, unknown> = {}) {
   const error = { code, message, ...details };
-  return { content: [{ type: "text" as const, text: JSON.stringify(error) }], details: error };
+  return { content: [{ type: "text" as const, text: JSON.stringify(error) }], details: error, isError: true };
 }
 
 function targetNames(deps: SendMessageToolDeps, ctx: ToolContext): Array<{ name: string; agentId: string; canonicalTaskName: string; running: boolean }> {
@@ -127,7 +127,7 @@ export function registerSendMessageTool(pi: ExtensionAPI, deps: SendMessageToolD
     name: "send_message",
     label: "Send Message",
     renderShell: "self",
-    description: "Deliver an immediate message to an existing subagent. target accepts agent_id, canonical_task_name, or a unique local task name. This never starts a new task round.",
+    description: "Deliver an immediate message to an existing subagent in the current parent session. target accepts agent_id, canonical_task_name, or a unique local task name; peers short ids such as #62nvbt belong to peers_send. This never starts a new task round.",
     promptSnippet: "Send an immediate message using the agent_id, canonical path, or task name without starting a new round.",
     parameters: Type.Object({ target: Type.String({ minLength: 1 }), message: Type.String({ minLength: 1 }) }),
     renderCall(args, theme, context) {

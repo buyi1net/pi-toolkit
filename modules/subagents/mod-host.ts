@@ -213,6 +213,7 @@ export function muxUnavailableResult() {
       },
     ],
     details: { error: "supported multiplexer not available" },
+    isError: true,
   };
 }
 

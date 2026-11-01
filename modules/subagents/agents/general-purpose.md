@@ -1,7 +1,6 @@
 ---
 name: general-purpose
-display_name: Worker
-description: General-purpose worker for completing delegated tasks
+description: General-purpose task agent for completing delegated tasks
 system-prompt: append
 auto-exit: true
 ---

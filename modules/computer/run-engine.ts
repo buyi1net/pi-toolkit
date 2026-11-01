@@ -481,7 +481,8 @@ export async function executeComputerRun(
         cancelledInFlight: options.error === RUN_CANCELLED_IN_FLIGHT,
       })}${logNotes.join("")}`,
     );
-    return success(data, text.text);
+    const base = success(data, text.text);
+    return status === "failed" || status === "timeout" ? { ...base, isError: true } : base;
   };
 
   for (const [index, step] of frozen.entries()) {

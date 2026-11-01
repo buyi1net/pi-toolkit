@@ -96,7 +96,6 @@ export default function (pi: ExtensionAPI) {
   let expanded = false;
 
   const subagentName = process.env.PI_SUBAGENT_NAME ?? "";
-  const subagentAgent = process.env.PI_SUBAGENT_AGENT ?? "";
   const deniedToolsValue = process.env.PI_DENY_TOOLS;
   const autoExit = process.env.PI_SUBAGENT_AUTO_EXIT === "1";
   const barrierMode = process.env.PI_SUBAGENT_BARRIER === "1";
@@ -116,9 +115,6 @@ export default function (pi: ExtensionAPI) {
       (_tui: any, theme: any) => {
         const box = new Box(1, 0, cardBackground(theme, "toolSuccessBg"));
 
-        const label = subagentAgent || subagentName;
-        const agentTag = label ? theme.bold(theme.fg("accent", `[${label}]`)) : "";
-
         if (expanded) {
 
           const countInfo = theme.fg("dim", ` — ${toolNames.length} available`);
@@ -137,7 +133,7 @@ export default function (pi: ExtensionAPI) {
           }
 
           const content = new Text(
-            `${agentTag}${countInfo}${hint}\n${toolList}${deniedLine}`,
+            `${countInfo}${hint}\n${toolList}${deniedLine}`,
             0,
             0,
           );
@@ -151,7 +147,7 @@ export default function (pi: ExtensionAPI) {
               : "";
           const hint = theme.fg("muted", "  (Ctrl+Alt+O to expand)");
 
-          const content = new Text(`${agentTag}${countInfo}${deniedInfo}${hint}`, 0, 0);
+          const content = new Text(`${countInfo}${deniedInfo}${hint}`, 0, 0);
           box.addChild(content);
         }
 
@@ -388,10 +384,11 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const sessionFile = process.env.PI_SUBAGENT_SESSION;
       if (!sessionFile) {
-        throw new Error(
-          "ask_question is only available in subagent contexts. " +
-            "PI_SUBAGENT_SESSION environment variable is not set.",
-        );
+        return {
+          content: [{ type: "text", text: "ask_question is only available in subagent contexts. PI_SUBAGENT_SESSION environment variable is not set." }],
+          details: { error: "subagent-session-unavailable" },
+          isError: true,
+        };
       }
 
       const checkpoint = autoExit && barrierMode;
@@ -467,16 +464,16 @@ export default function (pi: ExtensionAPI) {
       }),
       async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
         if (!teamDir) {
-          throw new Error("team_send requires PI_SUBAGENT_TEAM_DIR (member spawn must set it).");
+          return { content: [{ type: "text", text: "team_send requires PI_SUBAGENT_TEAM_DIR (member spawn must set it)." }], details: { error: "team-session-unavailable" }, isError: true };
         }
         const to = normalizeSubagentName(typeof params?.to === "string" ? params.to : "", "");
         const text = typeof params?.text === "string" ? params.text : "";
         if (!to) {
-          return { content: [{ type: "text", text: "Provide the target member's `name`." }], details: { error: "missing-target" } };
+          return { content: [{ type: "text", text: "Provide the target member's `name`." }], details: { error: "missing-target" }, isError: true };
         }
 
         if (!text.trim()) {
-          return { content: [{ type: "text", text: "Provide a non-empty `text`." }], details: { error: "missing-text", to } };
+          return { content: [{ type: "text", text: "Provide a non-empty `text`." }], details: { error: "missing-text", to }, isError: true };
         }
         if (peerSendAcl.length === 0 || !peerSendAcl.includes(to)) {
           return {
@@ -487,6 +484,7 @@ export default function (pi: ExtensionAPI) {
                 `${peerSendAcl.length > 0 ? ` (allowed: ${peerSendAcl.join(", ")})` : " (no peer-send declared)"}.`,
             }],
             details: { error: "acl-denied", to },
+            isError: true,
           };
         }
 
@@ -497,6 +495,7 @@ export default function (pi: ExtensionAPI) {
           return {
             content: [{ type: "text", text: `No team member named "${to}" is registered in this session's roster.` }],
             details: { error: "unknown-target", to },
+            isError: true,
           };
         }
         if (target.status === "offline") {
@@ -508,6 +507,7 @@ export default function (pi: ExtensionAPI) {
                 `tell the orchestrator to restart it if this matters.`,
             }],
             details: { error: "target-offline", to },
+            isError: true,
           };
         }
         postTeamMessage(teamDir, {

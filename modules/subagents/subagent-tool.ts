@@ -508,7 +508,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       "from the host model catalog (for example `my-llm/glm-5.3`); never infer a provider from a model brand name. " +
       "A unique bare model id is normalized when the catalog can identify it, and known-invalid routes are rejected with exact candidates. " +
       "Spawn a sub-agent as an independent process. " +
-      "AUTONOMOUS SUBAGENTS (agents defined with auto-exit, the default for workers): by default they run HEADLESS — an independent background pi process with NO pane/tab — and the call BLOCKS until the sub-agent reaches a terminal state; its real result is returned directly as this tool's result, never a placeholder. " +
+      "AUTONOMOUS SUBAGENTS (agents defined with auto-exit): by default they run HEADLESS — an independent background pi process with NO pane/tab — and the call BLOCKS until the sub-agent reaches a terminal state; its real result is returned directly as this tool's result, never a placeholder. " +
       "Multiple subagent calls in the SAME assistant message run in PARALLEL, and the turn continues only after all of them have settled, so batch them freely and end your turn after spawning. " +
       "VISIBLE DEMO SUBAGENTS (agents defined without auto-exit / interactive: true): the call returns immediately with only an acknowledgement; the sub-agent runs in a visible pane that belongs to the user, and the result is delivered later as a steer message that starts a new turn. Never block on a demo subagent. " +
       "ESCAPE / ABORT SEMANTICS: aborting this tool call (e.g. the user presses Escape) does NOT cancel the sub-agent — the wait is only DETACHED. The call returns a `detached` non-terminal result; the sub-agent keeps running (its session, runtime registration and dependency record are all preserved), and its real result is delivered later as a steer message, exactly once. Do not respawn a detached sub-agent. The ONLY way to actually terminate a running sub-agent early is the subagent_stop tool. " +
@@ -535,6 +535,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         return {
           content: [{ type: "text", text: "Invalid subagent parameters: provide an agent and a non-empty task." }],
           details: { error: "invalid parameters" },
+          isError: true,
         };
       }
       const currentAgent = process.env.PI_SUBAGENT_AGENT;
@@ -545,6 +546,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             text: `You are the ${currentAgent} agent — do not start another ${currentAgent}. You were spawned to do this work yourself. Complete the task directly.`,
           }],
           details: { error: "self-spawn blocked" },
+          isError: true,
         };
       }
 
@@ -561,6 +563,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             text: `You must specify which agent to spawn via the "agent" field. Available agents: ${permittedList}.`,
           }],
           details: { error: "agent required" },
+          isError: true,
         };
       }
       if (!permittedSet.has(params.agent)) {
@@ -573,6 +576,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
               `Available agents: ${permittedList}.`,
           }],
           details: { error: deps.allowlist ? "agent not in allowlist" : "unknown agent" },
+          isError: true,
         };
       }
 
@@ -581,6 +585,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         return {
           content: [{ type: "text", text: taskError }],
           details: { error: "task required" },
+          isError: true,
         };
       }
 
@@ -590,6 +595,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
         return {
           content: [{ type: "text", text: planned.error }],
           details: planned.details ?? { error: planned.error },
+          isError: true,
         };
       }
       const plan = planned.plan;
@@ -626,7 +632,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
               : ` (to restart the offline team member "${params.name}", spawn it with member: true.)`
             : "";
           const error = `Subagent name "${params.name}" is already in use in this session.${reuseHint} Pick another name.`;
-          return { content: [{ type: "text", text: error }], details: { error } };
+          return { content: [{ type: "text", text: error }], details: { error }, isError: true };
         }
         reservedName = params.name;
         deps.registry.reserveName(reservedName);
@@ -1139,9 +1145,8 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
       const agentName = typeof partialArgs.agent === "string" && partialArgs.agent ? partialArgs.agent : "";
       const name = typeof partialArgs.name === "string" && partialArgs.name ? partialArgs.name : agentName || "(unnamed)";
       const task = typeof partialArgs.task === "string" ? partialArgs.task : "";
-      const agent = agentName && name !== agentName ? theme.fg("dim", ` (${agentName})`) : "";
       const cwdHint = typeof partialArgs.cwd === "string" && partialArgs.cwd ? theme.fg("dim", ` in ${partialArgs.cwd}`) : "";
-      let text = theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent.display") ?? "Run subagent")) + " " + theme.fg("accent", name) + agent + cwdHint;
+      let text = theme.fg("toolTitle", theme.bold(deps.t?.("module.subagents.tool.subagent.display") ?? "Run subagent")) + " " + theme.fg("accent", name) + cwdHint;
       if (task) {
         const firstLine = task.split("\n").find((line: string) => line.trim()) ?? "";
         const preview = firstLine.length > 100 ? firstLine.slice(0, 100) + "…" : firstLine;

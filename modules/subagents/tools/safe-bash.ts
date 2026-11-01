@@ -86,9 +86,14 @@ export default function (pi: ExtensionAPI, t: SubagentsTranslate = subagentsTabl
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const danger = isDangerous(params.command);
       if (danger) {
-        throw new Error(danger);
+        return { content: [{ type: "text" as const, text: danger }], details: { error: "dangerous_command", reason: danger }, isError: true };
       }
-      return bashTool.execute(toolCallId, params, signal, onUpdate);
+      try {
+        return await bashTool.execute(toolCallId, params, signal, onUpdate);
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text" as const, text }], details: { error: text }, isError: true };
+      }
     },
   });
 }

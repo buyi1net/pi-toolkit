@@ -713,7 +713,7 @@ export function registerSubagentInspectTool(pi: ExtensionAPI, deps: SubagentInsp
       if (!sessionFile) {
         const error =
           "Subagent inspection is unavailable without a persistent parent session. Start pi with a session file first.";
-        return { content: [{ type: "text" as const, text: error }], details: { error: "session-unavailable" } };
+        return { content: [{ type: "text" as const, text: error }], details: { error: "session-unavailable" }, isError: true };
       }
 
       const artifactDir = deps.getArtifactDir(
@@ -811,6 +811,7 @@ export function registerSubagentInspectTool(pi: ExtensionAPI, deps: SubagentInsp
           return {
             content: [{ type: "text" as const, text: known.length ? `${error} Known names: ${known.join(", ")}.` : error }],
             details: { error: "unknown-subagent", name: requestedName, knownNames: known, observedAt: now },
+            isError: true,
           };
         }
         return {

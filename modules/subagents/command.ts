@@ -28,9 +28,9 @@ export function registerSubagentCommand(
       }
 
       const taskText = task || `You are the ${agentName} agent. Wait for instructions.`;
-      const displayName = agentName[0].toUpperCase() + agentName.slice(1);
+      const taskName = agentName[0].toUpperCase() + agentName.slice(1);
       const toolCall =
-        `Use subagent with agent: "${agentName}", name: "${displayName}", task: ${JSON.stringify(taskText)}`;
+        `Use subagent with agent: "${agentName}", name: "${taskName}", task: ${JSON.stringify(taskText)}`;
 
       await pi.sendUserMessage(toolCall, { deliverAs: "steer" });
     },

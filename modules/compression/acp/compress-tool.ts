@@ -223,8 +223,12 @@ export function makeAcpCompressTool(deps: AcpCompressToolDeps): ToolDefinition<t
 
         if (outcome.persisted) deps.conclude?.(ctx);
       } catch (error) {
-
-        throw error instanceof Error ? error : new Error(String(error));
+        const text = error instanceof Error ? error.message : String(error);
+        return {
+          details: { error: text },
+          content: [{ type: "text", text }],
+          isError: true,
+        };
       }
       return { details, content: [{ type: "text", text }] };
     },
