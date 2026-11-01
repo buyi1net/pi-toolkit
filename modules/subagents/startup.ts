@@ -782,7 +782,14 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
           inheritsConversationContext: true,
           taskDelivery: "direct" as const,
         }
-      : resolveLaunchBehavior(params, agentDefs);
+      : planOptions?.protocol === CODEX_V2_SUBAGENT_PROTOCOL && planOptions.forkTurns === "none"
+        ? {
+            sessionMode: "standalone" as const,
+            seededSessionMode: null,
+            inheritsConversationContext: false,
+            taskDelivery: "artifact" as const,
+          }
+        : resolveLaunchBehavior(params, agentDefs);
     if (launchBehavior.inheritsConversationContext && planOptions?.protocol !== CODEX_V2_SUBAGENT_PROTOCOL) {
       return {
         kind: "error",
