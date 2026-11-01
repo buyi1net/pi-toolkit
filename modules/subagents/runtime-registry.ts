@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { debugLog } from "./diagnostics.ts";
 import type { SubagentLaunchPlanMetadata, SubagentProtocol } from "./protocol.ts";
 import type { SubagentWaitMode, SubagentWaitRelease } from "./types.ts";
@@ -155,6 +155,22 @@ export function markRuntimeWaitReleased(
     );
   } catch (error) {
     debugLog(`Could not persist wait release for runtime record ${id}`, error);
+  }
+}
+
+export function removeRuntimeRecordsForSession(path: string, sessionFile: string): string[] {
+  const target = resolve(sessionFile);
+  const records = readRuntimeRecords(path);
+  const removed = records
+    .filter((record) => resolve(record.sessionFile) === target)
+    .map((record) => record.id);
+  if (removed.length === 0) return [];
+  try {
+    writeRuntimeRecords(path, records.filter((record) => resolve(record.sessionFile) !== target));
+    return removed;
+  } catch (error) {
+    debugLog(`Could not remove stale runtime records for ${sessionFile}`, error);
+    return [];
   }
 }
 

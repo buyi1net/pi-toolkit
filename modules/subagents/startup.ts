@@ -1393,6 +1393,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         kind: useHeadless ? "headless" : "pane",
         ...(child && child.pid != null ? { pid: child.pid, headlessChild: child } : {}),
       };
+      deps.registry.removeRecordsForSession(runtimeFile, sessionPath);
       deps.registry.add(running);
       return {
         ...startWatcher(running, pi),

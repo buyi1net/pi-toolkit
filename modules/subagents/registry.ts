@@ -7,6 +7,7 @@ import {
   markRuntimeWaitReleased,
   readRuntimeRecords,
   removeRuntimeRecord,
+  removeRuntimeRecordsForSession,
   runtimeRegistryPath,
   upsertRuntimeRecord,
   type RuntimeRecord,
@@ -43,6 +44,7 @@ export interface RuntimeRegistry {
   remove(id: string, options?: { keepRecord?: boolean; recordPath?: string }): void;
 
   removeRecord(path: string, id: string): void;
+  removeRecordsForSession(path: string, sessionFile: string): void;
   get(id: string): RunningSubagent | undefined;
   has(id: string): boolean;
 
@@ -169,6 +171,9 @@ export function createRuntimeRegistry(): RuntimeRegistry {
     },
     removeRecord(path, id) {
       removeRuntimeRecord(path, id);
+    },
+    removeRecordsForSession(path, sessionFile) {
+      removeRuntimeRecordsForSession(path, sessionFile);
     },
     get(id) {
       return running.get(id);
