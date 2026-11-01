@@ -192,7 +192,7 @@ export function applySandboxToParts(
     parts.push("--no-mcp");
   }
 
-  const canSpawnChildren = subagentTaskDepth() < 1;
+  const canSpawnChildren = subagentTaskDepth() < 2;
   if (!canSpawnChildren) {
     parts.push("--exclude-tools", escape(SPAWNING_TOOLS.join(",")));
   }
