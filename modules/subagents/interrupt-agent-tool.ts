@@ -4,6 +4,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { toolCardFailureReason, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import type { RuntimeRegistry } from "./registry.ts";
 import type { RunningSubagent } from "./types.ts";
+import { agentTreeRootDir, appendAgentTreeRecord, appendRunningAgentTreeRecord, readAgentTreeRecord } from "./agent-tree.ts";
+import { terminateHeadlessProcess } from "./headless.ts";
+import { sendCommandFor } from "./surface.ts";
 import {
   lifecycleQueue,
   lifecycleUpdateDetails,
@@ -15,6 +18,8 @@ import {
 export interface InterruptAgentToolDeps extends SendMessageToolDeps {
 
   interruptCurrentRound: (running: RunningSubagent) => void;
+  terminateProcess?: (pid: number) => void;
+  interruptRemoteSurface?: (kind: "herdr" | "tmux", surface: string) => void;
 }
 
 function errorResult(code: string, message: string, details: Record<string, unknown> = {}) {
@@ -63,7 +68,44 @@ export function registerInterruptAgentTool(pi: ExtensionAPI, deps: InterruptAgen
       if ("error" in resolved) return resolved.error;
       const target = resolved.target;
       if (target.status === "closed") return errorResult("agent_closed", `Subagent "${target.name}" is closed; if you need to continue, spawn a new subagent.`, { target: params.target, agent_id: target.agentId, task_name: target.name, status: "closed" });
+      const artifactDir = deps.getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId());
+      const rootDir = agentTreeRootDir(artifactDir);
       const running = target.agentId ? deps.registry.get(target.agentId) : undefined;
+      if (target.managedLocally === false) {
+        const record = target.agentId ? readAgentTreeRecord(rootDir, target.agentId) : null;
+        if (!record) return errorResult("target_not_receivable", `Subagent "${target.name}" is not reachable from this session.`, { target: params.target, agent_id: target.agentId || null, task_name: target.name, status: target.status ?? null });
+        if (record.status === "waiting") return errorResult("agent_already_waiting", `Subagent "${record.task_name}" is already waiting after its current round was interrupted.`, { target: params.target, agent_id: record.agent_id, task_name: record.task_name, status: "waiting" });
+        if (record.status === "handed_off") return errorResult("agent_handed_off", `Subagent "${record.task_name}" was handed off and cannot be interrupted in this process.`, { target: params.target, agent_id: record.agent_id, task_name: record.task_name, status: "handed_off" });
+        if (record.status === "completed" || record.status === "failed" || record.status === "interrupted") return errorResult("agent_already_finished", `Subagent "${record.task_name}" has already finished (${record.status}) and cannot be interrupted.`, { target: params.target, agent_id: record.agent_id, task_name: record.task_name, status: record.status });
+        const previousStatus = record.status;
+        appendAgentTreeRecord(rootDir, { ...record, status: "waiting", summary: "Current round interrupted; context is preserved for follow-up." });
+        const terminateProcess = deps.terminateProcess ?? terminateHeadlessProcess;
+        const interruptRemoteSurface = deps.interruptRemoteSurface ?? ((kind, surface) => sendCommandFor(kind, surface, "\u0003"));
+        let action: "terminate" | "interrupt_pane" | "none" = "none";
+        let attempted = false;
+        let ok: boolean | null = null;
+        if (record.pid !== null) {
+          terminateProcess(record.pid);
+          action = "terminate";
+          attempted = true;
+          ok = true;
+        } else if (record.surface && (record.surface_kind === "herdr" || record.surface_kind === "tmux")) {
+          interruptRemoteSurface(record.surface_kind, record.surface);
+          action = "interrupt_pane";
+          attempted = true;
+          ok = true;
+        }
+        const details = {
+          agent_id: record.agent_id,
+          task_name: record.task_name,
+          canonical_task_name: record.canonical_task_name,
+          previous_status: previousStatus,
+          status: "waiting",
+          managed_by: record.owner_session_id,
+          process_control: { action, attempted, ok },
+        };
+        return { content: [{ type: "text" as const, text: JSON.stringify(details) }], details };
+      }
       if (!running) {
         const status = target.agentId ? historicalStatus(deps, ctx, target.agentId) : null;
         if (status === "handed_off") return errorResult("agent_handed_off", `Subagent "${target.name}" was handed off and cannot be interrupted in this process.`, { target: params.target, agent_id: target.agentId, task_name: target.name, status });
@@ -80,11 +122,12 @@ export function registerInterruptAgentTool(pi: ExtensionAPI, deps: InterruptAgen
       deps.registry.markInterrupted(running.runtimeFile, running.id);
       deps.interruptCurrentRound(running);
       deps.registry.updatePublicStatus(
-        deps.registry.publicPathFor(deps.getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId())),
+        deps.registry.publicPathFor(artifactDir),
         running.id,
         "waiting",
         "Current round interrupted; context is preserved for follow-up.",
       );
+      appendRunningAgentTreeRecord({ rootDir, running, status: "waiting", summary: "Current round interrupted; context is preserved for follow-up.", artifactDir, ownerSessionId: ctx.sessionManager.getSessionId() });
       const submissionId = `interrupt-${randomUUID()}`;
       const update = lifecycleQueue(deps, ctx).interruptStatus({
         agent_id: running.id,

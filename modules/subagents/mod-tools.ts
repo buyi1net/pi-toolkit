@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { terminateHeadlessProcess } from "./headless.ts";
-import { sendCommand } from "./surface.ts";
+import { adoptSurfaceFor, closeSurfaceFor, sendCommand, sendCommandFor } from "./surface.ts";
 import {
   getAgentConfigDir,
   getArtifactDir,
@@ -107,6 +107,8 @@ export function registerSubagentTools(pi: ExtensionAPI, startup: SubagentStartup
     getArtifactDir,
     handleSubagentSteer,
     t: widgetText,
+    terminateProcess: terminateHeadlessProcess,
+    interruptRemoteSurface: (kind, surface) => sendCommandFor(kind, surface, "\u0003"),
     interruptCurrentRound: (running) => {
       if (running.kind === "headless") {
         running.headlessChild?.abort();
@@ -122,6 +124,11 @@ export function registerSubagentTools(pi: ExtensionAPI, startup: SubagentStartup
     getArtifactDir,
     handleSubagentSteer,
     t: widgetText,
+    terminateProcess: terminateHeadlessProcess,
+    closeRemoteSurface: (kind, surface) => {
+      adoptSurfaceFor(kind, surface);
+      closeSurfaceFor(kind, surface);
+    },
     interruptCurrentRound: (running) => {
       if (running.kind === "headless") {
         running.headlessChild?.abort();

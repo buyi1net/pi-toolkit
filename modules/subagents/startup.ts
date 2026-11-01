@@ -40,6 +40,7 @@ import {
   type SubagentLoadout,
 } from "./session.ts";
 import {
+  buildNewTaskEnvelope,
   buildPiPromptArgs,
   buildSubagentToolAllowlist,
   getDefaultSessionDirFor,
@@ -49,7 +50,7 @@ import {
   resolveLaunchBehavior,
   resolveSubagentPaths,
   resolveSurfaceChoice,
-  subagentTaskDepth,
+  canGrantSpawningToChild,
   validateAgentLifecycleConfig,
 } from "./launch-config.ts";
 import { loadTierRouteConfig, normalizeTier, resolveTierPoolForParams, isThinkingLevel, modelOwnThinkingSuffix, THINKING_LEVELS, type ModelTier, type ThinkingLevel, type TierRouteInjectedSource, type TierConfigLoadResult } from "./routing.ts";
@@ -180,6 +181,8 @@ export interface SpawnPlan {
   launchBehavior: ReturnType<typeof resolveLaunchBehavior>;
 
   launchPlan: SubagentLaunchPlanMetadata;
+
+  forkTurns: "all" | "none" | null;
 }
 
 export interface ResumePlan {
@@ -682,7 +685,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
 
     const memberMode = params.member === true;
 
-    const grantSpawning = subagentTaskDepth() < 2;
+    const grantSpawning = canGrantSpawningToChild();
     const toolAllowlist = buildSubagentToolAllowlist(agentDefs?.tools, {
       grantSpawning,
       ...(memberMode ? { grantTeamSend: true } : {}),
@@ -833,6 +836,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         sessionDir,
         launchBehavior,
         launchPlan: createCodexV2LaunchPlanMetadata(`codex-v2-${randomUUID()}`),
+        forkTurns: planOptions?.forkTurns ?? null,
       },
     };
   }
@@ -884,7 +888,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     const activityFile = getSubagentActivityFile(artifactDir, id);
     mkdirSync(dirname(activityFile), { recursive: true });
 
-    const grantSpawning = subagentTaskDepth() < 2;
+    const grantSpawning = canGrantSpawningToChild();
 
     const resolvedAgentDir =
       localAgentDir && existsSync(localAgentDir)
@@ -905,6 +909,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
 
     splitEnv.PI_SUBAGENT_NAME = surfaceName;
     splitEnv.PI_SUBAGENT_TASK_PATH = `${process.env.PI_SUBAGENT_TASK_PATH ?? "/root"}/${surfaceName}`;
+    splitEnv.PI_SUBAGENT_ROOT_ARTIFACT_DIR = process.env.PI_SUBAGENT_ROOT_ARTIFACT_DIR?.trim() || artifactDir;
     if (params.agent) {
       splitEnv.PI_SUBAGENT_AGENT = params.agent;
     }
@@ -954,6 +959,13 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     const fullTask = inheritsConversationContext
       ? params.task
       : `${roleBlock}\n\n${modeHint}\n\n${params.task}\n\n${summaryInstruction}`;
+    const taskMessage = plan.forkTurns === "all" || plan.forkTurns === "none"
+      ? buildNewTaskEnvelope({
+          taskName: splitEnv.PI_SUBAGENT_TASK_PATH ?? `/${surfaceName}`,
+          sender: process.env.PI_SUBAGENT_TASK_PATH ?? "/root",
+          task: fullTask,
+        })
+      : fullTask;
 
     const esc = useHeadless ? (value: string) => value : shellEscape;
     const parts: string[] = ["pi"];
@@ -972,6 +984,7 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     const loadout: SubagentLoadout = {
       snapshotVersion: SUBAGENT_LOADOUT_VERSION,
       protocol: plan.launchPlan.protocol,
+      forkTurns: plan.forkTurns,
       agent: params.agent ?? null,
       toolAllowlist,
       model: effectiveModel,
@@ -1018,14 +1031,14 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     const basePartsLength = parts.length;
     let taskArg: string;
     if (launchBehavior.taskDelivery === "direct") {
-      taskArg = fullTask;
+      taskArg = taskMessage;
     } else {
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
       const safeName = sanitizeSubagentFileName(surfaceName);
       const artifactName = `context/${safeName || "subagent"}-${timestamp}.md`;
       const artifactPath = join(artifactDir, artifactName);
       mkdirSync(dirname(artifactPath), { recursive: true });
-      writeFileSync(artifactPath, fullTask, "utf8");
+      writeFileSync(artifactPath, taskMessage, "utf8");
       contextFiles.push(artifactPath);
       taskArg = `@${artifactPath}`;
     }
@@ -1076,8 +1089,8 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
           id: initialPromptId,
           type: "prompt",
           message: memberFirstRoundId
-            ? buildTeamRoundPrompt(memberFirstRoundId, deps.buildHeadlessPrompt(effectiveSkills, fullTask))
-            : deps.buildHeadlessPrompt(effectiveSkills, fullTask),
+            ? buildTeamRoundPrompt(memberFirstRoundId, deps.buildHeadlessPrompt(effectiveSkills, taskMessage))
+            : deps.buildHeadlessPrompt(effectiveSkills, taskMessage),
         });
       } catch (err) {
 

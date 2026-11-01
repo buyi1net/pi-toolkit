@@ -7,10 +7,13 @@ import type { RuntimeRegistry } from "./registry.ts";
 import type { SubagentStartup } from "./startup.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
 import type { DeliverTerminal } from "./spawn-agent-tool.ts";
+import { agentTreeRootDir, terminalOutcomeFromTree, writeAgentTerminal } from "./agent-tree.ts";
+import type { PublicAgentStatus } from "./registry.ts";
 import {
   lifecycleQueue,
   lifecycleUpdateDetails,
   resolveLifecycleTarget,
+  targetManagedByParentError,
   type SendMessageToolDeps,
   type ToolContext,
 } from "./send-message-tool.ts";
@@ -73,6 +76,7 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
       if ("error" in resolved) return resolved.error;
       const target = resolved.target;
       if (target.status === "closed") return errorResult("agent_closed", `Subagent "${target.name}" is closed; if you need to continue, spawn a new subagent.`, { target: params.target, agent_id: target.agentId, task_name: target.name, status: "closed" });
+      if (target.managedLocally === false) return targetManagedByParentError(target, params.target);
       const liveTarget = target.agentId ? deps.registry.get(target.agentId) : undefined;
       if (liveTarget && !targetRunningInterrupted(deps.registry, target.agentId)) {
         return errorResult("agent_already_running", `Subagent "${target.name}" is already running; wait for its current round before starting a follow-up.`, {
@@ -100,7 +104,10 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
       deps.registry.reserveName(target.name);
       try {
         const started = await deps.startup.resume(planned.plan, ctx as any, pi);
-        registerName(deps.getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId()), target.name, {
+        const artifactDir = deps.getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId());
+        const rootDir = agentTreeRootDir(artifactDir);
+        const ownerSessionId = ctx.sessionManager.getSessionId();
+        registerName(artifactDir, target.name, {
           sessionFile: started.running.sessionFile,
           sessionId: started.resumedSessionId,
           agentId: started.running.id,
@@ -108,6 +115,28 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
         });
         const running = started.running;
         running.interruptRequested = false;
+        const terminate = (
+          status: PublicAgentStatus,
+          summary: string,
+          updateId: string,
+          finalText?: string,
+        ) => {
+          const outcome = terminalOutcomeFromTree(rootDir, running.id, status);
+          if (outcome.action === "skip") {
+            running.closed = true;
+            return null;
+          }
+          const update = lifecycleQueue(deps, ctx).watcherTerminal({
+            agent_id: running.id,
+            task_name: running.name,
+            status: outcome.status,
+            summary,
+            update_id: updateId,
+            final_text: finalText,
+          });
+          writeAgentTerminal({ rootDir, running, status: outcome.status, summary, artifactDir, ownerSessionId, update });
+          return update;
+        };
         const statusUpdate = lifecycleQueue(deps, ctx).followupStatus({
           agent_id: running.id,
           task_name: running.name,
@@ -120,40 +149,24 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
           if (running.closed) return;
           if (!result) {
             const terminal: SubagentResult = { exitCode: 1, errorMessage: "Follow-up watcher ended without a terminal result." } as SubagentResult;
-            const update = lifecycleQueue(deps, ctx).watcherTerminal({
-              agent_id: running.id,
-              task_name: running.name,
-              status: "failed",
-              summary: terminal.errorMessage!,
-              update_id: `${submissionId}:terminal`,
-              final_text: terminal.errorMessage,
-            });
-            deps.deliverTerminal?.(running, terminal, "followup", update.delivery_id);
+            const update = terminate("failed", terminal.errorMessage!, `${submissionId}:terminal`, terminal.errorMessage);
+            if (update) deps.deliverTerminal?.(running, terminal, "followup", update.delivery_id);
             return;
           }
           if (result.interruptedRound) return;
-          const queue = lifecycleQueue(deps, ctx);
-          const update = queue.watcherTerminal({
-            agent_id: running.id,
-            task_name: running.name,
-            status: result.userClosed || result.stopped ? "interrupted" : result.exitCode === 0 ? "completed" : "failed",
-            summary: result.summary || result.errorMessage || "Follow-up round finished.",
-            update_id: `${submissionId}:terminal`,
-            final_text: result.summary || result.errorMessage || undefined,
-          });
-          deps.deliverTerminal?.(running, result, "followup", update.delivery_id);
+          const summary = result.summary || result.errorMessage || "Follow-up round finished.";
+          const update = terminate(
+            result.userClosed || result.stopped ? "interrupted" : result.exitCode === 0 ? "completed" : "failed",
+            summary,
+            `${submissionId}:terminal`,
+            result.summary || result.errorMessage || undefined,
+          );
+          if (update) deps.deliverTerminal?.(running, result, "followup", update.delivery_id);
         }).catch((error) => {
           if (running.closed) return;
           const terminal: SubagentResult = { exitCode: 1, errorMessage: error instanceof Error ? error.message : String(error) } as SubagentResult;
-          const update = lifecycleQueue(deps, ctx).watcherTerminal({
-            agent_id: running.id,
-            task_name: running.name,
-            status: "failed",
-            summary: terminal.errorMessage!,
-            update_id: `${submissionId}:terminal`,
-            final_text: terminal.errorMessage,
-          });
-          deps.deliverTerminal?.(running, terminal, "followup", update.delivery_id);
+          const update = terminate("failed", terminal.errorMessage!, `${submissionId}:terminal`, terminal.errorMessage);
+          if (update) deps.deliverTerminal?.(running, terminal, "followup", update.delivery_id);
         });
         return {
           content: [{ type: "text" as const, text: JSON.stringify({ ...details, status: "running" }) }],

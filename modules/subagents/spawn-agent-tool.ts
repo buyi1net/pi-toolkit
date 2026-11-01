@@ -6,12 +6,19 @@ import type { ModelDirectory } from "./model-selector.ts";
 import type { RuntimeRegistry } from "./registry.ts";
 import type { SubagentStartup } from "./startup.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
-import { detectDisplayModeAvailability, resolveDisplaySurface } from "./surface.ts";
+import { detectDisplayModeAvailability, explainDisplayFallback, resolveDisplaySurface } from "./surface.ts";
 import { createParentUpdateQueue, createParentUpdateProducers } from "./parent-update-queue.ts";
+import {
+  agentTreeRootDir,
+  appendRunningAgentTreeRecord,
+  terminalOutcomeFromTree,
+  writeAgentTerminal,
+} from "./agent-tree.ts";
 import type { SubagentsTranslate } from "./messages/index.ts";
 import { compactRenderText, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 
 const DEFAULT_AGENT_TYPE = "general-purpose";
+const AGENT_TYPE_DESCRIPTION = "Optional; omit it to use general-purpose.";
 
 function agentTypeParameterSchema(discoverAgents: () => Array<{ name: string }>) {
   let names: string[] = [];
@@ -20,9 +27,9 @@ function agentTypeParameterSchema(discoverAgents: () => Array<{ name: string }>)
   } catch {
     // Runtime validation below remains authoritative when discovery is temporarily unavailable.
   }
-  if (names.length === 0) return Type.Optional(Type.String({ minLength: 1, description: "Choose one of the available agent names reported by subagent_models." }));
-  if (names.length === 1) return Type.Optional(Type.Literal(names[0]!));
-  return Type.Optional(Type.Union(names.map((name) => Type.Literal(name))));
+  if (names.length === 0) return Type.Optional(Type.String({ minLength: 1, description: `${AGENT_TYPE_DESCRIPTION} Choose one of the available agent names reported by subagent_models.` }));
+  if (names.length === 1) return Type.Optional(Type.Literal(names[0]!, { description: AGENT_TYPE_DESCRIPTION }));
+  return Type.Optional(Type.Union(names.map((name) => Type.Literal(name)), { description: AGENT_TYPE_DESCRIPTION }));
 }
 
 export type DeliverTerminal = (running: RunningSubagent, result: SubagentResult, source: "spawn" | "followup" | "recovered-exit" | "recovered-headless" | "recovered-pane", deliveryId: string) => void;
@@ -113,7 +120,7 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
     label: "Spawn Agent",
     renderShell: "self",
     description:
-      "Start a sub-agent and return immediately. Read subagent_models first; choose agent_type from the available agent choices, and choose model and reasoning_effort from the same directory. model accepts a unique model id/name or an exact provider/model route. " +
+      "Start a sub-agent and return immediately. Read subagent_models first; agent_type is optional and defaults to general-purpose. Choose model and reasoning_effort from the same directory. model accepts a unique model id/name or an exact provider/model route. " +
       "If multiple providers expose the same name, pass the provider/model route from the directory. " +
       "Choose fork_turns explicitly: none starts with only the task context, all inherits the parent history. " +
       "The field is required; do not omit it. " +
@@ -224,6 +231,13 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
       const availability = detectDisplayModeAvailability();
       const resolvedSurface = resolveDisplaySurface(requestedMode, availability);
       if (typeof resolvedSurface === "object") return errorResult(displayError(requestedMode));
+      const fallbackReason = explainDisplayFallback(requestedMode, availability, resolvedSurface);
+      const fallbackDetails = fallbackReason
+        ? {
+            fallback_reason: fallbackReason,
+            display_note: `Requested display_mode "${requestedMode}" but it fell back to a background run: ${fallbackReason}.`,
+          }
+        : {};
       const surface = resolvedSurface === "background" ? "background" : "pane";
       const sessionFile = ctx.sessionManager.getSessionFile();
       if (!sessionFile) return errorResult({ code: "agent_launch_failed", message: "A persistent parent session is required." });
@@ -291,30 +305,43 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
           agentId: started.running.id,
           anchored: started.running.anchoredLoadout,
         });
-        const producers = createParentUpdateProducers(createParentUpdateQueue(
-          deps.getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId()),
-        ));
+        const rootDir = agentTreeRootDir(artifactDir);
+        const ownerSessionId = ctx.sessionManager.getSessionId();
+        const producers = createParentUpdateProducers(createParentUpdateQueue(artifactDir));
         producers.spawnStatus({ agent_id: started.running.id, task_name: input.task_name, status: "starting", summary: "Spawn accepted and starting.", update_id: `spawn:${started.running.id}:starting` });
         producers.spawnStatus({ agent_id: started.running.id, task_name: input.task_name, status: "running", summary: "Subagent is running.", update_id: `spawn:${started.running.id}:running` });
+        appendRunningAgentTreeRecord({ rootDir, running: started.running, status: "running", summary: "Subagent is running.", artifactDir, ownerSessionId });
         void started.watch.then((watchResult: any) => {
           if (started.running.closed) return;
           if (watchResult?.interruptedRound || watchResult?.handedOff) return;
-          const status = watchResult?.userClosed || watchResult?.stopped ? "interrupted" : watchResult?.exitCode === 0 ? "completed" : "failed";
-          const update = (watchResult?.userClosed ? producers.surfaceClosed : producers.watcherTerminal)({ agent_id: started.running.id, task_name: input.task_name, status, summary: watchResult?.summary || watchResult?.errorMessage || "Subagent finished.", update_id: `spawn:${started.running.id}:terminal`, final_text: watchResult?.summary || watchResult?.errorMessage || undefined });
+          const failureStatus = watchResult?.userClosed || watchResult?.stopped ? "interrupted" : watchResult?.exitCode === 0 ? "completed" : "failed";
+          const outcome = terminalOutcomeFromTree(rootDir, started.running.id, failureStatus);
+          if (outcome.action === "skip") {
+            started.running.closed = true;
+            return;
+          }
+          const status = outcome.status;
+          const summary = watchResult?.summary || watchResult?.errorMessage || "Subagent finished.";
+          const update = (watchResult?.userClosed ? producers.surfaceClosed : producers.watcherTerminal)({ agent_id: started.running.id, task_name: input.task_name, status, summary, update_id: `spawn:${started.running.id}:terminal`, final_text: watchResult?.summary || watchResult?.errorMessage || undefined });
+          writeAgentTerminal({ rootDir, running: started.running, status, summary, artifactDir, ownerSessionId, update });
           deps.deliverTerminal?.(started.running, watchResult as SubagentResult, "spawn", update.delivery_id);
           void update;
-        }).catch((error) => producers.watcherTerminal({
-          agent_id: started.running.id,
-          task_name: input.task_name,
-          status: "failed",
-          summary: error instanceof Error ? error.message : String(error),
-          update_id: `spawn:${started.running.id}:terminal`,
-        }));
+        }).catch((error) => {
+          if (started.running.closed) return;
+          const outcome = terminalOutcomeFromTree(rootDir, started.running.id, "failed");
+          if (outcome.action === "skip") {
+            started.running.closed = true;
+            return;
+          }
+          const summary = error instanceof Error ? error.message : String(error);
+          const update = producers.watcherTerminal({ agent_id: started.running.id, task_name: input.task_name, status: outcome.status, summary, update_id: `spawn:${started.running.id}:terminal` });
+          writeAgentTerminal({ rootDir, running: started.running, status: outcome.status, summary, artifactDir, ownerSessionId, update });
+        });
         const publicResolvedDisplayMode = resolvedSurface === "background" ? "auto" : resolvedSurface;
         const nestedPolicy = nestedAgentPolicy ? { display_policy: "nested_agent_forced_background" } : {};
         return {
-          content: [{ type: "text", text: JSON.stringify({ agent_id: started.running.id, task_name: input.task_name, canonical_task_name: canonical, status: "running", resolved: { model: route, reasoning_effort: input.reasoning_effort, display_mode: requestedMode, resolved_display_mode: publicResolvedDisplayMode, ...nestedPolicy, fork_turns: input.fork_turns, agent_type: agent } }) }],
-          details: { agent_id: started.running.id, task_name: input.task_name, canonical_task_name: canonical, status: "running", resolved: { model: route, reasoning_effort: input.reasoning_effort, display_mode: requestedMode, resolved_display_mode: publicResolvedDisplayMode, ...nestedPolicy, fork_turns: input.fork_turns, agent_type: agent } },
+          content: [{ type: "text", text: JSON.stringify({ agent_id: started.running.id, task_name: input.task_name, canonical_task_name: canonical, status: "running", resolved: { model: route, reasoning_effort: input.reasoning_effort, display_mode: requestedMode, resolved_display_mode: publicResolvedDisplayMode, ...nestedPolicy, fork_turns: input.fork_turns, agent_type: agent, ...fallbackDetails } }) }],
+          details: { agent_id: started.running.id, task_name: input.task_name, canonical_task_name: canonical, status: "running", resolved: { model: route, reasoning_effort: input.reasoning_effort, display_mode: requestedMode, resolved_display_mode: publicResolvedDisplayMode, ...nestedPolicy, fork_turns: input.fork_turns, agent_type: agent, ...fallbackDetails } },
         };
       } finally {
         deps.registry.releaseName(input.task_name);

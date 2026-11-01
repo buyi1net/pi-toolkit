@@ -2,6 +2,13 @@ import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-ag
 import { Type } from "typebox";
 import { compactRenderText, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import type { PublicAgentRecord, RuntimeRegistry } from "./registry.ts";
+import {
+  agentTreeRootDir,
+  canonicallyWithin,
+  readAgentTreeRecords,
+  type AgentTreeRecord,
+} from "./agent-tree.ts";
+import { subagentTaskDepth } from "./launch-config.ts";
 import type { SubagentsTranslate } from "./messages/index.ts";
 
 export interface ListAgentsToolDeps {
@@ -30,6 +37,7 @@ const listAgentsOutputSchema = Type.Union([
       parent_canonical_task_name: Type.Union([Type.String(), Type.Null()]),
       summary: Type.String(),
       updated_at: Type.Number(),
+      depth: Type.Optional(Type.Number()),
     })),
   }),
   Type.Object({
@@ -78,14 +86,38 @@ function agentStatusLabel(status: PublicAgentRecord["status"], t?: SubagentsTran
   }
 }
 
+function resolvePathPrefix(raw: unknown, callerCanonical: string): string | null {
+  if (typeof raw !== "string" || raw.trim() === "") return null;
+  const value = raw.trim();
+  if (value.startsWith("/")) return value.replace(/\/+$/, "") || "/root";
+  return `${callerCanonical.replace(/\/+$/, "")}/${value}`.replace(/\/+/g, "/");
+}
+
+function treeRecordToPublic(record: AgentTreeRecord): PublicAgentRecord {
+  return {
+    agent_id: record.agent_id,
+    task_name: record.task_name,
+    canonical_task_name: record.canonical_task_name,
+    status: record.status,
+    parent_agent_id: record.parent_agent_id,
+    parent_canonical_task_name: record.parent_canonical_task_name,
+    summary: record.summary,
+    updated_at: record.updated_at,
+  };
+}
+
 export function registerListAgentsTool(pi: ExtensionAPI, deps: ListAgentsToolDeps): void {
   pi.registerTool({
     name: "list_agents",
     label: "List Agents",
     renderShell: "self",
-    description: "List the visible agents in the current parent session as a public status tree. This tool takes no parameters.",
-    promptSnippet: "List visible agents, their status, task summary, and parent paths.",
-    parameters: Type.Object({}),
+    description:
+      "List the live agents in the current root agent tree, including descendants spawned by sub-agents. " +
+      "path_prefix optionally filters by canonical task path: an absolute path such as /root/research, or a path relative to the caller.",
+    promptSnippet: "List the whole agent tree with parent paths, optionally filtered by path_prefix.",
+    parameters: Type.Object({
+      path_prefix: Type.Optional(Type.String({ minLength: 1 })),
+    }),
     outputSchema: listAgentsOutputSchema,
     renderCall(_args, theme, context) {
       return renderToolCardCall({ title: deps.t?.("module.subagents.tool.list_agents.display") ?? "List subagents" }, theme, context);
@@ -109,7 +141,7 @@ export function registerListAgentsTool(pi: ExtensionAPI, deps: ListAgentsToolDep
         context,
       );
     },
-    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const sessionFile = ctx?.sessionManager?.getSessionFile?.();
       if (!sessionFile) {
         const error = { code: "session_unavailable", message: "list_agents requires a persistent parent session." };
@@ -123,9 +155,17 @@ export function registerListAgentsTool(pi: ExtensionAPI, deps: ListAgentsToolDep
       const artifactDir = deps.getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId());
       const path = deps.registry.publicPathFor(artifactDir);
       const live = new Map(deps.registry.list().map((entry) => [entry.id, entry]));
-      const agents = deps.registry.listPublic(path)
+      const local = deps.registry.listPublic(path)
+        .map((record) => ({ ...record, status: publicStatus(record, live.get(record.agent_id)) }));
+      const localIds = new Set(local.map((record) => record.agent_id));
+      const remote = readAgentTreeRecords(agentTreeRootDir(artifactDir))
+        .filter((record) => !localIds.has(record.agent_id))
+        .map((record) => treeRecordToPublic(record));
+      const prefix = resolvePathPrefix(params?.path_prefix, process.env.PI_SUBAGENT_TASK_PATH?.trim() || "/root");
+      const agents = [...local, ...remote]
         .filter((record) => record.status !== "closed")
-        .map((record) => ({ ...record, status: publicStatus(record, live.get(record.agent_id)) }))
+        .filter((record) => !prefix || canonicallyWithin(record.canonical_task_name, prefix))
+        .map((record) => ({ ...record, depth: subagentTaskDepth(record.canonical_task_name) }))
         .sort((a, b) => a.canonical_task_name.localeCompare(b.canonical_task_name));
       return {
         content: [{ type: "text" as const, text: JSON.stringify({ agents }) }],

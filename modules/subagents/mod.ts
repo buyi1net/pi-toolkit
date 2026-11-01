@@ -20,6 +20,8 @@ import {
 } from "./status.ts";
 import { createSessionFileLivenessProbe } from "./liveness.ts";
 import { formatStatusAggregate, formatTransitionLine } from "./status-lines.ts";
+import { AGENT_QUEUE_DELIVERY, buildAgentEnvelope, rootTaskName } from "./agent-envelope.ts";
+import type { SubagentsTranslate } from "./messages/index.ts";
 import { activityDisplayLabel, readSubagentActivityFile, type ActivityReadResult } from "./activity.ts";
 import { createDescendantsTracker } from "./descendants.ts";
 import { withUsageRecording } from "./usage-bridge.ts";
@@ -36,6 +38,7 @@ import {
   resolveLaunchBehavior,
   resolveSurfaceChoice,
   subagentTaskDepth,
+  canGrantSpawningToChild,
   validateAgentLifecycleConfig,
 } from "./launch-config.ts";
 import {
@@ -181,6 +184,10 @@ export function resolveResultPresentation(
   return result.exitCode !== 0
     ? `Sub-agent "${name}" failed (exit code ${result.exitCode}).\n\n${result.summary}${sessionNote}`
     : `Sub-agent "${name}" completed (${formatElapsed(result.elapsed)}).\n\n${result.summary}${sessionNote}`;
+}
+
+export function subagentStatusEnvelope(lines: string[], lineLimit: number, t: SubagentsTranslate): string {
+  return buildAgentEnvelope({ kind: "STATUS", taskName: rootTaskName(), payload: formatStatusAggregate(lines, lineLimit, t) });
 }
 
 export const runtimeRegistry = createRuntimeRegistry();
@@ -396,11 +403,11 @@ function startStatusRefresh(pi: ExtensionAPI) {
         pi.sendMessage(
           {
             customType: "subagent_status",
-            content: formatStatusAggregate(transitionLines, statusConfig.lineLimit, widgetText),
+            content: subagentStatusEnvelope(transitionLines, statusConfig.lineLimit, widgetText),
             display: true,
             details: { lines: capped.visibleLines, overflow: capped.overflow, tone: stalledTransition ? "error" : "success" },
           },
-          { triggerTurn: true, deliverAs: "steer" },
+          AGENT_QUEUE_DELIVERY,
         );
       } catch {
         stop();
@@ -435,6 +442,7 @@ export const __test__ = {
   validateAgentLifecycleConfig,
   buildSubagentToolAllowlist,
   subagentTaskDepth,
+  canGrantSpawningToChild,
   applySandboxToParts,
   classifyToolProvisions,
   validateToolProvision,

@@ -39,29 +39,142 @@ export type SeededSubagentSessionMode = "lineage-only" | "fork";
 
 export const SUBAGENT_LOADOUT_VERSION = 2;
 
-function getForkContentLines(parentSessionFile: string): string[] {
-  const raw = readFileSync(parentSessionFile, "utf8");
-  const lines = raw.split("\n").filter((line) => line.trim());
+export const FORK_IDENTITY_RESET = [
+  "[子代理启动上下文 / child-agent bootstrap] 本条由派生方自动写入，不是用户输入。",
+  "你现在是新派生的子代理。上面的对话是从父代理继承来的历史上下文；只遵守你自己的角色、身份和下面的 NEW_TASK，更早的身份、任务和针对具体动作的授权都属于你的祖先代理。继承的工具调用只是历史记录，活的工具会话和进程句柄都没有被继承。把结果汇报给你的父代理，不要执行历史里的待办。",
+  "You are now a newly spawned child agent. The preceding conversation is inherited parent context. Follow your own role, identity, and the NEW_TASK below; earlier identities, tasks, and action-specific approvals belong to your ancestors. Inherited tool calls are historical records; live tool sessions and process handles are not inherited. Report your result to your parent and do not carry out pending work mentioned in the inherited history.",
+].join("\n\n");
 
-  let truncateAt = lines.length;
-  for (let i = lines.length - 1; i >= 0; i--) {
+const FORK_KEPT_ENTRY_TYPES = new Set(["model_change", "thinking_level_change"]);
+const FORK_KEPT_MESSAGE_ROLES = new Set(["user", "assistant"]);
+
+function forkKeptTextBlocks(message: unknown): Array<{ type: "text"; text: string }> {
+  const content = (message as { content?: unknown } | null)?.content;
+  if (typeof content === "string") {
+    return content.trim() === "" ? [] : [{ type: "text", text: content }];
+  }
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter((block) => block && typeof block === "object" && (block as { type?: unknown }).type === "text" && typeof (block as { text?: unknown }).text === "string" && ((block as { text: string }).text).trim() !== "")
+    .map((block) => ({ type: "text" as const, text: (block as { text: string }).text }));
+}
+
+function forkKeptMessage(message: unknown): Record<string, unknown> | null {
+  const role = (message as { role?: unknown } | null)?.role;
+  if (typeof role !== "string" || !FORK_KEPT_MESSAGE_ROLES.has(role)) return null;
+  const content = forkKeptTextBlocks(message);
+  if (content.length === 0) return null;
+  const timestamp = (message as { timestamp?: unknown }).timestamp;
+  const kept: Record<string, unknown> = { role, content, ...(timestamp === undefined ? {} : { timestamp }) };
+  if (role === "assistant") {
+    kept.stopReason = "stop";
+    kept.usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+  }
+  return kept;
+}
+
+function readSessionEntries(parentSessionFile: string): Array<Record<string, any>> {
+  const raw = readFileSync(parentSessionFile, "utf8");
+  const parsed: Array<Record<string, any>> = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
     try {
-      const entry = JSON.parse(lines[i]);
-      if (entry.type === "message" && entry.message?.role === "user") {
-        truncateAt = i;
-        break;
-      }
+      const entry = JSON.parse(line);
+      if (entry && typeof entry === "object") parsed.push(entry);
     } catch {
 
     }
   }
+  return parsed;
+}
 
-  return lines.slice(0, truncateAt).filter((line) => {
-    try {
-      return JSON.parse(line).type !== "session";
-    } catch {
-      return true;
+function forkCompactionEntry(entry: Record<string, any>): Record<string, any> {
+  return {
+    type: "compaction",
+    id: entry.id,
+    timestamp: entry.timestamp,
+    summary: typeof entry.summary === "string" ? entry.summary : "",
+    firstKeptEntryId: typeof entry.firstKeptEntryId === "string" ? entry.firstKeptEntryId : "",
+    tokensBefore: 0,
+  };
+}
+
+function forkContextEditEntry(entry: Record<string, any>): Record<string, any> | null {
+  if (typeof entry.targetId !== "string" || entry.targetId === "") return null;
+  if (!("replacement" in entry)) return null;
+  return { type: "context_edit", id: entry.id, timestamp: entry.timestamp, targetId: entry.targetId, replacement: entry.replacement };
+}
+
+function getForkContentLines(parentSessionFile: string): string[] {
+  const parsed = readSessionEntries(parentSessionFile);
+  const visible = parsed.filter((entry, index) => index >= 0 && entry.type !== "session");
+
+  let truncateAt = visible.length;
+  for (let i = visible.length - 1; i >= 0; i -= 1) {
+    const entry = visible[i]!;
+    if (entry.type === "message" && entry.message?.role === "user") {
+      truncateAt = i;
+      break;
     }
+  }
+
+  const kept: Array<{ entry: Record<string, any>; originalIndex: number }> = [];
+  for (let index = 0; index < truncateAt; index += 1) {
+    const entry = visible[index]!;
+    if (typeof entry.id !== "string" || entry.id === "") continue;
+    if (FORK_KEPT_ENTRY_TYPES.has(entry.type)) {
+      kept.push({
+        originalIndex: index,
+        entry: {
+          type: entry.type,
+          id: entry.id,
+          timestamp: entry.timestamp,
+          ...(entry.type === "model_change" ? { provider: entry.provider, modelId: entry.modelId } : { thinkingLevel: entry.thinkingLevel }),
+        },
+      });
+      continue;
+    }
+    if (entry.type === "compaction") {
+      kept.push({ originalIndex: index, entry: forkCompactionEntry(entry) });
+      continue;
+    }
+    if (entry.type === "context_edit") {
+      const edit = forkContextEditEntry(entry);
+      if (edit) kept.push({ originalIndex: index, entry: edit });
+      continue;
+    }
+    if (entry.type !== "message") continue;
+    const message = forkKeptMessage(entry.message);
+    if (!message) continue;
+    kept.push({ originalIndex: index, entry: { type: "message", id: entry.id, timestamp: entry.timestamp, message } });
+  }
+
+  const keptIds = new Set(kept.map((item) => item.entry.id as string));
+  const survivors = kept.filter((item) => item.entry.type !== "context_edit" || keptIds.has(item.entry.targetId as string));
+  const survivorIds = new Set(survivors.map((item) => item.entry.id as string));
+  for (const item of survivors) {
+    if (item.entry.type !== "compaction") continue;
+    if (survivorIds.has(item.entry.firstKeptEntryId as string)) continue;
+    const next = survivors.find((candidate) =>
+      candidate.originalIndex > item.originalIndex && candidate.entry.type !== "context_edit" && candidate.entry.type !== "compaction");
+    if (next) item.entry.firstKeptEntryId = next.entry.id;
+    else delete item.entry.firstKeptEntryId;
+  }
+
+  const now = new Date().toISOString();
+  const lines = survivors.map((item) => item.entry);
+  lines.push({
+    type: "message",
+    id: randomUUID(),
+    timestamp: now,
+    message: { role: "user", content: [{ type: "text", text: FORK_IDENTITY_RESET }], timestamp: now },
+  });
+
+  return lines.map((entry, index) => {
+    const linked: Record<string, any> = { ...entry };
+    if (index === 0) delete linked.parentId;
+    else linked.parentId = (lines[index - 1] as Record<string, any>).id;
+    return JSON.stringify(linked);
   });
 }
 
@@ -130,6 +243,8 @@ export interface SubagentLoadout {
   cohortId?: string;
 
   member?: boolean | null;
+
+  forkTurns?: "none" | "all" | null;
 }
 
 export function loadoutSidecarPath(sessionFile: string): string {
@@ -223,6 +338,7 @@ const LOADOUT_SECURITY_FIELDS = [
   "agentDir",
   "tier",
   "member",
+  "forkTurns",
 ] as const;
 
 function loadoutValuesEqual(a: unknown, b: unknown): boolean {

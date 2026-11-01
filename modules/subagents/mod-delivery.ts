@@ -12,6 +12,7 @@ import {
   runtimeRegistry,
 } from "./mod.ts";
 import { deliverPendingQuestion } from "./mod-members.ts";
+import { AGENT_TURN_DELIVERY, agentTaskName, buildAgentEnvelope } from "./agent-envelope.ts";
 import { getArtifactDir } from "./mod-host.ts";
 import { updateWidget } from "./mod-widget.ts";
 import { createParentUpdateQueue, createParentUpdateProducers, type ParentSessionUpdate } from "./parent-update-queue.ts";
@@ -332,7 +333,11 @@ export function deliverSpawnTerminal(running: RunningSubagent, result: SubagentR
   if (running.closed || result.handedOff || result.interruptedRound) return;
   const failed = result.exitCode !== 0 || !!result.errorMessage;
   const routeException = routeExceptionFromResult(result, running.model);
-  const content = resolveResultPresentation(result, running.name);
+  const content = buildAgentEnvelope({
+    kind: "FINAL_ANSWER",
+    taskName: agentTaskName(running),
+    payload: resolveResultPresentation(result, running.name),
+  });
   pi.sendMessage({
     customType: "subagent_result",
     content,
@@ -355,7 +360,7 @@ export function deliverSpawnTerminal(running: RunningSubagent, result: SubagentR
       ...(source.startsWith("recovered-") ? { recovered: source === "recovered-exit" ? "headless-exited" : source.slice("recovered-".length) } : {}),
       ...(deliveryId ? { delivery_id: deliveryId } : {}),
     },
-  }, { triggerTurn: true, deliverAs: "steer" });
+  }, AGENT_TURN_DELIVERY);
 }
 
 export async function deliverRecoveredExit(

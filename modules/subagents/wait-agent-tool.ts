@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { createParentUpdateQueue, type ParentSessionUpdate } from "./parent-update-queue.ts";
+import { agentTreeRootDir, readBubbledUpdateFrom } from "./agent-tree.ts";
 import type { RuntimeRegistry } from "./registry.ts";
 import type { SubagentsTranslate } from "./messages/index.ts";
 import { compactRenderText, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
@@ -29,6 +30,7 @@ interface WaitAgentResult {
     kind: ParentSessionUpdate["kind"];
     status: string;
     summary: string;
+    origin?: "descendant";
   } | null;
 }
 
@@ -86,43 +88,68 @@ function waitNoUpdateMessage(
   }
 }
 
+type WaitOutcome =
+  | { kind: "local"; update: ParentSessionUpdate }
+  | { kind: "bubbled"; update: ParentSessionUpdate; nextOffset: number }
+  | { kind: "timeout" }
+  | { kind: "aborted" };
+
 function waitForUpdate(
   queue: ReturnType<typeof createParentUpdateQueue>,
   timeoutMs: number,
   pollIntervalMs: number,
   signal?: AbortSignal,
-): Promise<ParentSessionUpdate | null> {
+  peekBubbled?: () => { update: ParentSessionUpdate; nextOffset: number } | null,
+): Promise<WaitOutcome> {
   const startedAt = Date.now();
   return new Promise((resolve) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let poller: ReturnType<typeof setTimeout> | undefined;
-    const finish = (update: ParentSessionUpdate | null) => {
+    const finish = (outcome: WaitOutcome) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
       if (poller) clearTimeout(poller);
       signal?.removeEventListener("abort", onAbort);
-      resolve(update);
+      resolve(outcome);
     };
-    const onAbort = () => finish(null);
+    const onAbort = () => finish({ kind: "aborted" });
     const poll = () => {
       const update = queue.peek();
       if (update) {
-        finish(update);
+        finish({ kind: "local", update });
+        return;
+      }
+      const bubbled = peekBubbled?.();
+      if (bubbled) {
+        finish({ kind: "bubbled", update: bubbled.update, nextOffset: bubbled.nextOffset });
         return;
       }
       const remaining = timeoutMs - (Date.now() - startedAt);
       if (remaining <= 0) {
-        finish(null);
+        finish({ kind: "timeout" });
         return;
       }
       poller = setTimeout(poll, Math.min(pollIntervalMs, remaining));
     };
     signal?.addEventListener("abort", onAbort, { once: true });
-    timer = setTimeout(() => finish(null), timeoutMs);
+    timer = setTimeout(() => finish({ kind: "timeout" }), timeoutMs);
     poll();
   });
+}
+
+function peekBubbledUpdate(
+  queue: ReturnType<typeof createParentUpdateQueue>,
+  rootDir: string,
+): { update: ParentSessionUpdate; nextOffset: number } | null {
+  let offset = queue.bubbledOffset();
+  for (;;) {
+    const entry = readBubbledUpdateFrom(rootDir, offset);
+    if (!entry) return null;
+    offset = entry.nextOffset;
+    if (entry.update) return { update: entry.update, nextOffset: entry.nextOffset };
+  }
 }
 
 export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps): void {
@@ -213,8 +240,10 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
       }
       const artifactDir = deps.getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId());
       const queue = createParentUpdateQueue(artifactDir);
+      const rootDir = agentTreeRootDir(artifactDir);
+      const consumesBubbled = !process.env.PI_SUBAGENT_ID?.trim();
       const hasNoRunningAgents = deps.registry.list().length === 0;
-      if (hasNoRunningAgents && queue.peek() === null) {
+      if (hasNoRunningAgents && queue.peek() === null && (!consumesBubbled || peekBubbledUpdate(queue, rootDir) === null)) {
         return result(
           {
             message: "wait_agent only waits for subagents dispatched by this session; peers messages arrive automatically, so end this turn instead of waiting.",
@@ -238,23 +267,32 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
       }
 
       try {
-        const update = await waitForUpdate(
+        const outcome = await waitForUpdate(
           queue,
           timeoutMs,
           Math.max(1, deps.pollIntervalMs ?? 25),
           signal,
+          consumesBubbled ? () => peekBubbledUpdate(queue, rootDir) : undefined,
         );
-        if (!update) {
-          if (signal?.aborted) {
-            return result({ message: "wait_agent was cancelled by the host.", timed_out: false, update: null }, { code: "cancelled", status: "aborted" });
-          }
+        if (outcome.kind === "bubbled") {
+          queue.advanceBubbledOffset(outcome.nextOffset);
+          return result({
+            message: `Received descendant terminal update from ${outcome.update.task_name}.`,
+            timed_out: false,
+            update: { ...projectUpdate(outcome.update), origin: "descendant" as const },
+          });
+        }
+        if (outcome.kind === "aborted") {
+          return result({ message: "wait_agent was cancelled by the host.", timed_out: false, update: null }, { code: "cancelled", status: "aborted" });
+        }
+        if (outcome.kind === "timeout") {
           return result({ message: "No parent-session update arrived before the timeout.", timed_out: true, update: null });
         }
-        queue.acknowledge(update.agent_id, update.update_id);
+        queue.acknowledge(outcome.update.agent_id, outcome.update.update_id);
         return result({
-          message: `Received ${update.kind} update from ${update.task_name}.`,
+          message: `Received ${outcome.update.kind} update from ${outcome.update.task_name}.`,
           timed_out: false,
-          update: projectUpdate(update),
+          update: projectUpdate(outcome.update),
         });
       } finally {
         queue.endWait(waitToken);

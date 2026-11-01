@@ -60,6 +60,18 @@ export function resolveDisplaySurface(
   return requested;
 }
 
+export function explainDisplayFallback(
+  requested: DisplayMode,
+  availability: readonly DisplayModeAvailability[],
+  resolved: ResolvedDisplaySurface,
+): string | null {
+  if (requested === "auto" || resolved !== "background") return null;
+  const selected = availability.find((entry) => entry.mode === requested);
+  if (!selected) return `${requested} unavailable: no availability information for that mode`;
+  if (!selected.available) return `${requested} unavailable: ${selected.reason ?? "no reason reported"}`;
+  return `${requested} unavailable: the current ${detectDisplayContext()} context cannot host it`;
+}
+
 export function detectDisplayContext(): DisplayContext {
   if (process.env.HERDR_ENV === "1" && (process.env.TMUX || process.env.TMUX_PANE)) return "nested";
   if (process.env.HERDR_ENV === "1") return "herdr";
@@ -194,6 +206,15 @@ export function sendCommand(surface: string, text: string): void {
   requireSurface().sendCommand(surface, text);
 }
 
+export function sendCommandFor(kind: SurfaceKind, surface: string, text: string): void {
+  (kind === "herdr" ? herdrSurface : tmuxSurface).sendCommand(surface, text);
+}
+
+export function closeSurfaceFor(kind: SurfaceKind, surface: string): void {
+  (kind === "herdr" ? herdrSurface : tmuxSurface).closeSurface(surface);
+  ownedSurfaces.delete(surface);
+}
+
 export function readScreen(surface: string, lines = 50): string {
   return requireSurface().readScreen(surface, lines);
 }
@@ -210,9 +231,18 @@ export function closeSurface(surface: string): void {
 
 export function adoptSurface(surface: string): boolean {
   if (!surface.trim()) return false;
-  const exists = requireSurface().surfaceExists?.(surface);
+  return adoptWith(requireSurface(), surface);
+}
+
+export function adoptSurfaceFor(kind: SurfaceKind, surface: string): boolean {
+  if (!surface.trim()) return false;
+  return adoptWith(kind === "herdr" ? herdrSurface : tmuxSurface, surface);
+}
+
+function adoptWith(module: SurfaceModule, surface: string): boolean {
+  const exists = module.surfaceExists?.(surface);
   if (exists === false) return false;
-  requireSurface().trackSurface?.(surface);
+  module.trackSurface?.(surface);
   ownedSurfaces.add(surface);
   return true;
 }

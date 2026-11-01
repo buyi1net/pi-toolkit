@@ -16,9 +16,10 @@ import { routeExceptionFromResult } from "./route-error.ts";
 import { normalizeSubagentName } from "./names.ts";
 import { claimRoundSignal, claimTeamMessages, findRosterMember, rosterPath, teamRoundMarker, upsertRosterMember } from "./team.ts";
 import { failureSettlement, takeMemberOffline, type MemberTerminalActions } from "./terminal.ts";
-import { formatElapsed } from "./display.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
 import { getModuleAbortSignal, latestPi, moduleInstanceId, MODULE_INSTANCE_KEY, runtimeRegistry } from "./mod.ts";
+import { AGENT_TURN_DELIVERY, agentTaskName, buildAgentEnvelope, questionSummary } from "./agent-envelope.ts";
+import { createParentUpdateProducers, createParentUpdateQueue } from "./parent-update-queue.ts";
 import { updateWidget } from "./mod-widget.ts";
 import { debugLog } from "./diagnostics.ts";
 
@@ -120,8 +121,11 @@ export async function deliverMemberRoundResult(
   pi.sendMessage(
     {
       customType: "subagent_result",
-      content:
-        `Team member "${running.name}" finished a round:\n\n${summary}`,
+      content: buildAgentEnvelope({
+        kind: "FINAL_ANSWER",
+        taskName: agentTaskName(running),
+        payload: `Team member "${running.name}" finished a round:\n\n${summary}`,
+      }),
       display: true,
       details: {
         name: running.name,
@@ -140,7 +144,7 @@ export async function deliverMemberRoundResult(
         ...(running.cohortId ? { cohortId: running.cohortId } : {}),
       },
     },
-    { triggerTurn: true, deliverAs: "steer" },
+    AGENT_TURN_DELIVERY,
   );
 }
 
@@ -365,13 +369,16 @@ export function deliverPendingQuestion(running: RunningSubagent): void {
 
   const name = running.name;
   const sessionId = existsSync(running.sessionFile) ? getSessionId(running.sessionFile) : null;
-  const elapsed = Math.floor((Date.now() - running.startTime) / 1000);
-  const replyHint = `\n\nReply with send_message({ target: "${name}", message: "…" }) — the target accepts an agent id, canonical task path, or unique local task name. If it has already finished, use followup_task({ target: "${name}", task: "…" }) instead.`;
+  const replyHint = questionReplyHint(running);
 
   latestPi?.sendMessage(
     {
       customType: "subagent_question",
-      content: `Sub-agent "${name}" asks (${formatElapsed(elapsed)}):\n\n${payload.question}${replyHint}`,
+      content: buildAgentEnvelope({
+        kind: "QUESTION",
+        taskName: agentTaskName(running),
+        payload: `${payload.question}\n\n${replyHint}`,
+      }),
       display: true,
       details: {
         name,
@@ -380,6 +387,45 @@ export function deliverPendingQuestion(running: RunningSubagent): void {
         ...(sessionId ? { sessionId } : {}),
       },
     },
-    { triggerTurn: true, deliverAs: "steer" },
+    AGENT_TURN_DELIVERY,
   );
+  publishQuestionUpdate(running, payload.question);
+}
+
+function agentRunFinished(running: RunningSubagent): boolean {
+  if (running.closed || running.stdinLost) return true;
+  if (running.kind === "headless") {
+    return running.headlessChild ? running.headlessChild.exited : running.pid != null && !isPidAlive(running.pid);
+  }
+  return ["completed", "failed", "interrupted", "handed_off"].includes(running.publicStatus ?? "");
+}
+
+function questionReplyHint(running: RunningSubagent): string {
+  const name = running.name;
+  if (agentRunFinished(running)) {
+    return (
+      `This sub-agent has already finished its run, so send_message would return target_not_receivable. ` +
+      `Resume its session with followup_task({ target: "${name}", message: "…" }).`
+    );
+  }
+  return (
+    `Reply with send_message({ target: "${name}", message: "…" }) — the target accepts an agent id, canonical task path, or unique local task name. ` +
+    `If it has already finished, use followup_task({ target: "${name}", message: "…" }) instead.`
+  );
+}
+
+function publishQuestionUpdate(running: RunningSubagent, question: string): void {
+  if (typeof running.runtimeFile !== "string") return;
+  try {
+    const producers = createParentUpdateProducers(createParentUpdateQueue(dirname(running.runtimeFile)));
+    producers.message({
+      agent_id: running.id,
+      task_name: running.name,
+      status: "waiting",
+      summary: questionSummary(question),
+      update_id: `question:${running.id}:${randomUUID()}`,
+    });
+  } catch (error) {
+    debugLog(`Could not publish question update for ${running.name}`, error);
+  }
 }

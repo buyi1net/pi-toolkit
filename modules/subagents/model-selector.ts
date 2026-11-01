@@ -429,16 +429,33 @@ function modelReferenceDistance(left: string, right: string): number {
   return previous[right.length]!;
 }
 
+function modelFamily(value: string): string {
+  const base = value.trim().toLowerCase();
+  const delimiter = base.search(/[-.]/);
+  return delimiter > 0 ? base.slice(0, delimiter) : base;
+}
+
 function suggestModelReferences(directory: ModelDirectory, raw: string): ModelDirectoryReferenceCandidate[] {
-  const query = raw.toLowerCase();
-  const entries = directory.models.map((entry) => ({ entry, values: [`${entry.provider}/${entry.id}`, entry.id, entry.name].map((value) => value.toLowerCase()) }));
-  const substring = entries.filter(({ values }) => values.some((value) => value.includes(query) || query.includes(value)));
-  const ranked = substring.length >= 3
-    ? substring
-    : [...substring, ...entries
-      .filter((item) => !substring.includes(item))
-      .sort((a, b) => Math.min(...a.values.map((value) => modelReferenceDistance(query, value))) - Math.min(...b.values.map((value) => modelReferenceDistance(query, value))))];
-  return ranked.slice(0, 3).map(({ entry }) => referenceCandidate(entry));
+  const query = raw.trim().toLowerCase();
+  const queryId = query.includes("/") ? query.slice(query.indexOf("/") + 1) : query;
+  const queryFamily = modelFamily(queryId);
+  const distanceOf = (values: readonly string[]) => Math.min(...values.map((value) => modelReferenceDistance(query, value)));
+  const entries = directory.models.map((entry) => ({
+    entry,
+    values: [`${entry.provider}/${entry.id}`, entry.id, entry.name].map((value) => value.toLowerCase()),
+    families: [modelFamily(entry.id), modelFamily(entry.name)],
+  }));
+  const family = queryFamily.length > 0
+    ? entries.filter((item) => item.families.includes(queryFamily)).sort((a, b) => distanceOf(a.values) - distanceOf(b.values))
+    : [];
+  const inFamily = new Set(family.map((item) => item.entry));
+  const substring = entries.filter((item) => !inFamily.has(item.entry) && item.values.some((value) => value.includes(query) || query.includes(value)));
+  const rest = family.length === 0 && substring.length >= 3
+    ? []
+    : entries
+      .filter((item) => !inFamily.has(item.entry) && !substring.includes(item))
+      .sort((a, b) => distanceOf(a.values) - distanceOf(b.values));
+  return [...family, ...substring, ...rest].slice(0, 3).map(({ entry }) => referenceCandidate(entry));
 }
 
 export function resolveDirectoryModelReference(

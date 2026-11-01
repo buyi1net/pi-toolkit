@@ -39,6 +39,10 @@ export interface ParentUpdateQueueState {
   wait_owner: string | null;
 
   wait_owner_expires_at: number | null;
+
+  closed_agents?: string[];
+
+  bubbled_offset?: number;
 }
 
 export interface WaitInProgressError extends Error {
@@ -53,6 +57,12 @@ export interface ParentUpdateQueue {
   peek(): ParentSessionUpdate | null;
 
   acknowledge(agent_id: string, update_id?: string): boolean;
+
+  markAgentClosed(agent_id: string): void;
+
+  bubbledOffset(): number;
+
+  advanceBubbledOffset(offset: number): void;
 
   reload(): void;
 
@@ -80,7 +90,7 @@ export function parentUpdateQueuePath(artifactDir: string): string {
 }
 
 function emptyState(): ParentUpdateQueueState {
-  return { version: STATE_VERSION, next_update_seq: 1, cursor: 0, updates: [], deliveries: {}, wait_owner: null, wait_owner_expires_at: null };
+  return { version: STATE_VERSION, next_update_seq: 1, cursor: 0, updates: [], deliveries: {}, wait_owner: null, wait_owner_expires_at: null, closed_agents: [] };
 }
 
 function validKind(value: unknown): value is ParentUpdateKind {
@@ -89,6 +99,11 @@ function validKind(value: unknown): value is ParentUpdateKind {
 
 function updateKey(agent_id: string, update_id: string): string {
   return `${agent_id}\u0000${update_id}`;
+}
+
+function discardedAfterClose(state: ParentUpdateQueueState, update: ParentSessionUpdate): boolean {
+  if (update.kind === "terminal") return false;
+  return (state.closed_agents ?? []).includes(update.agent_id);
 }
 
 function readState(path: string): ParentUpdateQueueState {
@@ -131,6 +146,8 @@ function readState(path: string): ParentUpdateQueueState {
       deliveries,
       wait_owner: typeof parsed.wait_owner === "string" ? parsed.wait_owner : null,
       wait_owner_expires_at: typeof parsed.wait_owner_expires_at === "number" && Number.isFinite(parsed.wait_owner_expires_at) ? parsed.wait_owner_expires_at : null,
+      closed_agents: Array.isArray(parsed.closed_agents) ? parsed.closed_agents.filter((item): item is string => typeof item === "string") : [],
+      bubbled_offset: typeof parsed.bubbled_offset === "number" && Number.isSafeInteger(parsed.bubbled_offset) && parsed.bubbled_offset > 0 ? parsed.bubbled_offset : 0,
     };
   } catch {
     return emptyState();
@@ -197,7 +214,7 @@ export function createParentUpdateQueue(paths: ParentUpdateQueuePaths | string):
     },
     peek() {
       refresh();
-      return state.updates.find((item) => item.update_seq > state.cursor) ?? null;
+      return state.updates.find((item) => item.update_seq > state.cursor && !discardedAfterClose(state, item)) ?? null;
     },
     acknowledge(agent_id, requestedUpdateId) {
       refresh();
@@ -206,11 +223,28 @@ export function createParentUpdateQueue(paths: ParentUpdateQueuePaths | string):
       const update = state.updates.find((item) => legacyCall ? item.update_id === update_id : item.agent_id === agent_id && item.update_id === update_id);
       if (!update || update.update_seq <= state.cursor) return !!update;
 
-      const next = state.updates.find((item) => item.update_seq > state.cursor);
-      if (!next || next.update_seq !== update.update_seq) return false;
+      const between = state.updates.filter((item) => item.update_seq > state.cursor && item.update_seq < update.update_seq);
+      if (!between.every((item) => discardedAfterClose(state, item))) return false;
       state.cursor = update.update_seq;
       persist();
       return true;
+    },
+    markAgentClosed(agent_id) {
+      refresh();
+      const closed = state.closed_agents ?? [];
+      if (closed.includes(agent_id)) return;
+      state.closed_agents = [...closed, agent_id];
+      persist();
+    },
+    bubbledOffset() {
+      refresh();
+      return state.bubbled_offset ?? 0;
+    },
+    advanceBubbledOffset(offset) {
+      refresh();
+      if (!Number.isSafeInteger(offset) || offset <= (state.bubbled_offset ?? 0)) return;
+      state.bubbled_offset = offset;
+      persist();
     },
     reload() { refresh(); },
     snapshot() { refresh(); return JSON.parse(JSON.stringify(state)) as ParentUpdateQueueState; },
@@ -250,6 +284,7 @@ export interface ParentUpdateProducers {
   interruptStatus(input: Omit<ParentUpdateInput, "kind">): ParentSessionUpdate;
   watcherTerminal(input: Omit<ParentUpdateInput, "kind">): ParentSessionUpdate;
   surfaceClosed(input: Omit<ParentUpdateInput, "kind">): ParentSessionUpdate;
+  markAgentClosed(agent_id: string): void;
 }
 
 export function createParentUpdateProducers(queue: ParentUpdateQueue): ParentUpdateProducers {
@@ -261,6 +296,7 @@ export function createParentUpdateProducers(queue: ParentUpdateQueue): ParentUpd
     watcherTerminal: (input) => queue.publish({ ...input, kind: "terminal" }),
     surfaceClosed: (input) => queue.publish({ ...input, kind: "terminal" }),
     message: (input) => queue.publish({ ...input, kind: "message" }),
+    markAgentClosed: (agent_id) => queue.markAgentClosed(agent_id),
   };
 }
 

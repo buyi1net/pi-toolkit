@@ -7,7 +7,7 @@ import { latestPi } from "./mod.ts";
 import { getAgentConfigDir, getToolExtensionPath, SUBAGENTS_DIR } from "./mod-host.ts";
 import { resolveAppliedThinking } from "./routing-snapshot.ts";
 import { modelOwnThinkingSuffix } from "./routing.ts";
-import { declaredMcpTools, SPAWNING_TOOLS, subagentTaskDepth } from "./launch-config.ts";
+import { canGrantSpawningToChild, declaredMcpTools, SPAWNING_TOOLS } from "./launch-config.ts";
 import { sanitizeSubagentFileName } from "./names.ts";
 import { isWithin } from "./descendants.ts";
 import type { SubagentLoadout } from "./session.ts";
@@ -192,9 +192,16 @@ export function applySandboxToParts(
     parts.push("--no-mcp");
   }
 
-  const canSpawnChildren = subagentTaskDepth() < 2;
-  if (!canSpawnChildren) {
-    parts.push("--exclude-tools", escape(SPAWNING_TOOLS.join(",")));
+  const excluded = new Set<string>();
+  if (!canGrantSpawningToChild()) {
+    for (const tool of SPAWNING_TOOLS) excluded.add(tool);
+  }
+  if (loadout.forkTurns === "all") {
+    excluded.add("peers_list");
+    excluded.add("peers_send");
+  }
+  if (excluded.size > 0) {
+    parts.push("--exclude-tools", escape([...excluded].join(",")));
   }
   return contextArtifacts;
 }

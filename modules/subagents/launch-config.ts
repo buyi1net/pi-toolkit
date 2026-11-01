@@ -4,6 +4,7 @@ import type { AgentDefaults, AgentSessionMode } from "./agents.ts";
 import type { SubagentParams } from "./params.ts";
 
 import type { SubagentProtocol } from "./protocol.ts";
+import { buildAgentEnvelope } from "./agent-envelope.ts";
 
 export const CODEX_V2_SPAWNING_TOOLS = [
   "spawn_agent",
@@ -161,6 +162,10 @@ export function subagentTaskDepth(taskPath = process.env.PI_SUBAGENT_TASK_PATH):
   return parts[0] === "root" ? Math.max(0, parts.length - 1) : parts.length;
 }
 
+export function canGrantSpawningToChild(taskPath = process.env.PI_SUBAGENT_TASK_PATH): boolean {
+  return subagentTaskDepth(taskPath) < 1;
+}
+
 export function buildSubagentToolAllowlist(
   effectiveTools: string | undefined,
   opts?: { grantSpawning?: boolean; grantTeamSend?: boolean; protocol?: SubagentProtocol },
@@ -197,6 +202,10 @@ export function buildSubagentToolAllowlist(
 export function needsEnvProxyForTools(toolAllowlist: string | null | undefined): boolean {
   if (!toolAllowlist) return false;
   return /(^|,)\s*web_(search|fetch)\s*(,|$)/.test(toolAllowlist);
+}
+
+export function buildNewTaskEnvelope(params: { taskName: string; sender: string; task: string }): string {
+  return buildAgentEnvelope({ kind: "NEW_TASK", taskName: params.taskName, sender: params.sender, payload: params.task });
 }
 
 export function buildPiPromptArgs(params: {
