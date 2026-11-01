@@ -17,8 +17,8 @@ import { normalizeSubagentName } from "./names.ts";
 import { claimRoundSignal, claimTeamMessages, findRosterMember, rosterPath, teamRoundMarker, upsertRosterMember } from "./team.ts";
 import { failureSettlement, takeMemberOffline, type MemberTerminalActions } from "./terminal.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
-import { getModuleAbortSignal, latestPi, moduleInstanceId, MODULE_INSTANCE_KEY, runtimeRegistry } from "./mod.ts";
-import { AGENT_TURN_DELIVERY, agentTaskName, buildAgentEnvelope, questionSummary } from "./agent-envelope.ts";
+import { envelopeDelivery, getModuleAbortSignal, latestCtx, latestPi, moduleInstanceId, MODULE_INSTANCE_KEY, runtimeRegistry } from "./mod.ts";
+import { AGENT_TURN_DELIVERY, agentTaskName, buildAgentEnvelope, buildResultEnvelope, questionSummary } from "./agent-envelope.ts";
 import { createParentUpdateProducers, createParentUpdateQueue } from "./parent-update-queue.ts";
 import { updateWidget } from "./mod-widget.ts";
 import { debugLog } from "./diagnostics.ts";
@@ -96,8 +96,6 @@ export async function deliverMemberRoundResult(
   running: RunningSubagent,
   outcome: { exitCode: number; errorMessage?: string; roundSeq?: number },
 ): Promise<void> {
-  const pi = latestPi;
-  if (!pi) return;
   const elapsed = Math.floor((Date.now() - running.startTime) / 1000);
   let summary = "";
   let stats: NonNullable<SubagentResult["stats"]> | undefined;
@@ -118,19 +116,21 @@ export async function deliverMemberRoundResult(
   }
   const failed = outcome.exitCode !== 0 || !!outcome.errorMessage;
   const routeException = failed ? routeExceptionFromResult({ errorMessage: outcome.errorMessage }, running.model) : undefined;
-  pi.sendMessage(
+  const memberRoundContent = buildResultEnvelope({
+    taskName: agentTaskName(running),
+    payload: summary,
+    hostNote: `Team member "${running.name}" finished a round.`,
+  });
+  void envelopeDelivery.deliver(
     {
+      key: `member:${running.id}:${outcome.roundSeq ?? Date.now()}`,
       customType: "subagent_result",
-      content: buildAgentEnvelope({
-        kind: "FINAL_ANSWER",
-        taskName: agentTaskName(running),
-        payload: `Team member "${running.name}" finished a round:\n\n${summary}`,
-      }),
-      display: true,
+      content: memberRoundContent,
       details: {
         name: running.name,
         task: "(team member round)",
         agent: running.agent,
+        summary,
         exitCode: outcome.exitCode,
         elapsed,
         sessionFile: running.sessionFile,
@@ -144,7 +144,8 @@ export async function deliverMemberRoundResult(
         ...(running.cohortId ? { cohortId: running.cohortId } : {}),
       },
     },
-    AGENT_TURN_DELIVERY,
+    () => latestCtx?.isIdle() ?? true,
+    latestPi,
   );
 }
 

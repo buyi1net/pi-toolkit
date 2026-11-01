@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { compactRenderText, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import type { PublicAgentRecord, RuntimeRegistry } from "./registry.ts";
 import {
+  AGENT_SUMMARY_LIMIT,
   agentTreeRootDir,
   canonicallyWithin,
   readAgentTreeRecords,
@@ -17,10 +18,28 @@ export interface ListAgentsToolDeps {
   readonly t?: SubagentsTranslate;
 }
 
-function publicStatus(record: PublicAgentRecord, live: ReturnType<RuntimeRegistry["get"]>): PublicAgentRecord["status"] {
-  if (!live) return record.status;
-  if (live.waitReleased || live.waitMode === "recovered") return "waiting";
-  return live.publicStatus ?? record.status;
+const TERMINAL_STATUSES = new Set<PublicAgentRecord["status"]>([
+  "completed",
+  "failed",
+  "interrupted",
+  "handed_off",
+  "closed",
+]);
+
+function mergeAgentStatus(
+  record: PublicAgentRecord,
+  tree: AgentTreeRecord | undefined,
+  live: ReturnType<RuntimeRegistry["get"]>,
+): PublicAgentRecord {
+  if (tree && TERMINAL_STATUSES.has(tree.status)) {
+    return { ...record, status: tree.status, summary: tree.summary, updated_at: tree.updated_at };
+  }
+  if (live) {
+    const status = live.waitReleased || live.waitMode === "recovered" ? "waiting" : live.publicStatus;
+    if (status) return { ...record, status };
+  }
+  if (tree) return { ...record, status: tree.status };
+  return record;
 }
 
 const listAgentsOutputSchema = Type.Union([
@@ -113,7 +132,9 @@ export function registerListAgentsTool(pi: ExtensionAPI, deps: ListAgentsToolDep
     renderShell: "self",
     description:
       "List the live agents in the current root agent tree, including descendants spawned by sub-agents. " +
-      "path_prefix optionally filters by canonical task path: an absolute path such as /root/research, or a path relative to the caller.",
+      "path_prefix optionally filters by canonical task path: an absolute path such as /root/research, or a path relative to the caller. " +
+      `summary is truncated to ${AGENT_SUMMARY_LIMIT} characters, the same limit the agent tree log keeps; read the full answer from the FINAL_ANSWER envelope delivered to this session or from the sub-agent session file. ` +
+      "status prefers the terminal state recorded in the agent tree; only while the tree still reports a non-terminal state is the live status used.",
     promptSnippet: "List the whole agent tree with parent paths, optionally filtered by path_prefix.",
     parameters: Type.Object({
       path_prefix: Type.Optional(Type.String({ minLength: 1 })),
@@ -155,17 +176,22 @@ export function registerListAgentsTool(pi: ExtensionAPI, deps: ListAgentsToolDep
       const artifactDir = deps.getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId());
       const path = deps.registry.publicPathFor(artifactDir);
       const live = new Map(deps.registry.list().map((entry) => [entry.id, entry]));
+      const tree = new Map(readAgentTreeRecords(agentTreeRootDir(artifactDir)).map((record) => [record.agent_id, record]));
       const local = deps.registry.listPublic(path)
-        .map((record) => ({ ...record, status: publicStatus(record, live.get(record.agent_id)) }));
+        .map((record) => mergeAgentStatus(record, tree.get(record.agent_id), live.get(record.agent_id)));
       const localIds = new Set(local.map((record) => record.agent_id));
-      const remote = readAgentTreeRecords(agentTreeRootDir(artifactDir))
+      const remote = [...tree.values()]
         .filter((record) => !localIds.has(record.agent_id))
         .map((record) => treeRecordToPublic(record));
       const prefix = resolvePathPrefix(params?.path_prefix, process.env.PI_SUBAGENT_TASK_PATH?.trim() || "/root");
       const agents = [...local, ...remote]
         .filter((record) => record.status !== "closed")
         .filter((record) => !prefix || canonicallyWithin(record.canonical_task_name, prefix))
-        .map((record) => ({ ...record, depth: subagentTaskDepth(record.canonical_task_name) }))
+        .map((record) => ({
+          ...record,
+          summary: (record.summary ?? "").slice(0, AGENT_SUMMARY_LIMIT),
+          depth: subagentTaskDepth(record.canonical_task_name),
+        }))
         .sort((a, b) => a.canonical_task_name.localeCompare(b.canonical_task_name));
       return {
         content: [{ type: "text" as const, text: JSON.stringify({ agents }) }],

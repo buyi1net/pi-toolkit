@@ -18,7 +18,12 @@ import type { SubagentsTranslate } from "./messages/index.ts";
 import { compactRenderText, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 
 const DEFAULT_AGENT_TYPE = "general-purpose";
-const AGENT_TYPE_DESCRIPTION = "Optional; omit it to use general-purpose.";
+
+function agentTypeDescription(names: readonly string[]): string {
+  return names.length > 0
+    ? `Optional; omit it to use general-purpose. Allowed values: ${names.join(", ")}.`
+    : "Optional; omit it to use general-purpose. Call subagent_models to list the available agent names.";
+}
 
 function agentTypeParameterSchema(discoverAgents: () => Array<{ name: string }>) {
   let names: string[] = [];
@@ -27,12 +32,15 @@ function agentTypeParameterSchema(discoverAgents: () => Array<{ name: string }>)
   } catch {
     // Runtime validation below remains authoritative when discovery is temporarily unavailable.
   }
-  if (names.length === 0) return Type.Optional(Type.String({ minLength: 1, description: `${AGENT_TYPE_DESCRIPTION} Choose one of the available agent names reported by subagent_models.` }));
-  if (names.length === 1) return Type.Optional(Type.Literal(names[0]!, { description: AGENT_TYPE_DESCRIPTION }));
-  return Type.Optional(Type.Union(names.map((name) => Type.Literal(name)), { description: AGENT_TYPE_DESCRIPTION }));
+  const description = agentTypeDescription(names);
+  if (names.length === 0) return Type.Optional(Type.String({ minLength: 1, description }));
+  if (names.length === 1) return Type.Optional(Type.Literal(names[0]!, { description }));
+  return Type.Optional(Type.Union(names.map((name) => Type.Literal(name)), { description }));
 }
 
-export type DeliverTerminal = (running: RunningSubagent, result: SubagentResult, source: "spawn" | "followup" | "recovered-exit" | "recovered-headless" | "recovered-pane", deliveryId: string) => void;
+const FORK_TURNS_DESCRIPTION = "Required. none starts with only the task context; all inherits the parent history.";
+
+export type DeliverTerminal = (running: RunningSubagent, result: SubagentResult, source: "spawn" | "followup" | "recovered-exit" | "recovered-headless" | "recovered-pane", deliveryId: string, isIdle?: () => boolean) => void;
 
 export interface SpawnAgentToolDeps {
   readonly startup: SubagentStartup;
@@ -123,6 +131,7 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
       "Start a sub-agent and return immediately. Read subagent_models first; agent_type is optional and defaults to general-purpose. Choose model and reasoning_effort from the same directory. model accepts a unique model id/name or an exact provider/model route. " +
       "If multiple providers expose the same name, pass the provider/model route from the directory. " +
       "Choose fork_turns explicitly: none starts with only the task context, all inherits the parent history. " +
+      "Unknown model references return model_not_found with up to three suggestions, ordered same-family first, then substring matches, then nearest by name distance. " +
       "The field is required; do not omit it. " +
       "The returned agent_id and canonical_task_name identify the new run.",
     promptSnippet: "Start an agent, choose fork_turns explicitly (none or all), and do not omit it.",
@@ -130,7 +139,7 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
       task_name: Type.String({ description: "Use only lowercase letters, digits, and underscores; maximum 72 characters. Empty and overlong names are rejected by the plugin with a suggested_task_name." }),
       message: Type.String({ minLength: 1 }),
       agent_type: agentTypeParameterSchema(deps.discoverAgents),
-      fork_turns: Type.Union([Type.Literal("none"), Type.Literal("all")]),
+      fork_turns: Type.Union([Type.Literal("none"), Type.Literal("all")], { description: FORK_TURNS_DESCRIPTION }),
       model: Type.String({ minLength: 1 }),
       reasoning_effort: Type.String({ minLength: 1 }),
       display_mode: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("herdr"), Type.Literal("tmux")])),
@@ -324,7 +333,7 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
           const summary = watchResult?.summary || watchResult?.errorMessage || "Subagent finished.";
           const update = (watchResult?.userClosed ? producers.surfaceClosed : producers.watcherTerminal)({ agent_id: started.running.id, task_name: input.task_name, status, summary, update_id: `spawn:${started.running.id}:terminal`, final_text: watchResult?.summary || watchResult?.errorMessage || undefined });
           writeAgentTerminal({ rootDir, running: started.running, status, summary, artifactDir, ownerSessionId, update });
-          deps.deliverTerminal?.(started.running, watchResult as SubagentResult, "spawn", update.delivery_id);
+          deps.deliverTerminal?.(started.running, watchResult as SubagentResult, "spawn", update.delivery_id, () => ctx.isIdle());
           void update;
         }).catch((error) => {
           if (started.running.closed) return;

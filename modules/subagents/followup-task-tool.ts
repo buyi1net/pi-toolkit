@@ -7,7 +7,7 @@ import type { RuntimeRegistry } from "./registry.ts";
 import type { SubagentStartup } from "./startup.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
 import type { DeliverTerminal } from "./spawn-agent-tool.ts";
-import { agentTreeRootDir, terminalOutcomeFromTree, writeAgentTerminal } from "./agent-tree.ts";
+import { agentTreeRootDir, appendRunningAgentTreeRecord, terminalOutcomeFromTree, writeAgentTerminal } from "./agent-tree.ts";
 import type { PublicAgentStatus } from "./registry.ts";
 import {
   lifecycleQueue,
@@ -17,6 +17,10 @@ import {
   type SendMessageToolDeps,
   type ToolContext,
 } from "./send-message-tool.ts";
+
+interface FollowupToolContext extends ToolContext {
+  isIdle?: () => boolean;
+}
 
 export interface FollowupTaskToolDeps extends SendMessageToolDeps {
   startup: SubagentStartup;
@@ -69,7 +73,7 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
         context,
       );
     },
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx: ToolContext) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx: FollowupToolContext) {
       const message = params.message.trim();
       if (!message) return errorResult("invalid_params", "message must be non-empty.");
       const resolved = resolveLifecycleTarget(deps, ctx, params.target, { preferLatestHistorical: true });
@@ -115,6 +119,14 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
         });
         const running = started.running;
         running.interruptRequested = false;
+        appendRunningAgentTreeRecord({
+          rootDir,
+          running,
+          status: "running",
+          summary: `Follow-up ${submissionId} started.`,
+          artifactDir,
+          ownerSessionId,
+        });
         const terminate = (
           status: PublicAgentStatus,
           summary: string,
@@ -150,7 +162,7 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
           if (!result) {
             const terminal: SubagentResult = { exitCode: 1, errorMessage: "Follow-up watcher ended without a terminal result." } as SubagentResult;
             const update = terminate("failed", terminal.errorMessage!, `${submissionId}:terminal`, terminal.errorMessage);
-            if (update) deps.deliverTerminal?.(running, terminal, "followup", update.delivery_id);
+            if (update) deps.deliverTerminal?.(running, terminal, "followup", update.delivery_id, () => ctx.isIdle?.() ?? true);
             return;
           }
           if (result.interruptedRound) return;
@@ -161,12 +173,12 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
             `${submissionId}:terminal`,
             result.summary || result.errorMessage || undefined,
           );
-          if (update) deps.deliverTerminal?.(running, result, "followup", update.delivery_id);
+          if (update) deps.deliverTerminal?.(running, result, "followup", update.delivery_id, () => ctx.isIdle?.() ?? true);
         }).catch((error) => {
           if (running.closed) return;
           const terminal: SubagentResult = { exitCode: 1, errorMessage: error instanceof Error ? error.message : String(error) } as SubagentResult;
           const update = terminate("failed", terminal.errorMessage!, `${submissionId}:terminal`, terminal.errorMessage);
-          if (update) deps.deliverTerminal?.(running, terminal, "followup", update.delivery_id);
+          if (update) deps.deliverTerminal?.(running, terminal, "followup", update.delivery_id, () => ctx.isIdle?.() ?? true);
         });
         return {
           content: [{ type: "text" as const, text: JSON.stringify({ ...details, status: "running" }) }],

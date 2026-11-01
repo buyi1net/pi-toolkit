@@ -22,6 +22,7 @@ export interface WaitAgentToolDeps {
 interface WaitAgentResult {
   message: string;
   timed_out: boolean;
+  reason?: "no_running_agents";
   update: {
     update_id: string;
     update_seq: number;
@@ -160,7 +161,10 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
     description:
       "Wait for the next update in the current parent session queue. " +
       "This does not take a target list and a timeout never cancels a sub-agent. " +
+      "timeout_ms defaults to 30000 and must be an integer from 1000 to 120000. " +
       "Read the returned update to identify its agent and event kind. " +
+      "update_seq is strictly increasing inside this queue but is not contiguous: a skipped number means the event was dropped by design or belongs to another queue (descendant bubbles reuse the descendant sequence), so never infer lost updates from gaps; correlate and deduplicate by agent_id plus update_id. " +
+      "When no sub-agent can be waited for, the call returns immediately with update=null, timed_out=false and reason=\"no_running_agents\". " +
       "This cannot wait for peers_send replies; those messages arrive automatically, so do not use wait_agent or repeatedly poll peers_list.",
     promptSnippet: "Wait for one new parent-session agent update without cancelling agents on timeout.",
     parameters: Type.Object({
@@ -248,6 +252,7 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
           {
             message: "wait_agent only waits for subagents dispatched by this session; peers messages arrive automatically, so end this turn instead of waiting.",
             timed_out: false,
+            reason: "no_running_agents",
             update: null,
           },
           { code: "no_running_agents" },

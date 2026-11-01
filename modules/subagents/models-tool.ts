@@ -111,6 +111,7 @@ export function registerSubagentModelsTool(
     description:
       "Read the current /model available subagent models. Each entry includes a provider, model id, display name, " +
       "host-supported reasoning_effort values, health facts, and display mode availability. " +
+      "reasoning_effort is always an array: the full list of supported levels, or an empty array when the host catalogue has none for that model. " +
       "Use a unique id or name in spawn_agent; when several providers expose the same name, pass provider/model.",
     promptSnippet:
       "Read the current available model directory before choosing a model for spawn_agent.",

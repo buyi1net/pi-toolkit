@@ -24,6 +24,7 @@ import { AGENT_QUEUE_DELIVERY, buildAgentEnvelope, rootTaskName } from "./agent-
 import type { SubagentsTranslate } from "./messages/index.ts";
 import { activityDisplayLabel, readSubagentActivityFile, type ActivityReadResult } from "./activity.ts";
 import { createDescendantsTracker } from "./descendants.ts";
+import { createEnvelopeDelivery } from "./envelope-delivery.ts";
 import { withUsageRecording } from "./usage-bridge.ts";
 import { loadTierRouteConfig, MODEL_TIERS } from "./routing.ts";
 import { debugLog } from "./diagnostics.ts";
@@ -150,6 +151,46 @@ export {
 
 const statusConfig = loadStatusConfig();
 
+function sessionPreservedNote(options?: { sessionPreserved?: boolean }): string {
+  return options?.sessionPreserved === false
+    ? `\n\nThis sub-agent's session artifacts were cleaned up by the retention policy; the session cannot be resumed. If the task goal is achieved, simply continue with your work — do NOT message it again unless you have a genuinely NEW instruction.`
+    : `\n\nThis sub-agent has finished and its session is preserved. If the task goal is achieved, simply continue with your work — do NOT message it again unless you have a genuinely NEW instruction (repeated messaging after auto-exit creates an infinite loop).`;
+}
+
+export interface ResultEnvelopeParts {
+  payload: string;
+  hostNote: string;
+}
+
+export function buildResultEnvelopeParts(
+  result: Pick<
+    SubagentResult,
+    "exitCode" | "elapsed" | "summary" | "sessionFile" | "sessionId" | "errorMessage"
+  >,
+  name: string,
+  options?: { sessionPreserved?: boolean },
+): ResultEnvelopeParts {
+  const hostNote = sessionPreservedNote(options).replace(/^\n+/, "");
+  if (result.errorMessage) {
+    const recoveryHint = options?.sessionPreserved === false
+      ? "spawn a new subagent with a corrected route or task"
+      : "spawn a new subagent or continue the preserved session with followup_task";
+    return {
+      payload:
+        `Sub-agent "${name}" failed after ${formatElapsed(result.elapsed)} ` +
+        `(provider/agent error — auto-retry exhausted).\n\n` +
+        `Error: ${result.errorMessage}`,
+      hostNote:
+        `The subagent did not produce a result. If a retry is genuinely warranted, ` +
+        `${recoveryHint}. ${hostNote}`,
+    };
+  }
+  const payload = result.summary?.trim() ? result.summary : "The sub-agent returned no result.";
+  return result.exitCode !== 0
+    ? { payload, hostNote: `Sub-agent "${name}" failed (exit code ${result.exitCode}). ${hostNote}` }
+    : { payload, hostNote: `Sub-agent "${name}" completed in ${formatElapsed(result.elapsed)}. ${hostNote}` };
+}
+
 export function resolveResultPresentation(
   result: Pick<
     SubagentResult,
@@ -159,13 +200,7 @@ export function resolveResultPresentation(
   options?: { sessionPreserved?: boolean },
 ): string {
 
-  const sessionNote = options?.sessionPreserved === false
-    ? `\n\nThis sub-agent's session artifacts were cleaned up by the retention policy; ` +
-      `the session cannot be resumed. If the task goal is achieved, simply continue ` +
-      `with your work — do NOT message it again unless you have a genuinely NEW instruction.`
-    : `\n\nThis sub-agent has finished and its session is preserved. If the task goal is ` +
-      `achieved, simply continue with your work — do NOT message it again unless you have ` +
-      `a genuinely NEW instruction (repeated messaging after auto-exit creates an infinite loop).`;
+  const sessionNote = sessionPreservedNote(options);
 
   if (result.errorMessage) {
 
@@ -208,6 +243,14 @@ const RUNNING_CHILDREN_COUNT_KEY = Symbol.for("pi-subagents/running-children-cou
 export let latestCtx: ExtensionContext | null = null;
 
 export let latestPi: ExtensionAPI | null = null;
+
+export const envelopeDelivery = createEnvelopeDelivery({
+  send: (message, options, host) => {
+    const api = (host as ExtensionAPI | undefined) ?? latestPi;
+    if (!api) return Promise.reject(new Error("Pi host is unavailable."));
+    return api.sendMessage(message as never, options as never);
+  },
+});
 
 let statusInterval: ReturnType<typeof setInterval> | null = null;
 const sessionLivenessProbe = createSessionFileLivenessProbe();
@@ -489,8 +532,10 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
       typeof sessionManager?.getSessionDir === "function" &&
       typeof sessionManager?.getSessionId === "function"
     ) {
+      const artifactDir = getArtifactDir(sessionManager.getSessionDir(), sessionManager.getSessionId());
+      envelopeDelivery.loadPending(artifactDir);
       widgetRuntime.tree = createDescendantsTracker({
-        rootArtifactDir: getArtifactDir(sessionManager.getSessionDir(), sessionManager.getSessionId()),
+        rootArtifactDir: artifactDir,
         rootCwd: ctx.cwd ?? process.cwd(),
         agentConfigDir: getAgentConfigDir(),
       });
@@ -518,6 +563,17 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
     recoverRuntimeSubagents(ctx, pi, startup).catch((error) => {
       debugLog("Runtime subagent recovery failed", error);
     });
+  });
+
+  pi.on("agent_before_settle", async () => {
+    if ((globalThis as any)[MODULE_INSTANCE_KEY] !== moduleInstanceId) return undefined;
+    const flushed = await envelopeDelivery.flushBeforeSettle(pi);
+    return flushed ? { continue: true } : undefined;
+  });
+
+  pi.on("agent_settled", async (event) => {
+    if ((globalThis as any)[MODULE_INSTANCE_KEY] !== moduleInstanceId) return;
+    await envelopeDelivery.flushAfterSettle(event.aborted === true, pi);
   });
 
   pi.on("session_shutdown", (_event, ctx) => {

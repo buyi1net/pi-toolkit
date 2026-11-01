@@ -4,15 +4,16 @@ import { closeSurface, pollForExit, readExitSidecar, type PollResult } from "./s
 import { isPidAlive, parseHeadlessSurface, terminateHeadlessProcess } from "./headless.ts";
 import { isTerminalDoneActivity } from "./activity.ts";
 import {
+  buildResultEnvelopeParts,
+  envelopeDelivery,
   getModuleAbortSignal,
   MODULE_INSTANCE_KEY,
   moduleInstanceId,
   observeRunningSubagent,
-  resolveResultPresentation,
   runtimeRegistry,
 } from "./mod.ts";
 import { deliverPendingQuestion } from "./mod-members.ts";
-import { AGENT_TURN_DELIVERY, agentTaskName, buildAgentEnvelope } from "./agent-envelope.ts";
+import { agentTaskName, buildResultEnvelope } from "./agent-envelope.ts";
 import { getArtifactDir } from "./mod-host.ts";
 import { updateWidget } from "./mod-widget.ts";
 import { createParentUpdateQueue, createParentUpdateProducers, type ParentSessionUpdate } from "./parent-update-queue.ts";
@@ -292,21 +293,22 @@ export async function watchSubagent(
 }
 
 export async function recoverRuntimeSubagents(
-  ctx: { sessionManager: { getSessionId(): string; getSessionDir(): string } },
+  ctx: { sessionManager: { getSessionId(): string; getSessionDir(): string }; isIdle?: () => boolean },
   pi: ExtensionAPI,
   startup: SubagentStartup,
 ): Promise<void> {
   const artifactDir = getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId());
+  const isIdle = () => ctx.isIdle?.() ?? true;
   for (const outcome of await startup.recover(ctx, pi)) {
     if (outcome.kind === "exited") {
-      await deliverRecoveredExit(outcome.record, outcome.exit, pi, artifactDir);
+      await deliverRecoveredExit(outcome.record, outcome.exit, pi, artifactDir, isIdle);
       continue;
     }
     if (outcome.kind === "running") {
       if (outcome.recovered === "pane") {
-        deliverRecoveredPane(outcome.run, pi, artifactDir);
+        deliverRecoveredPane(outcome.run, pi, artifactDir, isIdle);
       } else {
-        deliverRecoveredHeadless(outcome.run, pi, artifactDir);
+        deliverRecoveredHeadless(outcome.run, pi, artifactDir, isIdle);
       }
     }
   }
@@ -329,23 +331,21 @@ export function publishTerminalUpdate(artifactDir: string, running: RunningSubag
   return result.userClosed ? producers.surfaceClosed(input) : producers.watcherTerminal(input);
 }
 
-export function deliverSpawnTerminal(running: RunningSubagent, result: SubagentResult, pi: ExtensionAPI, deliveryId?: string, source: "spawn" | "followup" | "recovered-exit" | "recovered-headless" | "recovered-pane" = "spawn"): void {
+export function deliverSpawnTerminal(running: RunningSubagent, result: SubagentResult, pi: ExtensionAPI, deliveryId?: string, source: "spawn" | "followup" | "recovered-exit" | "recovered-headless" | "recovered-pane" = "spawn", isIdle: () => boolean = () => true): void {
   if (running.closed || result.handedOff || result.interruptedRound) return;
   const failed = result.exitCode !== 0 || !!result.errorMessage;
   const routeException = routeExceptionFromResult(result, running.model);
-  const content = buildAgentEnvelope({
-    kind: "FINAL_ANSWER",
-    taskName: agentTaskName(running),
-    payload: resolveResultPresentation(result, running.name),
-  });
-  pi.sendMessage({
+  const parts = buildResultEnvelopeParts(result, running.name);
+  const content = buildResultEnvelope({ taskName: agentTaskName(running), payload: parts.payload, hostNote: parts.hostNote });
+  void envelopeDelivery.deliver({
+    key: `final:${running.id}:${deliveryId ?? source}`,
     customType: "subagent_result",
     content,
-    display: true,
     details: {
       name: running.name,
       task: running.task,
       agent: running.agent,
+      summary: parts.payload,
       exitCode: result.exitCode,
       elapsed: result.elapsed,
       sessionFile: result.sessionFile,
@@ -360,7 +360,7 @@ export function deliverSpawnTerminal(running: RunningSubagent, result: SubagentR
       ...(source.startsWith("recovered-") ? { recovered: source === "recovered-exit" ? "headless-exited" : source.slice("recovered-".length) } : {}),
       ...(deliveryId ? { delivery_id: deliveryId } : {}),
     },
-  }, AGENT_TURN_DELIVERY);
+  }, isIdle, pi);
 }
 
 export async function deliverRecoveredExit(
@@ -368,6 +368,7 @@ export async function deliverRecoveredExit(
   exit: { exitCode: number; errorMessage?: string },
   pi: ExtensionAPI,
   artifactDir: string,
+  isIdle: () => boolean = () => true,
 ): Promise<void> {
   try {
     const extracted = await extractSubagentResult(
@@ -388,13 +389,13 @@ export async function deliverRecoveredExit(
 
     settleCompletionFromResult(record.name, exitResult);
     const update = publishTerminalUpdate(artifactDir, record as unknown as RunningSubagent, exitResult as SubagentResult, `recover:${record.id}:terminal`);
-    deliverSpawnTerminal(record as unknown as RunningSubagent, exitResult as SubagentResult, pi, update.delivery_id, "recovered-exit");
+    deliverSpawnTerminal(record as unknown as RunningSubagent, exitResult as SubagentResult, pi, update.delivery_id, "recovered-exit", isIdle);
   } catch (error) {
     debugLog(`Could not recover finished headless subagent ${record.name}`, error);
   }
 }
 
-export function deliverRecoveredHeadless(run: StartedRun, pi: ExtensionAPI, artifactDir: string): void {
+export function deliverRecoveredHeadless(run: StartedRun, pi: ExtensionAPI, artifactDir: string, isIdle: () => boolean = () => true): void {
   const running = run.running;
   const recoveredSource = "recovered-headless" as const;
   run.watch
@@ -405,18 +406,18 @@ export function deliverRecoveredHeadless(run: StartedRun, pi: ExtensionAPI, arti
 
       if (terminal.handedOff || terminal.interruptedRound) return;
       const update = publishTerminalUpdate(artifactDir, running, terminal, `recover:${running.id}:terminal`);
-      deliverSpawnTerminal(running, terminal, pi, update.delivery_id, recoveredSource);
+      deliverSpawnTerminal(running, terminal, pi, update.delivery_id, recoveredSource, isIdle);
     })
     .catch((error) => {
       updateWidget();
       settleCompletionFromResult(running.name, { exitCode: 1, errorMessage: error?.message ?? String(error) });
       const failure = { exitCode: 1, errorMessage: error?.message ?? String(error) } as SubagentResult;
       const update = publishTerminalUpdate(artifactDir, running, failure, `recover:${running.id}:terminal`);
-      deliverSpawnTerminal(running, failure, pi, update.delivery_id, recoveredSource);
+      deliverSpawnTerminal(running, failure, pi, update.delivery_id, recoveredSource, isIdle);
     });
 }
 
-export function deliverRecoveredPane(run: StartedRun, pi: ExtensionAPI, artifactDir: string): void {
+export function deliverRecoveredPane(run: StartedRun, pi: ExtensionAPI, artifactDir: string, isIdle: () => boolean = () => true): void {
   const running = run.running;
   const recoveredSource = "recovered-pane" as const;
   run.watch
@@ -430,13 +431,13 @@ export function deliverRecoveredPane(run: StartedRun, pi: ExtensionAPI, artifact
 
       if (terminal.handedOff || terminal.interruptedRound) return;
       const update = publishTerminalUpdate(artifactDir, running, terminal, `recover:${running.id}:terminal`);
-      deliverSpawnTerminal(running, terminal, pi, update.delivery_id, recoveredSource);
+      deliverSpawnTerminal(running, terminal, pi, update.delivery_id, recoveredSource, isIdle);
     })
     .catch((error) => {
       updateWidget();
       settleCompletionFromResult(running.name, { exitCode: 1, errorMessage: error?.message ?? String(error) });
       const failure = { exitCode: 1, errorMessage: error?.message ?? String(error) } as SubagentResult;
       const update = publishTerminalUpdate(artifactDir, running, failure, `recover:${running.id}:terminal`);
-      deliverSpawnTerminal(running, failure, pi, update.delivery_id, recoveredSource);
+      deliverSpawnTerminal(running, failure, pi, update.delivery_id, recoveredSource, isIdle);
     });
 }

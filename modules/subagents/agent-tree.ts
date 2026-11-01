@@ -9,7 +9,7 @@ import type { RunningSubagent } from "./types.ts";
 const AGENT_TREE_FILE = "subagent-tree.jsonl";
 const AGENT_TREE_BUBBLED_FILE = "subagent-bubbled-updates.jsonl";
 const AGENT_TREE_VERSION = 1;
-const SUMMARY_LIMIT = 200;
+export const AGENT_SUMMARY_LIMIT = 200;
 
 export interface AgentTreeRecord {
   v: number;
@@ -53,7 +53,7 @@ export function appendAgentTreeRecord(rootDir: string, record: Omit<AgentTreeRec
   const line: AgentTreeRecord = {
     ...record,
     v: AGENT_TREE_VERSION,
-    summary: (record.summary ?? "").slice(0, SUMMARY_LIMIT),
+    summary: (record.summary ?? "").slice(0, AGENT_SUMMARY_LIMIT),
     updated_at: Date.now(),
   };
   try {
@@ -178,7 +178,7 @@ export function terminalOutcomeFromTree(rootDir: string, agentId: string, fallba
 
 function bubbledUpdateLine(update: ParentSessionUpdate): string {
   const { final_text: _finalText, ...rest } = update;
-  return `${JSON.stringify({ v: AGENT_TREE_VERSION, ...rest, summary: (update.summary ?? "").slice(0, SUMMARY_LIMIT) })}\n`;
+  return `${JSON.stringify({ v: AGENT_TREE_VERSION, ...rest, summary: (update.summary ?? "").slice(0, AGENT_SUMMARY_LIMIT) })}\n`;
 }
 
 export function appendBubbledUpdate(rootDir: string, update: ParentSessionUpdate): void {

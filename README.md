@@ -20,7 +20,7 @@ npm 上的 `@buyi1net/pi-toolkit` 只有旧版本，不含本版内容，暂不�
 
 **视觉辅助（来自 pi-eyes）**：为纯文本模型自动补充图片理解能力，原生多模态模型直接旁路。主模型可通过 `vision_query` 工具针对最近截图追问。切换视觉模型前会先跑一次探测自检，不通过则保持原选择。
 
-**子代理编排（来自 pi-subagents）**：spawn、调度、回收子代理，最多三层（根 → 子代理 → 孙代理）；用 `close_agent` 关闭不再需要的子代理并释放任务名，`followup_task` 续跑时沿用原 `agent_id`。自动任务默认 headless 后台进程，演示型任务用 herdr 或 tmux 分屏，结果自动回注主会话。`list_agents` 显示整棵代理树，可按规范任务路径前缀过滤；根会话可以直接打断或关闭孙代理：`close_agent` 会级联关闭后代并返回关掉了哪些，`interrupt_agent` 可以打断孙代理的当前轮。支持 tier 模型路由（fast / balanced / deep）与团队协作。`ask_question` 让子代理在卡住时向主会话提问；提问、终态和状态回送都带 `Message Type`／`Task name`／`Sender`／`Payload` 信封，父会话能直接看出是哪个子代理发来的。
+**子代理编排（来自 pi-subagents）**：spawn、调度、回收子代理，最多三层（根 → 子代理 → 孙代理）；用 `close_agent` 关闭不再需要的子代理并释放任务名，`followup_task` 续跑时沿用原 `agent_id`。自动任务默认 headless 后台进程，演示型任务用 herdr 或 tmux 分屏，结果自动回注主会话。`list_agents` 显示整棵代理树，可按规范任务路径前缀过滤；根会话可以直接打断或关闭孙代理：`close_agent` 会级联关闭后代并返回关掉了哪些，`interrupt_agent` 可以打断孙代理的当前轮。支持 tier 模型路由（fast / balanced / deep）与团队协作。`ask_question` 让子代理在卡住时向主会话提问；提问、终态和状态回送都带 `Message Type`／`Task name`／`Sender`／`Payload` 信封，父会话能直接看出是哪个子代理发来的；终态里子代理的原话和宿主的收尾说明分成两段，不会混在一起。主会话空闲时，子代理一完成就会唤醒它；主会话正在干活时，这期间完成的子代理结果先攒着，等这一轮结束时合并成一条回注，不打断手头的工具调用。
 
 **供应商查询、工作区与会话状态、外观（来自 pi-tui，重构后拆为三个模块）**：编辑器状态边框、Header、项目状态 Footer、启动与 reload 转场、单轮遥测，附带 21 个主题（16 个 pi-themes-bundle + 5 个对齐 Herdr 内置主题的自维护移植）。供应商余额与套餐查询需要凭据时读取 `~/.pi/agent/pi-tui.json`（该文件由你手工维护，插件只读）。
 

@@ -19,6 +19,11 @@ function customCardKey(customType: string, timestamp: number | undefined): strin
   return `${customType}\u0000${timestamp ?? 0}`;
 }
 
+function finalAnswerPayload(content: string): string | null {
+  const match = /^Message Type: FINAL_ANSWER\n[\s\S]*?\nPayload:\n([\s\S]*?)(?:\n\nMessage Type: STATUS\n[\s\S]*)?$/.exec(content);
+  return match ? match[1]! : null;
+}
+
 function cardWithClick(key: string | null, component: Component): MouseRegion {
   return new MouseRegion(component, (event) => {
     if (key === null || event.type !== "click" || event.button !== "left") return undefined;
@@ -81,7 +86,7 @@ export function registerSubagentRenderers(
           }
 
           const rawContent = typeof message.content === "string" ? message.content : "";
-          const summary = rawContent
+          const summary = finalAnswerPayload(rawContent) ?? rawContent
             .replace(/\n\nFollow up with subagent_message[\s\S]+$/, "")
             .replace(`Sub-agent "${name}" completed (${elapsed}).\n\n`, "")
             .replace(`Sub-agent "${name}" failed (exit code ${exitCode}).\n\n`, "")
