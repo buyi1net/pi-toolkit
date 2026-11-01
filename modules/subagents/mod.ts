@@ -500,7 +500,10 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
     });
   });
 
-  pi.on("session_shutdown", (_event, _ctx) => {
+  pi.on("session_shutdown", (_event, ctx) => {
+    if (ctx?.hasUI) ctx.ui.setWidget("subagent-status", undefined);
+    latestCtx = null;
+    latestPi = null;
     widgetRuntime.tree?.dispose();
     widgetRuntime.tree = null;
     widgetRuntime.snapshot = null;
