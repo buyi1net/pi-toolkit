@@ -133,7 +133,7 @@ export interface ResumeStartedRun extends StartedRun {
 export interface SpawnPlanOptions {
   excludeModels?: ReadonlySet<string>;
   protocol?: typeof CODEX_V2_SUBAGENT_PROTOCOL;
-  forkTurns?: "all" | "none";
+  forkTurns: "all" | "none";
 }
 
 export interface SpawnPlan {
@@ -459,6 +459,13 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     ctx: SpawnContext,
     planOptions?: SpawnPlanOptions,
   ): PlanOutcome<SpawnPlan> {
+    if (planOptions?.protocol === CODEX_V2_SUBAGENT_PROTOCOL && planOptions.forkTurns == null) {
+      return {
+        kind: "error",
+        error: "fork_turns is required; choose none or all",
+        details: { error: "fork_turns required" },
+      };
+    }
     const agentError = validateSpawnText("agent", params?.agent);
     if (agentError) return { kind: "error", error: agentError, details: { error: "agent required" } };
     const taskError = validateSpawnText("task", params?.task);
@@ -1434,6 +1441,19 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
         if ((record.kind ?? "pane") === "headless") {
 
           const pid = record.pid ?? parseHeadlessSurface(record.surface);
+          if (record.interruptedRound) {
+            if (pid != null && deps.isPidAlive(pid)) {
+              deps.terminateHeadlessProcess(pid);
+            }
+            deps.registry.updatePublicStatus(
+              deps.registry.publicPathFor(dirname(runtimeFile)),
+              record.id,
+              "waiting",
+              "Current round interrupted; context is preserved for follow-up.",
+            );
+            deps.registry.removeRecord(runtimeFile, record.id);
+            continue;
+          }
           if (record.member) {
             if (pid != null && deps.isPidAlive(pid)) {
               deps.terminateHeadlessProcess(pid);
@@ -1517,6 +1537,22 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
           };
           deps.registry.track(running);
           recovered.push({ kind: "running", recovered: "headless-degraded", run: startWatcher(running) });
+          continue;
+        }
+
+        if (record.interruptedRound) {
+          try {
+            deps.closeSurface(record.surface);
+          } catch (error) {
+            debugLog(`Could not close interrupted recovered surface ${record.surface}`, error);
+          }
+          deps.registry.updatePublicStatus(
+            deps.registry.publicPathFor(dirname(runtimeFile)),
+            record.id,
+            "waiting",
+            "Current round interrupted; context is preserved for follow-up.",
+          );
+          deps.registry.removeRecord(runtimeFile, record.id);
           continue;
         }
 

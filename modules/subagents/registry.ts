@@ -5,6 +5,7 @@ import { normalizeSubagentName } from "./names.ts";
 import {
   createRuntimeRecord,
   markRuntimeWaitReleased,
+  markRuntimeInterrupted,
   readRuntimeRecords,
   removeRuntimeRecord,
   removeRuntimeRecordsForSession,
@@ -79,6 +80,8 @@ export interface RuntimeRegistry {
   inspectableRecords(path: string): RuntimeRecord[];
 
   markWaitReleased(path: string, id: string, released: SubagentWaitRelease): void;
+
+  markInterrupted(path: string, id: string): void;
 }
 
 export function createRuntimeRegistry(): RuntimeRegistry {
@@ -261,6 +264,9 @@ export function createRuntimeRegistry(): RuntimeRegistry {
     },
     markWaitReleased(path, id, released) {
       markRuntimeWaitReleased(path, id, released);
+    },
+    markInterrupted(path, id) {
+      markRuntimeInterrupted(path, id);
     },
   };
 }

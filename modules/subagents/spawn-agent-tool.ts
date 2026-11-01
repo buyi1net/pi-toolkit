@@ -100,13 +100,15 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
     description:
       "Start a sub-agent and return immediately. Read subagent_models first; choose agent_type from the available agent choices, and choose model and reasoning_effort from the same directory. model accepts a unique model id/name or an exact provider/model route. " +
       "If multiple providers expose the same name, pass the provider/model route from the directory. " +
+      "Choose fork_turns explicitly: none starts with only the task context, all inherits the parent history. " +
+      "The field is required; do not omit it. " +
       "The returned agent_id and canonical_task_name identify the new run.",
-    promptSnippet: "Start an agent without waiting for its final result.",
+    promptSnippet: "Start an agent, choose fork_turns explicitly (none or all), and do not omit it.",
     parameters: Type.Object({
       task_name: Type.String({ minLength: 1, maxLength: 72, pattern: "^[a-z0-9_]+$" }),
       message: Type.String({ minLength: 1 }),
       agent_type: agentTypeParameterSchema(deps.discoverAgents),
-      fork_turns: Type.Optional(Type.Union([Type.Literal("all"), Type.Literal("none")])),
+      fork_turns: Type.Union([Type.Literal("none"), Type.Literal("all")]),
       model: Type.String({ minLength: 1 }),
       reasoning_effort: Type.String({ minLength: 1 }),
       display_mode: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("herdr"), Type.Literal("tmux")])),
@@ -226,7 +228,7 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
           display_mode: requestedMode,
           modelIdentity: selected.model,
         } as any;
-        const planned = deps.startup.planSpawn(params, ctx, { protocol: "codex-v2", forkTurns: input.fork_turns ?? "all" });
+        const planned = deps.startup.planSpawn(params, ctx, { protocol: "codex-v2", forkTurns: input.fork_turns });
         if (planned.kind === "error") return errorResult(createCodexV2LaunchError({
           code: "agent_launch_failed",
           message: planned.error,
@@ -278,8 +280,8 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
         const publicResolvedDisplayMode = resolvedSurface === "background" ? "auto" : resolvedSurface;
         const nestedPolicy = nestedAgentPolicy ? { display_policy: "nested_agent_forced_background" } : {};
         return {
-          content: [{ type: "text", text: JSON.stringify({ agent_id: started.running.id, task_name: input.task_name, canonical_task_name: canonical, status: "running", resolved: { model: route, reasoning_effort: input.reasoning_effort, display_mode: requestedMode, resolved_display_mode: publicResolvedDisplayMode, ...nestedPolicy, fork_turns: input.fork_turns ?? "all", agent_type: agent } }) }],
-          details: { agent_id: started.running.id, task_name: input.task_name, canonical_task_name: canonical, status: "running", resolved: { model: route, reasoning_effort: input.reasoning_effort, display_mode: requestedMode, resolved_display_mode: publicResolvedDisplayMode, ...nestedPolicy, fork_turns: input.fork_turns ?? "all", agent_type: agent } },
+          content: [{ type: "text", text: JSON.stringify({ agent_id: started.running.id, task_name: input.task_name, canonical_task_name: canonical, status: "running", resolved: { model: route, reasoning_effort: input.reasoning_effort, display_mode: requestedMode, resolved_display_mode: publicResolvedDisplayMode, ...nestedPolicy, fork_turns: input.fork_turns, agent_type: agent } }) }],
+          details: { agent_id: started.running.id, task_name: input.task_name, canonical_task_name: canonical, status: "running", resolved: { model: route, reasoning_effort: input.reasoning_effort, display_mode: requestedMode, resolved_display_mode: publicResolvedDisplayMode, ...nestedPolicy, fork_turns: input.fork_turns, agent_type: agent } },
         };
       } finally {
         deps.registry.releaseName(input.task_name);

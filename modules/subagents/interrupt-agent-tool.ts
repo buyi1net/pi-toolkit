@@ -76,6 +76,7 @@ export function registerInterruptAgentTool(pi: ExtensionAPI, deps: InterruptAgen
       const previousStatus = running.publicStatus ?? "running";
       running.interruptRequested = true;
       running.publicStatus = "waiting";
+      deps.registry.markInterrupted(running.runtimeFile, running.id);
       deps.interruptCurrentRound(running);
       deps.registry.updatePublicStatus(
         deps.registry.publicPathFor(deps.getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId())),

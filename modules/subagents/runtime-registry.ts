@@ -40,6 +40,8 @@ export interface RuntimeRecord {
 
   waitReleased?: SubagentWaitRelease;
 
+  interruptedRound?: boolean;
+
   member?: boolean;
 }
 
@@ -78,6 +80,7 @@ export function createRuntimeRecord(source: RuntimeSource): RuntimeRecord {
     ...(source.timeoutMs != null ? { timeoutMs: source.timeoutMs } : {}),
     ...(source.waitMode ? { waitMode: source.waitMode } : {}),
     ...(source.waitReleased ? { waitReleased: source.waitReleased } : {}),
+    ...(source.interruptedRound ? { interruptedRound: true } : {}),
     ...(source.member ? { member: true } : {}),
   };
 }
@@ -122,7 +125,8 @@ export function readRuntimeRecords(path: string): RuntimeRecord[] {
         record.waitMode === "interactive" ||
         record.waitMode === "member-round" ||
         record.waitMode === "recovered") &&
-      (record.waitReleased == null || record.waitReleased === "escape" || record.waitReleased === "timeout"),
+      (record.waitReleased == null || record.waitReleased === "escape" || record.waitReleased === "timeout") &&
+      (record.interruptedRound == null || typeof record.interruptedRound === "boolean"),
     );
   } catch {
     return [];
@@ -155,6 +159,19 @@ export function markRuntimeWaitReleased(
     );
   } catch (error) {
     debugLog(`Could not persist wait release for runtime record ${id}`, error);
+  }
+}
+
+export function markRuntimeInterrupted(path: string, id: string): void {
+  const records = readRuntimeRecords(path);
+  if (!records.some((record) => record.id === id)) return;
+  try {
+    writeRuntimeRecords(
+      path,
+      records.map((record) => record.id === id ? { ...record, interruptedRound: true } : record),
+    );
+  } catch (error) {
+    debugLog(`Could not persist interrupted state for runtime record ${id}`, error);
   }
 }
 

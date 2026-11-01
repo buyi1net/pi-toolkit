@@ -976,7 +976,7 @@ export function registerSubagentTool(pi: ExtensionAPI, deps: SubagentToolDeps): 
             handedOff: false,
           });
 
-          const replan = deps.startup.planSpawn(params, ctx, { excludeModels: failedCandidates });
+          const replan = deps.startup.planSpawn(params, ctx, { excludeModels: failedCandidates, forkTurns: "none" });
           if (replan.kind === "error") {
             const aggregated = aggregateFailoverExhaustion({
               tier: failoverBase.tier,

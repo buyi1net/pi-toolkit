@@ -40,7 +40,7 @@ export interface CodexV2SpawnParams {
   model: string;
   reasoning_effort: string;
   agent_type?: string;
-  fork_turns?: "all" | "none";
+  fork_turns: "all" | "none";
   display_mode?: "auto" | "herdr" | "tmux";
 }
 
@@ -66,8 +66,8 @@ export function validateCodexV2SpawnParams(
   if (typeof input.task_name === "string" && !/^[a-z0-9_]{1,72}$/.test(input.task_name)) {
     errors.push({ code: "invalid_params", field: "task_name", message: "task_name must use lowercase letters, numbers, and underscores (max 72)" });
   }
-  if (input.fork_turns !== undefined && input.fork_turns !== "all" && input.fork_turns !== "none") {
-    errors.push({ code: "invalid_params", field: "fork_turns", message: "fork_turns must be all or none" });
+  if (input.fork_turns !== "all" && input.fork_turns !== "none") {
+    errors.push({ code: "invalid_params", field: "fork_turns", message: "fork_turns is required; choose none or all" });
   }
   if (input.display_mode !== undefined && !["auto", "herdr", "tmux"].includes(String(input.display_mode))) {
     errors.push({ code: "invalid_params", field: "display_mode", message: "display_mode must be auto, herdr, or tmux" });
@@ -85,7 +85,7 @@ export function validateCodexV2SpawnParams(
     model: input.model as string,
     reasoning_effort: input.reasoning_effort as string,
     ...(typeof input.agent_type === "string" ? { agent_type: input.agent_type } : {}),
-    ...(input.fork_turns ? { fork_turns: input.fork_turns as "all" | "none" } : {}),
+    fork_turns: input.fork_turns as "all" | "none",
     ...(input.display_mode ? { display_mode: input.display_mode as "auto" | "herdr" | "tmux" } : {}),
   } };
 }
