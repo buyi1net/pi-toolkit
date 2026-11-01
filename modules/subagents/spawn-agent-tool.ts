@@ -13,6 +13,18 @@ import { compactRenderText, renderToolCardCall, renderToolCardResult } from "../
 
 const DEFAULT_AGENT_TYPE = "general-purpose";
 
+function agentTypeParameterSchema(discoverAgents: () => Array<{ name: string }>) {
+  let names: string[] = [];
+  try {
+    names = [...new Set(discoverAgents().map((agent) => agent.name).filter((name) => typeof name === "string" && name.length > 0))].sort();
+  } catch {
+    // Runtime validation below remains authoritative when discovery is temporarily unavailable.
+  }
+  if (names.length === 0) return Type.Optional(Type.String({ minLength: 1, description: "Choose one of the available agent names reported by subagent_models." }));
+  if (names.length === 1) return Type.Optional(Type.Literal(names[0]!));
+  return Type.Optional(Type.Union(names.map((name) => Type.Literal(name))));
+}
+
 export type DeliverTerminal = (running: RunningSubagent, result: SubagentResult, source: "spawn" | "followup" | "recovered-exit" | "recovered-headless" | "recovered-pane", deliveryId: string) => void;
 
 export interface SpawnAgentToolDeps {
@@ -86,14 +98,14 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
     label: "Spawn Agent",
     renderShell: "self",
     description:
-      "Start a sub-agent and return immediately. Read subagent_models first; model accepts a unique model id/name or an exact provider/model route. " +
+      "Start a sub-agent and return immediately. Read subagent_models first; choose agent_type from the available agent choices, and choose model and reasoning_effort from the same directory. model accepts a unique model id/name or an exact provider/model route. " +
       "If multiple providers expose the same name, pass the provider/model route from the directory. " +
       "The returned agent_id and canonical_task_name identify the new run.",
     promptSnippet: "Start an agent without waiting for its final result.",
     parameters: Type.Object({
       task_name: Type.String({ minLength: 1, maxLength: 72, pattern: "^[a-z0-9_]+$" }),
       message: Type.String({ minLength: 1 }),
-      agent_type: Type.Optional(Type.String({ minLength: 1 })),
+      agent_type: agentTypeParameterSchema(deps.discoverAgents),
       fork_turns: Type.Optional(Type.Union([Type.Literal("all"), Type.Literal("none")])),
       model: Type.String({ minLength: 1 }),
       reasoning_effort: Type.String({ minLength: 1 }),
