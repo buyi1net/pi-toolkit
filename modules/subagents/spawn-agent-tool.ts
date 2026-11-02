@@ -221,7 +221,7 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
       "fork_turns is optional and defaults to all: all inherits the parent conversation text only (user and assistant messages, no tool calls and no tool results), so put every context the child needs into message; none starts with only the task context. " +
       "Delegation is capped at one more level: an agent at depth 1 holds this tool and may delegate one more level; an agent at depth 2 does not receive this tool and must complete the task itself. " +
       "Spelling variants of a model reference are accepted and the result reports the resolved route; a reference that is not close to anything returns model_not_found with up to three suggestions, ordered same-family first, then substring matches, then nearest by name distance. " +
-      "The field is required; do not omit it. " +
+      "model is required and has no default; do not omit it. " +
       "The run posts progress updates to the parent queue and its terminal result is delivered to this session automatically as a message — use wait_agent to receive updates, followup_task to continue the run, and close_agent to release the name. " +
       "The returned agent_id and canonical_task_name identify the new run.",
     promptSnippet: "Start an agent; fork_turns defaults to all (inherits the parent text conversation), pass none to start with only the task.",
@@ -358,7 +358,7 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
       const normalizations: SpawnNormalization[] = [];
       const forkTurns = normalizeForkTurns(input.fork_turns);
       if (forkTurns.unknown) {
-        normalizations.push({ field: "fork_turns", reason: "unknown", requested: forkTurns.requested ?? String(input.fork_turns), resolved: forkTurns.fork_turns });
+        normalizations.push({ field: "fork_turns", reason: "unknown", requested: forkTurns.requested ?? "", resolved: forkTurns.fork_turns });
       }
       const requestedTaskName = typeof input.task_name === "string" ? input.task_name.trim() : "";
       let taskName = normalizeTaskName(input.task_name);

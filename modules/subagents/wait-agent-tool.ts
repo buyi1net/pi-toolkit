@@ -25,7 +25,7 @@ interface WaitAgentResult {
   timed_out: boolean;
   reason?: "no_running_agents";
   timeout_ms?: number;
-  requested_timeout_ms?: number;
+  requested_timeout_ms?: number | string;
   update: {
     update_id: string;
     update_seq: number;
@@ -220,7 +220,9 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
       const timeoutMs = requestedNumber === undefined
         ? WAIT_AGENT_DEFAULT_TIMEOUT_MS
         : Math.min(WAIT_AGENT_MAX_TIMEOUT_MS, Math.max(WAIT_AGENT_MIN_TIMEOUT_MS, requestedNumber));
-      const clampNote = requested !== undefined && requestedNumber !== timeoutMs ? { requested_timeout_ms: requested as number } : {};
+      const clampNote = requested !== undefined && requestedNumber !== timeoutMs
+        ? { requested_timeout_ms: typeof requested === "number" ? requested : String(requested) }
+        : {};
       const respond = (value: Omit<WaitAgentResult, "timeout_ms">, details: Record<string, unknown> = {}, failure?: boolean) =>
         result({ ...value, timeout_ms: timeoutMs, ...clampNote }, details, failure);
 

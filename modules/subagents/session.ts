@@ -214,8 +214,6 @@ function getForkContentLines(parentSessionFile: string, bootstrap: string): { li
   };
 }
 
-export interface SeededForkStats extends ForkInheritanceStats {}
-
 function messageTextLength(entry: Record<string, any>): number {
   const content = entry.message?.content;
   if (!Array.isArray(content)) return 0;
@@ -260,7 +258,9 @@ function trimInheritedMessages(
     stats: {
       inherited_turns: survivors.filter(isMessage).length,
       inherited_chars: total,
-      inherited_truncated: dropped.size > 0,
+      // A protected current-turn message can keep the seed above the cap without any drop;
+      // that is still a truncated (capped) seed and must be reported as one.
+      inherited_truncated: dropped.size > 0 || total > maxChars,
     },
   };
 }

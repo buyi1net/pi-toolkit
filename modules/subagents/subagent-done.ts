@@ -14,7 +14,7 @@ function writeSidecar(path: string, data: string): void {
 import { createSubagentActivityRecorder } from "./activity.ts";
 import { postTeamMessage, readRoster, rosterPath, writeRoundSignal } from "./team.ts";
 import { normalizeSubagentName } from "./names.ts";
-import { subagentsTableTranslator } from "./messages/index.ts";
+import { subagentsTableTranslator, type SubagentsMessageKey, type SubagentsTranslate } from "./messages/index.ts";
 import { getToolkitConfigPath } from "../../kit/config.ts";
 import { isLanguageSetting, resolveLanguage, type ResolvedLanguage } from "../../i18n/index.ts";
 
@@ -107,7 +107,7 @@ export function resolveChildLanguage(agentDir = process.env.PI_CODING_AGENT_DIR?
   }
 }
 
-const TEAM_SEND_ERROR_KEYS: Record<string, Parameters<ReturnType<typeof subagentsTableTranslator>>[0]> = {
+const TEAM_SEND_ERROR_KEYS: Record<string, SubagentsMessageKey> = {
   "acl-denied": "module.subagents.tool.team_send.result.aclDenied",
   "unknown-target": "module.subagents.tool.team_send.result.unknownTarget",
   "target-offline": "module.subagents.tool.team_send.result.targetOffline",
@@ -117,7 +117,7 @@ const TEAM_SEND_ERROR_KEYS: Record<string, Parameters<ReturnType<typeof subagent
 };
 
 /** Error codes are for logs; the card gets a human word. */
-function teamSendErrorText(code: string, t: ReturnType<typeof subagentsTableTranslator>): string {
+function teamSendErrorText(code: string, t: SubagentsTranslate): string {
   const key = TEAM_SEND_ERROR_KEYS[code];
   return key ? t(key) : t("module.subagents.tool.team_send.result.notSent");
 }
