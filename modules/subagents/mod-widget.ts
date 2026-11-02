@@ -1,6 +1,7 @@
 import { visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
 import { runtimeRegistry, latestCtx, latestPi, MODULE_INSTANCE_KEY, moduleInstanceId } from "./mod.ts";
-import { widgetText } from "./mod-host.ts";
+import { getArtifactDir, widgetText } from "./mod-host.ts";
+import { createParentUpdateQueue, type ParentUpdateQueueStats } from "./parent-update-queue.ts";
 import {
   buildFirstLayerOnlySnapshot,
   type DescendantsTracker,
@@ -28,7 +29,8 @@ export const widgetRuntime: {
   interval: ReturnType<typeof setInterval> | null;
   tree: DescendantsTracker | null;
   snapshot: WidgetSnapshot | null;
-} = { interval: null, tree: null, snapshot: null };
+  queueStats: ParentUpdateQueueStats | null;
+} = { interval: null, tree: null, snapshot: null, queueStats: null };
 
 export function isStatusEnabled(): boolean {
   return true;
@@ -129,11 +131,22 @@ function widgetMetadataLevel(snapshot: WidgetSnapshot, width: number, tier: Retu
   return "hidden";
 }
 
+function formatQueueStatsLine(stats: ParentUpdateQueueStats, width: number): string {
+  const text = widgetText("module.subagents.widget.queue.stats", {
+    pending: String(stats.pending),
+    retained: String(stats.retained),
+    cursor: String(stats.cursor),
+    next: String(stats.next_update_seq),
+  });
+  return truncateToWidth(text, Math.max(1, width - 2));
+}
+
 export function renderWidgetSnapshotLines(
   snapshot: WidgetSnapshot,
   width: number,
   theme?: any,
   currentSessionThinkingLevel?: string,
+  queueStats?: ParentUpdateQueueStats | null,
 ): string[] {
 
   const colorize = widgetBorderColor(snapshot, theme, currentSessionThinkingLevel);
@@ -179,6 +192,10 @@ export function renderWidgetSnapshotLines(
   if (snapshot.counts.globalOverflow > 0) {
     lines.push(borderLine(` … +${snapshot.counts.globalOverflow} more`, "", width, colorize));
   }
+  if (queueStats && (queueStats.pending > 0 || queueStats.waiting)) {
+    const statsLine = formatQueueStatsLine(queueStats, width);
+    lines.push(borderLine(` ${muted ? muted(statsLine) : statsLine}`, "", width, colorize));
+  }
   lines.push(borderBottom(width, colorize));
   return lines;
 }
@@ -222,10 +239,28 @@ function currentThinkingLevel(): string | undefined {
   }
 }
 
+function readQueueStats(): ParentUpdateQueueStats | null {
+  if ((globalThis as any)[MODULE_INSTANCE_KEY] !== moduleInstanceId) return null;
+  const ctx = latestCtx;
+  if (!ctx) return null;
+  try {
+    const sessionManager = ctx.sessionManager as
+      | { getSessionDir?: () => string; getSessionId?: () => string }
+      | undefined;
+    const sessionDir = sessionManager?.getSessionDir?.();
+    const sessionId = sessionManager?.getSessionId?.();
+    if (!sessionDir || !sessionId) return null;
+    return createParentUpdateQueue(getArtifactDir(sessionDir, sessionId)).stats();
+  } catch {
+    return null;
+  }
+}
+
 export function updateWidget() {
   const ctx = currentUiContext();
   if (!ctx) return;
 
+  widgetRuntime.queueStats = readQueueStats();
   const firstLayer = runtimeRegistry.list();
   const snapshot = widgetRuntime.tree
     ? widgetRuntime.tree.snapshot(firstLayer, Date.now())
@@ -259,6 +294,7 @@ export function updateWidget() {
                 width,
                 theme,
                 currentThinkingLevel(),
+                widgetRuntime.queueStats,
               )
             : [];
           },

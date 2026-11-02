@@ -14,6 +14,7 @@ export const CODEX_V2_SPAWNING_TOOLS = [
   "interrupt_agent",
   "list_agents",
   "subagent_models",
+  "close_agent",
 ] as const;
 
 export const SPAWNING_TOOLS = CODEX_V2_SPAWNING_TOOLS;

@@ -111,6 +111,10 @@ import {
   createSubagentStartup,
   validateResumeTarget,
 } from "./startup.ts";
+import { readRuntimeStamp, runtimeStampsDiffer } from "./runtime-version.ts";
+
+const LOADED_RUNTIME_STAMP = readRuntimeStamp();
+let runtimeSkewReported = false;
 
 const WIDGET_INTERVAL_KEY = Symbol.for("pi-subagents/widget-interval");
 const STATUS_INTERVAL_KEY = Symbol.for("pi-subagents/status-interval");
@@ -530,6 +534,11 @@ export default function subagentsExtension(pi: ExtensionAPI, options?: Subagents
   pi.on("session_start", (_event, ctx) => {
     if ((globalThis as any)[MODULE_INSTANCE_KEY] !== moduleInstanceId) return;
     latestCtx = ctx;
+
+    if (!runtimeSkewReported && runtimeStampsDiffer(LOADED_RUNTIME_STAMP, readRuntimeStamp())) {
+      runtimeSkewReported = true;
+      ctx.ui.notify(widgetText("module.subagents.diagnostic.runtimeSkew"), "warning");
+    }
 
     widgetRuntime.tree?.dispose();
     widgetRuntime.tree = null;

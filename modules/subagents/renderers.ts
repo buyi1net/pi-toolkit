@@ -66,6 +66,10 @@ export function registerSubagentRenderers(
 
         const expanded = options.expanded || (key !== null && expandedCardIds.has(key));
         const contentLines = [formatToolCardLine({ title: t("module.subagents.widget.result.title"), object, status: `${status}${lateTag}` }, theme, failed)];
+        const sessionFile = typeof details.sessionFile === "string" ? details.sessionFile : "";
+        if (expanded && sessionFile !== "") {
+          contentLines.push(theme.fg("muted", truncateToWidth(`${t("module.subagents.widget.result.sessionFile")}: ${sessionFile}`, Math.max(1, width - 2))));
+        }
 
         if (expanded) {
           const meta = [
@@ -101,12 +105,6 @@ export function registerSubagentRenderers(
               ...summaryLines.map((line) => theme.fg("toolOutput", line)),
             );
           }
-
-          if (details.name || details.sessionFile) {
-            contentLines.push("");
-            if (details.name) contentLines.push(theme.fg("dim", `Session preserved: continue NEW instructions with followup_task({ target: "${details.name}", task: "…" })`));
-            if (details.sessionFile) contentLines.push(theme.fg("muted", `Session file: ${details.sessionFile}`));
-          }
         }
 
         const box = new Box(1, 1, cardBackground(theme, bgToken));
@@ -126,40 +124,54 @@ export function registerSubagentRenderers(
     const component = {
       invalidate() {},
       render(width: number): string[] {
-        const anyFailed = results.some((entry: any) => (entry.exitCode ?? 0) !== 0 || !!entry.errorMessage);
+        const entryFailed = (entry: any) => entry.userClosed === true ? false : (entry.exitCode ?? 0) !== 0 || !!entry.errorMessage;
+        const anyFailed = results.some(entryFailed);
+        const anyClosed = results.some((entry: any) => entry.userClosed === true);
+        const headerStatus = anyFailed
+          ? t("module.subagents.widget.result.failed")
+          : anyClosed
+            ? t("module.subagents.widget.result.closedByUser")
+            : t("module.subagents.widget.result.completed");
         const contentLines = [formatToolCardLine({
           title: t("module.subagents.widget.batch.title"),
           object: t("module.subagents.widget.batch.results", { count: results.length }),
-          status: anyFailed ? t("module.subagents.widget.result.failed") : t("module.subagents.widget.result.completed"),
+          status: headerStatus,
         }, theme, anyFailed)];
 
         const expanded = options.expanded || expandedCardIds.has(key);
         if (expanded) {
           for (const entry of results) {
-            const failed = (entry.exitCode ?? 0) !== 0 || !!entry.errorMessage;
+            const userClosed = entry.userClosed === true;
+            const failed = entryFailed(entry);
+            const late = entry.lateDelivery === "detached";
             const icon = failed ? theme.fg("error", "✗") : theme.fg("success", "✓");
             const elapsed = entry.elapsed != null ? formatElapsed(entry.elapsed) : "?";
-            const reason = failed
-              ? (entry.errorMessage
-                ? t("module.subagents.widget.result.failedProvider")
-                : t("module.subagents.widget.result.failedExit", { code: entry.exitCode }))
-              : t("module.subagents.widget.result.completed");
+            const reason = userClosed
+              ? t("module.subagents.widget.result.closedByUser")
+              : failed
+                ? (entry.errorMessage
+                  ? t("module.subagents.widget.result.failedProvider")
+                  : t("module.subagents.widget.result.failedExit", { code: entry.exitCode }))
+                : t("module.subagents.widget.result.completed");
+            const lateTag = late ? ` ${t("module.subagents.widget.result.late")}` : "";
             contentLines.push(
               `${icon} ${theme.fg("toolTitle", theme.bold(entry.name ?? "subagent"))}` +
-                theme.fg(failed ? "error" : "dim", ` — ${reason}`) +
+                theme.fg(failed ? "error" : "dim", ` — ${reason}${lateTag}`) +
                 theme.fg("dim", ` · ${elapsed}`),
             );
+            if (entry.sessionFile) {
+              contentLines.push(theme.fg("muted", truncateToWidth(`${t("module.subagents.widget.result.sessionFile")}: ${entry.sessionFile}`, Math.max(1, width - 2))));
+            }
             const summary = typeof entry.summary === "string" ? entry.summary : "";
             if (summary) {
               contentLines.push(...summary.split("\n").flatMap((line: string) =>
-                wrapTextWithAnsi(stripTerminalSequences(line), Math.max(1, width - 2)).map((wrapped) => theme.fg("dim", wrapped)),
+                wrapTextWithAnsi(stripTerminalSequences(line), Math.max(1, width - 2)).map((wrapped) => theme.fg("toolOutput", wrapped)),
               ));
             }
-            if (entry.sessionFile) contentLines.push(theme.fg("muted", `Session file: ${entry.sessionFile}`));
           }
         }
 
-        const bgToken = anyFailed ? "toolErrorBg" : "toolSuccessBg";
+        const bgToken = anyFailed ? "toolErrorBg" : anyClosed ? "toolPendingBg" : "toolSuccessBg";
         const box = new Box(1, 1, cardBackground(theme, bgToken));
         box.addChild(new Text(contentLines.join("\n"), 0, 0));
         return ["", ...box.render(width)];

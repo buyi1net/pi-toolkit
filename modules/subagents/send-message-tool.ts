@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text, stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { toolCardFailureReason, renderToolCardCall, formatToolCardLine, cardBackground } from "../../kit/tool-card.ts";
+import { toolCardFailureReason, renderToolCardCall, formatToolCardLine, cardBackground, compactRenderText } from "../../kit/tool-card.ts";
 import { readNameRegistry } from "./session.ts";
 import type { RuntimeRegistry } from "./registry.ts";
 import type { SubagentsTranslate } from "./messages/index.ts";
@@ -229,6 +229,27 @@ export function lifecycleUpdateDetails(update: ParentSessionUpdate, target: Targ
   };
 }
 
+/** 生命周期卡的统一 meta 标签：agent id / canonical / submission（· update）。有值才出对应行。 */
+export function lifecycleMetaLines(
+  details: { agent_id?: unknown; canonical_task_name?: unknown; submission_id?: unknown; update_id?: unknown },
+  t?: SubagentsTranslate,
+): string[] {
+  const meta: string[] = [];
+  const agentId = compactRenderText(details.agent_id);
+  if (agentId) meta.push(t?.("module.subagents.tool.meta.agentId", { id: agentId }) ?? `agent id ${agentId}`);
+  const canonical = compactRenderText(details.canonical_task_name);
+  if (canonical) meta.push(t?.("module.subagents.tool.meta.canonical", { name: canonical }) ?? `canonical ${canonical}`);
+  const submissionId = compactRenderText(details.submission_id);
+  const updateId = compactRenderText(details.update_id);
+  if (submissionId) {
+    meta.push([
+      t?.("module.subagents.tool.meta.submission", { id: submissionId }) ?? `submission ${submissionId}`,
+      updateId ? t?.("module.subagents.tool.meta.update", { id: updateId }) ?? `update ${updateId}` : "",
+    ].filter(Boolean).join(" · "));
+  }
+  return meta;
+}
+
 export function registerSendMessageTool(pi: ExtensionAPI, deps: SendMessageToolDeps): void {
   pi.registerTool({
     name: "send_message",
@@ -254,16 +275,7 @@ export function registerSendMessageTool(pi: ExtensionAPI, deps: SendMessageToolD
         ? deps.t?.("module.subagents.tool.send_message.result.submitted") ?? "Message submitted"
         : toolCardFailureReason(text, details);
       const message = typeof context?.args?.message === "string" ? context.args.message : "";
-      const meta = submitted
-        ? [
-            ["agent_id", details.agent_id],
-            ["canonical_task_name", details.canonical_task_name],
-            ["submission_id", details.submission_id],
-            ["update_id", details.update_id],
-          ]
-            .filter(([, value]) => typeof value === "string" && value !== "")
-            .map(([key, value]) => `${key}: ${value}`)
-        : [];
+      const meta = submitted ? lifecycleMetaLines(details, deps.t) : [];
       const failure = typeof details?.message === "string" && details.message !== "" ? details.message : "The message could not be submitted.";
 
       const component = {

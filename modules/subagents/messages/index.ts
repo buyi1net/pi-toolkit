@@ -98,6 +98,7 @@ const EN = {
   "module.subagents.widget.result.late": "(late delivery after detached wait)",
   "module.subagents.widget.result.tools": "{count} tools",
   "module.subagents.widget.result.bodyLabel": "Reply text",
+  "module.subagents.widget.result.sessionFile": "Session file",
   "module.subagents.widget.question.asks": "asks a question",
   "module.subagents.tool.subagent_models.display": "Read available models",
   "module.subagents.tool.spawn_agent.display": "Spawn subagent",
@@ -173,6 +174,38 @@ const EN = {
   "module.subagents.tool.subagent.result.closedByUser": "Closed by user",
   "module.subagents.tool.subagent.result.timedOut": "Timed out; still running",
   "module.subagents.tool.subagent_inspect.result.empty": "No running subagents",
+  "module.subagents.diagnostic.runtimeSkew": "pi-toolkit: package files on disk changed after this session loaded; run /reload before spawning new subagents.",
+  "module.subagents.widget.queue.stats": "queue {pending} pending · {retained} retained · cursor {cursor} · next {next}",
+  "module.subagents.tool.meta.agentId": "agent id {id}",
+  "module.subagents.tool.meta.canonical": "canonical {name}",
+  "module.subagents.tool.meta.submission": "submission {id}",
+  "module.subagents.tool.meta.update": "update {id}",
+  "module.subagents.tool.meta.status": "status {status}",
+  "module.subagents.tool.status.starting": "starting",
+  "module.subagents.tool.status.running": "running",
+  "module.subagents.tool.status.waiting": "waiting",
+  "module.subagents.tool.status.completed": "completed",
+  "module.subagents.tool.status.failed": "failed",
+  "module.subagents.tool.status.interrupted": "interrupted",
+  "module.subagents.tool.status.handedOff": "handed off",
+  "module.subagents.tool.status.closed": "closed",
+  "module.subagents.tool.status.unknown": "unknown",
+  "module.subagents.tool.spawn_agent.result.agentTag": "agent {type}",
+  "module.subagents.tool.spawn_agent.result.forkTag": "fork {fork}",
+  "module.subagents.tool.spawn_agent.result.modelTag": "model {model}",
+  "module.subagents.tool.spawn_agent.result.thinkingTag": "thinking {level}",
+  "module.subagents.tool.spawn_agent.result.displayTag": "display {mode}",
+  "module.subagents.tool.spawn_agent.result.displayPolicy.nested": "nested agents always run in the background",
+  "module.subagents.tool.spawn_agent.result.taskLabel": "task",
+  "module.subagents.tool.interrupt_agent.result.statusLine": "status {from} → {to}",
+  "module.subagents.tool.interrupt_agent.result.processLine": "process {action} {outcome}",
+  "module.subagents.tool.close_agent.result.previousStatus": "previous status: {status}",
+  "module.subagents.tool.close_agent.result.descendantStatus": "{name} — previous status: {status}",
+  "module.subagents.tool.subagent_models.result.healthLine": "health: {status}",
+  "module.subagents.tool.subagent_models.result.errorCount": "errors {count}",
+  "module.subagents.tool.subagent_models.result.lastError": "last error: {type} ({at})",
+  "module.subagents.tool.subagent_models.result.displayModesLabel": "display modes:",
+  "module.subagents.tool.subagent_models.result.agentTypesLine": "agent types: {names}",
 } satisfies Record<string, string>;
 
 const ZH_CN: typeof EN = {
@@ -270,6 +303,7 @@ const ZH_CN: typeof EN = {
   "module.subagents.widget.result.late": "（脱离等待后的迟到结果）",
   "module.subagents.widget.result.tools": "{count} 个工具",
   "module.subagents.widget.result.bodyLabel": "回复正文",
+  "module.subagents.widget.result.sessionFile": "会话文件",
   "module.subagents.widget.question.asks": "发起提问",
   "module.subagents.tool.subagent_models.display": "读取可用模型",
   "module.subagents.tool.spawn_agent.display": "派发子代理",
@@ -345,6 +379,38 @@ const ZH_CN: typeof EN = {
   "module.subagents.tool.subagent.result.closedByUser": "用户已关闭",
   "module.subagents.tool.subagent.result.timedOut": "等待超时，仍在运行",
   "module.subagents.tool.subagent_inspect.result.empty": "当前没有运行中的子代理",
+  "module.subagents.diagnostic.runtimeSkew": "pi-toolkit：磁盘上的包文件在本会话加载后已变化；派发新子代理前请先 /reload。",
+  "module.subagents.widget.queue.stats": "队列 {pending} 待取 · {retained} 保留 · 游标 {cursor} · 下一个 {next}",
+  "module.subagents.tool.meta.agentId": "代理 id {id}",
+  "module.subagents.tool.meta.canonical": "规范路径 {name}",
+  "module.subagents.tool.meta.submission": "提交 {id}",
+  "module.subagents.tool.meta.update": "更新 {id}",
+  "module.subagents.tool.meta.status": "状态 {status}",
+  "module.subagents.tool.status.starting": "启动中",
+  "module.subagents.tool.status.running": "运行中",
+  "module.subagents.tool.status.waiting": "等待中",
+  "module.subagents.tool.status.completed": "已完成",
+  "module.subagents.tool.status.failed": "已失败",
+  "module.subagents.tool.status.interrupted": "已中断",
+  "module.subagents.tool.status.handedOff": "已移交",
+  "module.subagents.tool.status.closed": "已关闭",
+  "module.subagents.tool.status.unknown": "未知",
+  "module.subagents.tool.spawn_agent.result.agentTag": "代理 {type}",
+  "module.subagents.tool.spawn_agent.result.forkTag": "继承 {fork}",
+  "module.subagents.tool.spawn_agent.result.modelTag": "模型 {model}",
+  "module.subagents.tool.spawn_agent.result.thinkingTag": "思考 {level}",
+  "module.subagents.tool.spawn_agent.result.displayTag": "显示 {mode}",
+  "module.subagents.tool.spawn_agent.result.displayPolicy.nested": "嵌套子代理固定在后台运行",
+  "module.subagents.tool.spawn_agent.result.taskLabel": "任务",
+  "module.subagents.tool.interrupt_agent.result.statusLine": "状态 {from} → {to}",
+  "module.subagents.tool.interrupt_agent.result.processLine": "进程 {action} {outcome}",
+  "module.subagents.tool.close_agent.result.previousStatus": "此前状态：{status}",
+  "module.subagents.tool.close_agent.result.descendantStatus": "{name} — 此前状态：{status}",
+  "module.subagents.tool.subagent_models.result.healthLine": "健康：{status}",
+  "module.subagents.tool.subagent_models.result.errorCount": "错误 {count}",
+  "module.subagents.tool.subagent_models.result.lastError": "最近错误：{type}（{at}）",
+  "module.subagents.tool.subagent_models.result.displayModesLabel": "显示模式：",
+  "module.subagents.tool.subagent_models.result.agentTypesLine": "代理类型：{names}",
 };
 
 const ZH_TW: typeof EN = {
@@ -442,6 +508,7 @@ const ZH_TW: typeof EN = {
   "module.subagents.widget.result.late": "（脫離等待後的遲到結果）",
   "module.subagents.widget.result.tools": "{count} 個工具",
   "module.subagents.widget.result.bodyLabel": "回覆正文",
+  "module.subagents.widget.result.sessionFile": "會話檔案",
   "module.subagents.widget.question.asks": "發起提問",
   "module.subagents.tool.subagent_models.display": "讀取可用模型",
   "module.subagents.tool.spawn_agent.display": "派發子代理",
@@ -517,6 +584,38 @@ const ZH_TW: typeof EN = {
   "module.subagents.tool.subagent.result.closedByUser": "使用者已關閉",
   "module.subagents.tool.subagent.result.timedOut": "等待逾時，仍在執行",
   "module.subagents.tool.subagent_inspect.result.empty": "目前沒有執行中的子代理",
+  "module.subagents.diagnostic.runtimeSkew": "pi-toolkit：磁碟上的套件檔案在本工作階段載入後已變更；派發新子代理前請先 /reload。",
+  "module.subagents.widget.queue.stats": "佇列 {pending} 待取 · {retained} 保留 · 游標 {cursor} · 下一個 {next}",
+  "module.subagents.tool.meta.agentId": "代理 id {id}",
+  "module.subagents.tool.meta.canonical": "規範路徑 {name}",
+  "module.subagents.tool.meta.submission": "提交 {id}",
+  "module.subagents.tool.meta.update": "更新 {id}",
+  "module.subagents.tool.meta.status": "狀態 {status}",
+  "module.subagents.tool.status.starting": "啟動中",
+  "module.subagents.tool.status.running": "執行中",
+  "module.subagents.tool.status.waiting": "等待中",
+  "module.subagents.tool.status.completed": "已完成",
+  "module.subagents.tool.status.failed": "已失敗",
+  "module.subagents.tool.status.interrupted": "已中斷",
+  "module.subagents.tool.status.handedOff": "已移交",
+  "module.subagents.tool.status.closed": "已關閉",
+  "module.subagents.tool.status.unknown": "未知",
+  "module.subagents.tool.spawn_agent.result.agentTag": "代理 {type}",
+  "module.subagents.tool.spawn_agent.result.forkTag": "繼承 {fork}",
+  "module.subagents.tool.spawn_agent.result.modelTag": "模型 {model}",
+  "module.subagents.tool.spawn_agent.result.thinkingTag": "思考 {level}",
+  "module.subagents.tool.spawn_agent.result.displayTag": "顯示 {mode}",
+  "module.subagents.tool.spawn_agent.result.displayPolicy.nested": "巢狀子代理固定在背景執行",
+  "module.subagents.tool.spawn_agent.result.taskLabel": "任務",
+  "module.subagents.tool.interrupt_agent.result.statusLine": "狀態 {from} → {to}",
+  "module.subagents.tool.interrupt_agent.result.processLine": "處理程序 {action} {outcome}",
+  "module.subagents.tool.close_agent.result.previousStatus": "此前狀態：{status}",
+  "module.subagents.tool.close_agent.result.descendantStatus": "{name} — 此前狀態：{status}",
+  "module.subagents.tool.subagent_models.result.healthLine": "健康：{status}",
+  "module.subagents.tool.subagent_models.result.errorCount": "錯誤 {count}",
+  "module.subagents.tool.subagent_models.result.lastError": "最近錯誤：{type}（{at}）",
+  "module.subagents.tool.subagent_models.result.displayModesLabel": "顯示模式：",
+  "module.subagents.tool.subagent_models.result.agentTypesLine": "代理類型：{names}",
 };
 
 export const SUBAGENTS_MESSAGES = { en: EN, "zh-CN": ZH_CN, "zh-TW": ZH_TW } satisfies MessageTables;
@@ -524,6 +623,26 @@ export const SUBAGENTS_MESSAGES = { en: EN, "zh-CN": ZH_CN, "zh-TW": ZH_TW } sat
 export type SubagentsMessageKey = keyof typeof EN;
 
 export type SubagentsTranslate = (key: SubagentsMessageKey, vars?: MessageVars) => string;
+
+const STATUS_WORD_KEYS: Partial<Record<string, SubagentsMessageKey>> = {
+  starting: "module.subagents.tool.status.starting",
+  running: "module.subagents.tool.status.running",
+  waiting: "module.subagents.tool.status.waiting",
+  completed: "module.subagents.tool.status.completed",
+  failed: "module.subagents.tool.status.failed",
+  interrupted: "module.subagents.tool.status.interrupted",
+  handed_off: "module.subagents.tool.status.handedOff",
+  closed: "module.subagents.tool.status.closed",
+};
+
+/** 单数状态词：已知状态走三语键表，未知值原样显示，缺失显示 unknown；不伪装成 ok/0。 */
+export function subagentStatusWord(status: unknown, t?: SubagentsTranslate): string {
+  const value = typeof status === "string" ? status.trim() : "";
+  if (value === "") return t?.("module.subagents.tool.status.unknown") ?? "unknown";
+  const key = STATUS_WORD_KEYS[value];
+  if (!key) return value;
+  return t?.(key) ?? value;
+}
 
 export function subagentsTableTranslator(language: ResolvedLanguage): Translator {
   const table: Record<string, string> = SUBAGENTS_MESSAGES[language];

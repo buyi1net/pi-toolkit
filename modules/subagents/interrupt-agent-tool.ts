@@ -1,9 +1,10 @@
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { toolCardFailureReason, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
+import { compactRenderText, toolCardFailureReason, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import type { RuntimeRegistry } from "./registry.ts";
 import type { RunningSubagent } from "./types.ts";
+import { subagentStatusWord } from "./messages/index.ts";
 import { agentTreeRootDir, appendAgentTreeRecord, appendRunningAgentTreeRecord, readAgentTreeRecord } from "./agent-tree.ts";
 import { terminateHeadlessProcess } from "./headless.ts";
 import { sendCommandFor } from "./surface.ts";
@@ -51,12 +52,40 @@ export function registerInterruptAgentTool(pi: ExtensionAPI, deps: InterruptAgen
       const details = result.details as any;
       const success = details?.status === "waiting";
       const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+      const t = deps.t;
+      if (success) {
+        const lines: string[] = [];
+        const agentId = compactRenderText(details.agent_id);
+        if (agentId) lines.push(t?.("module.subagents.tool.meta.agentId", { id: agentId }) ?? `agent id ${agentId}`);
+        const from = subagentStatusWord(details.previous_status, t);
+        const to = subagentStatusWord("waiting", t);
+        lines.push(t?.("module.subagents.tool.interrupt_agent.result.statusLine", { from, to }) ?? `status ${from} → ${to}`);
+        const control = details.process_control;
+        if (control && typeof control === "object") {
+          const action = compactRenderText((control as Record<string, unknown>).action) || "process";
+          const ok = (control as Record<string, unknown>).ok;
+          const outcome = ok === true ? "ok" : ok === false ? "failed" : "skipped";
+          lines.push(t?.("module.subagents.tool.interrupt_agent.result.processLine", { action, outcome }) ?? `process ${action} ${outcome}`);
+        }
+        return renderToolCardResult(
+          {
+            title: t?.("module.subagents.tool.interrupt_agent.display") ?? "Interrupt subagent",
+            object: typeof details?.task_name === "string" ? details.task_name : undefined,
+            status: t?.("module.subagents.tool.interrupt_agent.result.interrupted") ?? "Interrupted",
+            details: options.expanded ? lines : [],
+          },
+          theme,
+          options,
+          context,
+        );
+      }
+      const humanReason = compactRenderText(details?.message);
       return renderToolCardResult(
         {
-          title: deps.t?.("module.subagents.tool.interrupt_agent.display") ?? "Interrupt subagent",
+          title: t?.("module.subagents.tool.interrupt_agent.display") ?? "Interrupt subagent",
           object: typeof details?.task_name === "string" ? details.task_name : undefined,
-          status: success ? deps.t?.("module.subagents.tool.interrupt_agent.result.interrupted") ?? "Interrupted" : toolCardFailureReason(text || "Interrupt failed", details),
-          details: options.expanded && text ? [text] : [],
+          status: toolCardFailureReason(text || "Interrupt failed", details),
+          details: options.expanded && humanReason ? [humanReason] : [],
         },
         theme,
         options,

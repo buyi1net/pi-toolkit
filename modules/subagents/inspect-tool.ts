@@ -78,6 +78,7 @@ export interface SubagentInspection {
   surfaceAlive: boolean | null;
   processExitCode: number | null;
   processExitSignal: string | null;
+  droppedStdinWrites: number;
   startTime: number | null;
   elapsedMs: number | null;
   lastActivityAt: number | null;
@@ -267,6 +268,7 @@ function inspectProcess(
   surfaceAlive: boolean | null;
   exitCode: number | null;
   exitSignal: string | null;
+  droppedStdinWrites: number;
 } {
   const kind = resolveSurfaceKind(record);
   if (kind === "headless") {
@@ -293,6 +295,7 @@ function inspectProcess(
       surfaceAlive: null,
       exitCode,
       exitSignal,
+      droppedStdinWrites: record.headlessChild?.droppedWriteCount ?? 0,
     };
   }
 
@@ -311,6 +314,7 @@ function inspectProcess(
     surfaceAlive,
     exitCode: null,
     exitSignal: null,
+    droppedStdinWrites: 0,
   };
 }
 
@@ -478,6 +482,7 @@ function buildInspection(
     processAlive: process.processAlive,
     surfaceAlive: process.surfaceAlive,
     processExitCode: process.exitCode,
+    droppedStdinWrites: process.droppedStdinWrites,
     processExitSignal: process.exitSignal,
     startTime: record.startTime,
     elapsedMs: Math.max(0, now - record.startTime),
@@ -621,6 +626,7 @@ export function buildSessionSubagentInspection(
       surfaceAlive: null,
       exitCode: null,
       exitSignal: null,
+      droppedStdinWrites: 0,
     },
     loadout,
     roster,
@@ -653,6 +659,7 @@ function formatInspection(view: SubagentInspection): string {
   const children = view.childCount > 0 ? ` children=${view.childCount}(${view.childNames.join(",")})` : " children=0";
   const timeout = view.timeoutMs == null ? " timeout=none" : ` timeout=${view.timeoutState}/${view.timeoutMs}ms`;
   const controls = `steer=${view.canSteer ? "yes" : "no"} resume=${view.canResume ? "yes" : "no"}`;
+  const dropped = view.droppedStdinWrites > 0 ? ` stdin_dropped=${view.droppedStdinWrites}` : "";
   const model = view.model ? ` model=${view.model}` : "";
   const thinking = view.thinking ? ` thinking=${view.thinking}` : "";
   const inherited = view.modelSource === "parent"
@@ -663,7 +670,7 @@ function formatInspection(view: SubagentInspection): string {
   const question = view.waitingQuestion ? `\n  question: ${view.waitingQuestion}` : "";
   return (
     `• ${view.name} [${view.lifecycle}]${status}${phase} elapsed=${Math.floor((view.elapsedMs ?? 0) / 1000)}s ` +
-    `${process} last=${formatAge(view.lastActivityAgeMs)} ${activity}${wait}${children}${timeout} ${controls}${model}${thinking}${inherited}${cohort}` +
+    `${process} last=${formatAge(view.lastActivityAgeMs)} ${activity}${wait}${children}${timeout} ${controls}${dropped}${model}${thinking}${inherited}${cohort}` +
     task + question
   );
 }

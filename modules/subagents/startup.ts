@@ -1576,7 +1576,20 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
 
         if (record.surfaceKind) setActiveSurfaceKind(record.surfaceKind);
         if (!deps.adoptSurface(record.surface)) {
+          // 表面不可收养：进程已丢失，无法继续观测。不能静默删记录（父会话永远收不到终态，依赖挂到超时），
+          // 也不能假装正常完成——按「进程已丢失」构造 failed 终态，走与 exited 相同的投递路径。
           deps.registry.removeRecord(runtimeFile, record.id);
+          recovered.push({
+            kind: "exited",
+            record,
+            exit: {
+              exitCode: 1,
+              errorMessage:
+                `Recovered pane surface "${record.surface}" for sub-agent "${record.name}" could not be re-adopted ` +
+                `after the host reload; the pane process is lost and the run can no longer be watched. ` +
+                `This is a recovery failure, not a sub-agent task failure.`,
+            },
+          });
           continue;
         }
 

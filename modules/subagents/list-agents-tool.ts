@@ -1,6 +1,7 @@
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { compactRenderText, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
+import { Box, Text, stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { compactRenderText, renderToolCardCall, renderToolCardResult, formatToolCardLine, cardBackground } from "../../kit/tool-card.ts";
 import type { PublicAgentRecord, RuntimeRegistry } from "./registry.ts";
 import {
   AGENT_SUMMARY_LIMIT,
@@ -10,7 +11,7 @@ import {
   type AgentTreeRecord,
 } from "./agent-tree.ts";
 import { subagentTaskDepth } from "./launch-config.ts";
-import type { SubagentsTranslate } from "./messages/index.ts";
+import { subagentStatusWord, type SubagentsTranslate } from "./messages/index.ts";
 
 export interface ListAgentsToolDeps {
   registry: RuntimeRegistry;
@@ -92,17 +93,44 @@ function agentSummary(
     : t?.("module.subagents.tool.list_agents.result.empty") ?? "No agents are registered in this session");
 }
 
-function agentStatusLabel(status: PublicAgentRecord["status"], t?: SubagentsTranslate): string {
-  switch (status) {
-    case "starting": return t?.("module.subagents.tool.list_agents.result.status.starting", { count: 1 }) ?? "starting";
-    case "running": return t?.("module.subagents.tool.list_agents.result.status.running", { count: 1 }) ?? "running";
-    case "waiting": return t?.("module.subagents.tool.list_agents.result.status.waiting", { count: 1 }) ?? "waiting";
-    case "completed": return t?.("module.subagents.tool.list_agents.result.status.completed", { count: 1 }) ?? "completed";
-    case "failed": return t?.("module.subagents.tool.list_agents.result.status.failed", { count: 1 }) ?? "failed";
-    case "interrupted": return t?.("module.subagents.tool.list_agents.result.status.interrupted", { count: 1 }) ?? "interrupted";
-    case "handed_off": return t?.("module.subagents.tool.list_agents.result.status.handedOff", { count: 1 }) ?? "handed off";
-    case "closed": return "closed";
+function renderAgentTreeLines(
+  agents: readonly PublicAgentRecord[],
+  theme: { fg(color: string, text: string): string },
+  t: SubagentsTranslate | undefined,
+  lineWidth: number,
+): string[] {
+  if (agents.length === 0) return [];
+  const byId = new Map(agents.filter((agent) => compactRenderText(agent.agent_id)).map((agent) => [agent.agent_id, agent]));
+  const roots: PublicAgentRecord[] = [];
+  const childrenOf = new Map<string, PublicAgentRecord[]>();
+  for (const agent of agents) {
+    const parentAgentId = compactRenderText(agent.parent_agent_id);
+    const parent = parentAgentId ? byId.get(parentAgentId) : undefined;
+    if (!parent) roots.push(agent);
+    else childrenOf.set(parent.agent_id, [...(childrenOf.get(parent.agent_id) ?? []), agent]);
   }
+  const lines: string[] = [];
+  const visit = (agent: PublicAgentRecord, depth: number, isLast: boolean) => {
+    const prefix = depth === 0 ? "" : `${"  ".repeat(depth)}${isLast ? "└ " : "├ "}`;
+    const status = subagentStatusWord(agent.status, t);
+    lines.push(theme.fg("toolOutput", `${prefix}${agent.task_name}`) + theme.fg("muted", ` · ${status}`));
+    const indent = "  ".repeat(depth + 1);
+    const meta: string[] = [];
+    const canonical = compactRenderText(agent.canonical_task_name);
+    if (canonical) meta.push(t?.("module.subagents.tool.meta.canonical", { name: canonical }) ?? `canonical ${canonical}`);
+    const agentId = compactRenderText(agent.agent_id);
+    if (agentId) meta.push(t?.("module.subagents.tool.meta.agentId", { id: agentId }) ?? `agent id ${agentId}`);
+    if (meta.length > 0) lines.push(theme.fg("dim", truncateToWidth(`${indent}${meta.join(" · ")}`, lineWidth)));
+    const summary = stripTerminalSequences(typeof agent.summary === "string" ? agent.summary : "").trim();
+    if (summary) {
+      const wrapWidth = Math.max(1, lineWidth - indent.length);
+      for (const line of wrapTextWithAnsi(summary, wrapWidth)) lines.push(theme.fg("muted", `${indent}${line}`));
+    }
+    const children = childrenOf.get(agent.agent_id) ?? [];
+    children.forEach((child, index) => visit(child, depth + 1, index === children.length - 1));
+  };
+  roots.forEach((root, index) => visit(root, 0, index === roots.length - 1));
+  return lines;
 }
 
 function resolvePathPrefix(raw: unknown, callerCanonical: string): string | null {
@@ -152,15 +180,19 @@ export function registerListAgentsTool(pi: ExtensionAPI, deps: ListAgentsToolDep
       }
       const agents = details.agents;
       const summary = agentSummary(agents, theme, deps.t);
-      const rows = options.expanded
-        ? agents.map((agent) => theme.fg("toolOutput", `${agent.task_name} ${theme.fg("muted", agentStatusLabel(agent.status, deps.t))}`))
-        : [];
-      return renderToolCardResult(
-        { title: deps.t?.("module.subagents.tool.list_agents.display") ?? "List subagents", status: summary, details: rows },
-        theme,
-        options,
-        context,
-      );
+      const title = deps.t?.("module.subagents.tool.list_agents.display") ?? "List subagents";
+      const component = {
+        invalidate() {},
+        render(width: number): string[] {
+          const lineWidth = Math.max(1, width - 2);
+          const lines = [formatToolCardLine({ title, status: summary }, theme, false)];
+          if (options.expanded) lines.push(...renderAgentTreeLines(agents, theme, deps.t, lineWidth));
+          const box = new Box(context?.outputPad ?? 1, 1, cardBackground(theme, "toolSuccessBg"));
+          box.addChild(new Text(lines.join("\n"), 0, 0));
+          return ["", ...box.render(width)];
+        },
+      };
+      return component;
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const sessionFile = ctx?.sessionManager?.getSessionFile?.();

@@ -2,15 +2,17 @@ import { Type } from "typebox";
 import { registerName } from "./session.ts";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { toolCardFailureReason, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
+import { compactRenderText, toolCardFailureReason, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import type { RuntimeRegistry } from "./registry.ts";
 import type { SubagentStartup } from "./startup.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
 import type { DeliverTerminal } from "./spawn-agent-tool.ts";
+import { subagentStatusWord } from "./messages/index.ts";
 import { agentTreeRootDir, appendRunningAgentTreeRecord, terminalOutcomeFromTree, writeAgentTerminal } from "./agent-tree.ts";
 import type { PublicAgentStatus } from "./registry.ts";
 import {
   lifecycleQueue,
+  lifecycleMetaLines,
   lifecycleUpdateDetails,
   resolveLifecycleTarget,
   targetManagedByParentError,
@@ -53,19 +55,23 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
     renderResult(result, options, theme, context) {
       const details = result.details as any;
       const t = deps.t;
+      const title = t?.("module.subagents.tool.followup_task.display") ?? "Follow-up task";
       const target = typeof details?.task_name === "string" ? details.task_name : undefined;
       if (details?.submission_id) {
-        const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+        const meta = lifecycleMetaLines(details, t);
+        const statusWord = subagentStatusWord(details.status, t);
+        meta.push(t?.("module.subagents.tool.meta.status", { status: statusWord }) ?? `status ${statusWord}`);
         return renderToolCardResult(
-          { title: t?.("module.subagents.tool.followup_task.display") ?? "Follow-up task", object: target, status: t?.("module.subagents.tool.followup_task.result.started") ?? "Follow-up started", details: options.expanded && text ? [text] : [] },
+          { title, object: target, status: t?.("module.subagents.tool.followup_task.result.started") ?? "Follow-up started", details: options.expanded ? meta : [] },
           theme,
           options,
           context,
         );
       }
       const text = result.content[0]?.type === "text" ? result.content[0].text : "Follow-up failed";
+      const humanReason = compactRenderText(details?.message);
       return renderToolCardResult(
-        { title: t?.("module.subagents.tool.followup_task.display") ?? "Follow-up task", object: target, status: toolCardFailureReason(text, result.details), details: options.expanded ? [text] : [] },
+        { title, object: target, status: toolCardFailureReason(text, result.details), details: options.expanded && humanReason ? [humanReason] : [] },
         theme,
         options,
         context,

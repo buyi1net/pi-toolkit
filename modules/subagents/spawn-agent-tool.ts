@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { Box, Text, stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { readNameRegistry, registerName } from "./session.ts";
 import { validateCodexV2ModelSelection, validateCodexV2SpawnParams, createCodexV2LaunchError, type CodexV2SpawnParams } from "./protocol.ts";
 import type { ModelDirectory } from "./model-selector.ts";
@@ -15,7 +16,7 @@ import {
   writeAgentTerminal,
 } from "./agent-tree.ts";
 import type { SubagentsTranslate } from "./messages/index.ts";
-import { compactRenderText, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
+import { compactRenderText, renderToolCardCall, renderToolCardResult, formatToolCardLine, cardBackground } from "../../kit/tool-card.ts";
 
 const DEFAULT_AGENT_TYPE = "general-purpose";
 
@@ -159,9 +160,15 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
           model?: unknown;
           reasoning_effort?: unknown;
           agent_type?: unknown;
+          fork_turns?: unknown;
+          display_mode?: unknown;
+          resolved_display_mode?: unknown;
+          display_policy?: unknown;
+          fallback_reason?: unknown;
+          display_note?: unknown;
         };
       };
-      const args = (context?.args ?? {}) as { task_name?: unknown };
+      const args = (context?.args ?? {}) as { task_name?: unknown; message?: unknown };
       const taskName = compactRenderText(args.task_name) || compactRenderText(details.task_name) || "(task)";
       const succeeded = context?.isError !== true && details.status === "running";
       if (!succeeded) {
@@ -179,20 +186,71 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
           context,
         );
       }
-      const started = deps.t?.("module.subagents.tool.spawn_agent.result.started") ?? "Started";
-      const model = compactRenderText(details.resolved?.model);
-      const reasoning = compactRenderText(details.resolved?.reasoning_effort);
-      return renderToolCardResult(
-        {
-          title: deps.t?.("module.subagents.tool.spawn_agent.display") ?? "Spawn subagent",
-          object: taskName,
-          status: started,
-          details: [model ? `model: ${model}` : "", reasoning ? `reasoning_effort: ${reasoning}` : ""].filter(Boolean),
+      const t = deps.t;
+      const started = t?.("module.subagents.tool.spawn_agent.result.started") ?? "Started";
+      const title = t?.("module.subagents.tool.spawn_agent.display") ?? "Spawn subagent";
+      const resolved = details.resolved ?? {};
+      const metaLines: string[] = [];
+      const agentType = compactRenderText(resolved.agent_type);
+      const forkTurns = compactRenderText(resolved.fork_turns);
+      if (agentType || forkTurns) {
+        const parts = [
+          agentType ? t?.("module.subagents.tool.spawn_agent.result.agentTag", { type: agentType }) ?? `agent ${agentType}` : "",
+          forkTurns ? t?.("module.subagents.tool.spawn_agent.result.forkTag", { fork: forkTurns }) ?? `fork ${forkTurns}` : "",
+        ].filter(Boolean);
+        metaLines.push(parts.join(" · "));
+      }
+      const model = compactRenderText(resolved.model);
+      const reasoning = compactRenderText(resolved.reasoning_effort);
+      if (model) {
+        metaLines.push([
+          t?.("module.subagents.tool.spawn_agent.result.modelTag", { model }) ?? `model ${model}`,
+          reasoning ? t?.("module.subagents.tool.spawn_agent.result.thinkingTag", { level: reasoning }) ?? `thinking ${reasoning}` : "",
+        ].filter(Boolean).join(" · "));
+      }
+      const displayMode = compactRenderText(resolved.resolved_display_mode) || compactRenderText(resolved.display_mode);
+      if (displayMode) {
+        const fallbackReason = compactRenderText(resolved.fallback_reason);
+        const displayPolicy = compactRenderText(resolved.display_policy);
+        const displayNote = compactRenderText(resolved.display_note);
+        let reasonText = fallbackReason;
+        if (!reasonText && displayPolicy) {
+          reasonText = displayPolicy === "nested_agent_forced_background"
+            ? t?.("module.subagents.tool.spawn_agent.result.displayPolicy.nested") ?? "nested agents always run in the background"
+            : displayPolicy;
+        }
+        if (!reasonText) reasonText = displayNote;
+        metaLines.push([
+          t?.("module.subagents.tool.spawn_agent.result.displayTag", { mode: displayMode }) ?? `display ${displayMode}`,
+          reasonText,
+        ].filter(Boolean).join(" · "));
+      }
+      const agentId = compactRenderText(details.agent_id);
+      if (agentId) metaLines.push(t?.("module.subagents.tool.meta.agentId", { id: agentId }) ?? `agent id ${agentId}`);
+      const canonical = compactRenderText(details.canonical_task_name);
+      if (canonical) metaLines.push(t?.("module.subagents.tool.meta.canonical", { name: canonical }) ?? `canonical ${canonical}`);
+      const taskBody = typeof args.message === "string" ? args.message : "";
+      const component = {
+        invalidate() {},
+        render(width: number): string[] {
+          const lineWidth = Math.max(1, width - 2);
+          const lines = [formatToolCardLine({ title, object: taskName, status: started }, theme, false)];
+          if (options.expanded) {
+            for (const meta of metaLines) lines.push(theme.fg("dim", truncateToWidth(meta, lineWidth)));
+            if (taskBody.trim() !== "") {
+              lines.push(
+                "",
+                theme.fg("muted", t?.("module.subagents.tool.spawn_agent.result.taskLabel") ?? "task"),
+                ...taskBody.split("\n").flatMap((line) => wrapTextWithAnsi(stripTerminalSequences(line), lineWidth)).map((line) => theme.fg("toolOutput", line)),
+              );
+            }
+          }
+          const box = new Box(context?.outputPad ?? 1, 1, cardBackground(theme, "toolSuccessBg"));
+          box.addChild(new Text(lines.join("\n"), 0, 0));
+          return ["", ...box.render(width)];
         },
-        theme,
-        options,
-        context,
-      );
+      };
+      return component;
     },
     async execute(_toolCallId, raw, _signal, _onUpdate, ctx) {
       if (parentTaskDepth() >= 2) {

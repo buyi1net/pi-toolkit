@@ -1,6 +1,6 @@
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
+import { compactRenderText, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import {
   buildModelDirectory,
   type CatalogModel,
@@ -68,6 +68,55 @@ function modelRenderLine(model: SubagentModelsResult["models"][number]): string 
   return `${route} — reasoning: ${reasoning}`;
 }
 
+type ModelHealthView = {
+  status?: unknown;
+  error_count?: unknown;
+  last_error_at?: unknown;
+  last_error_type?: unknown;
+};
+
+function modelHealthLines(
+  health: ModelHealthView | undefined,
+  theme: { fg(color: string, text: string): string },
+  t: SubagentsTranslate | undefined,
+): string[] {
+  const statusWord = compactRenderText(health?.status) || "unknown";
+  let healthLine = t?.("module.subagents.tool.subagent_models.result.healthLine", { status: statusWord }) ?? `health: ${statusWord}`;
+  if (typeof health?.error_count === "number") {
+    healthLine += ` · ${t?.("module.subagents.tool.subagent_models.result.errorCount", { count: String(health.error_count) }) ?? `errors ${health.error_count}`}`;
+  }
+  const lines = [`  ${theme.fg("muted", healthLine)}`];
+  const errorType = compactRenderText(health?.last_error_type);
+  const errorAt = typeof health?.last_error_at === "number" ? new Date(health.last_error_at).toISOString() : "";
+  if (errorType && errorAt) {
+    lines.push(`  ${theme.fg("muted", t?.("module.subagents.tool.subagent_models.result.lastError", { type: errorType, at: errorAt }) ?? `last error: ${errorType} (${errorAt})`)}`);
+  }
+  return lines;
+}
+
+function displayModeLines(
+  modes: SubagentModelsResult["display_modes"],
+  theme: { fg(color: string, text: string): string },
+  t: SubagentsTranslate | undefined,
+): string[] {
+  const lines = [t?.("module.subagents.tool.subagent_models.result.displayModesLabel") ?? "display modes:"];
+  for (const mode of modes) {
+    const mark = mode.available ? theme.fg("success", "✓") : theme.fg("error", "✗");
+    const reason = !mode.available && mode.reason ? ` — ${mode.reason}` : "";
+    lines.push(`  ${mode.mode} ${mark}${reason}`);
+  }
+  return lines;
+}
+
+function agentTypesLine(
+  agentTypes: SubagentModelsResult["agent_types"],
+  t: SubagentsTranslate | undefined,
+): string | null {
+  const names = agentTypes.map((agent) => compactRenderText(agent.name)).filter(Boolean).join(", ");
+  if (!names) return null;
+  return t?.("module.subagents.tool.subagent_models.result.agentTypesLine", { names }) ?? `agent types: ${names}`;
+}
+
 const subagentModelsOutputSchema = Type.Object({
   generated_at: Type.String(),
   models: Type.Array(Type.Object({
@@ -125,7 +174,15 @@ export function registerSubagentModelsTool(
       const models = Array.isArray(details?.models) ? details.models : [];
       const summary = deps.t?.("module.subagents.tool.subagent_models.result.summary", { count: models.length })
         ?? `${models.length} available model${models.length === 1 ? "" : "s"}`;
-      const rows = options.expanded ? models.map((model) => modelRenderLine(model)) : [];
+      const displayModes = Array.isArray(details?.display_modes) ? details.display_modes : [];
+      const agentTypesText = agentTypesLine(Array.isArray(details?.agent_types) ? details.agent_types : [], deps.t);
+      const rows: string[] = options.expanded
+        ? [
+            ...models.flatMap((model) => [modelRenderLine(model), ...modelHealthLines(model.health, theme, deps.t)]),
+            ...(displayModes.length > 0 ? ["", ...displayModeLines(displayModes, theme, deps.t)] : []),
+            ...(agentTypesText ? ["", agentTypesText] : []),
+          ]
+        : [];
       return renderToolCardResult(
         { title: deps.t?.("module.subagents.tool.subagent_models.display") ?? "Read available models", status: summary, details: rows },
         theme,

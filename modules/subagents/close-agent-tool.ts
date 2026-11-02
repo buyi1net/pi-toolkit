@@ -16,6 +16,7 @@ import {
 import { subagentTaskDepth } from "./launch-config.ts";
 import { terminateHeadlessProcess } from "./headless.ts";
 import { adoptSurfaceFor, closeSurfaceFor } from "./surface.ts";
+import { subagentStatusWord } from "./messages/index.ts";
 import { compactRenderText, renderToolCardCall, renderToolCardResult, toolCardFailureReason } from "../../kit/tool-card.ts";
 import {
   lifecycleQueue,
@@ -83,11 +84,27 @@ export function registerCloseAgentTool(pi: ExtensionAPI, deps: CloseAgentToolDep
       const descendants = Array.isArray(details.closed_descendants) ? details.closed_descendants as Array<Record<string, unknown>> : [];
       const names = descendants.map((entry) => compactRenderText(entry.task_name)).filter(Boolean);
       const lines: string[] = [];
+      const previousStatus = compactRenderText(details.previous_status);
+      if (previousStatus) {
+        lines.push(
+          deps.t?.("module.subagents.tool.close_agent.result.previousStatus", { status: subagentStatusWord(previousStatus, deps.t) })
+            ?? `previous status: ${subagentStatusWord(previousStatus, deps.t)}`,
+        );
+      }
       if (names.length > 0) {
         lines.push(
           deps.t?.("module.subagents.tool.close_agent.result.descendants", { count: String(names.length), names: names.join(", ") })
             ?? `Also closed ${names.length} descendant(s): ${names.join(", ")}`,
         );
+      }
+      for (const entry of descendants) {
+        const name = compactRenderText(entry.task_name);
+        if (!name) continue;
+        const status = compactRenderText(entry.previous_status);
+        lines.push(status
+          ? deps.t?.("module.subagents.tool.close_agent.result.descendantStatus", { name, status: subagentStatusWord(status, deps.t) })
+            ?? `${name} — previous status: ${subagentStatusWord(status, deps.t)}`
+          : name);
       }
       if (Array.isArray(details.process_control)) {
         for (const control of details.process_control as Array<Record<string, unknown>>) {

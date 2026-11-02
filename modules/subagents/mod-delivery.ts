@@ -330,6 +330,8 @@ export function publishTerminalUpdate(artifactDir: string, running: RunningSubag
   return result.userClosed ? producers.surfaceClosed(input) : producers.watcherTerminal(input);
 }
 
+// At-least-once delivery: a crash between a successful send and the post-send persist replays this
+// exact envelope on the next loadPending — consumers dedupe by key `final:${running.id}:${deliveryId ?? source}` (mirrored in details.delivery_id).
 export function deliverSpawnTerminal(running: RunningSubagent, result: SubagentResult, pi: ExtensionAPI, deliveryId?: string, source: "spawn" | "followup" | "recovered-exit" | "recovered-headless" | "recovered-pane" = "spawn"): void {
   if (running.closed || result.handedOff || result.interruptedRound) return;
   const routeException = routeExceptionFromResult(result, running.model);
@@ -384,9 +386,12 @@ export async function deliverRecoveredExit(
       ...(extracted.stats ? { stats: extracted.stats } : {}),
     };
 
+    // Pane records reaching this path lost their surface (see startup.ts pane-lost branch): label the
+    // envelope "recovered-pane" instead of pretending a headless process exited.
+    const source: "recovered-exit" | "recovered-pane" = (record.kind ?? "pane") === "headless" ? "recovered-exit" : "recovered-pane";
     settleCompletionFromResult(record.name, exitResult);
     const update = publishTerminalUpdate(artifactDir, record as unknown as RunningSubagent, exitResult as SubagentResult, `recover:${record.id}:terminal`);
-    deliverSpawnTerminal(record as unknown as RunningSubagent, exitResult as SubagentResult, pi, update.delivery_id, "recovered-exit");
+    deliverSpawnTerminal(record as unknown as RunningSubagent, exitResult as SubagentResult, pi, update.delivery_id, source);
   } catch (error) {
     debugLog(`Could not recover finished headless subagent ${record.name}`, error);
   }
@@ -399,7 +404,11 @@ export function deliverRecoveredHeadless(run: StartedRun, pi: ExtensionAPI, arti
     .then((result) => {
       const terminal = result as SubagentResult;
       updateWidget();
-      settleCompletionFromResult(running.name, terminal);
+      // 与正常路径（subagent-tool.ts settle）同口径：stop（stopped）与用户关窗（userClosed）都结算为 cancelled，
+      // 其余按 exitCode/errorMessage 默认归类；handedOff 仍由默认分支归为 handed-off。
+      settleCompletionFromResult(running.name, terminal, {
+        ...(terminal.userClosed || terminal.stopped ? { status: "cancelled" as const } : {}),
+      });
 
       if (terminal.handedOff || terminal.interruptedRound) return;
       const update = publishTerminalUpdate(artifactDir, running, terminal, `recover:${running.id}:terminal`);
@@ -423,7 +432,7 @@ export function deliverRecoveredPane(run: StartedRun, pi: ExtensionAPI, artifact
       updateWidget();
 
       settleCompletionFromResult(running.name, terminal, {
-        ...(terminal.userClosed ? { status: "cancelled" as const } : {}),
+        ...(terminal.userClosed || terminal.stopped ? { status: "cancelled" as const } : {}),
       });
 
       if (terminal.handedOff || terminal.interruptedRound) return;
