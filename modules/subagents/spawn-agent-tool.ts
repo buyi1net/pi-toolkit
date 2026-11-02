@@ -40,7 +40,7 @@ function agentTypeParameterSchema(discoverAgents: () => Array<{ name: string }>)
 
 const FORK_TURNS_DESCRIPTION = "Required. none starts with only the task context; all inherits the parent history.";
 
-export type DeliverTerminal = (running: RunningSubagent, result: SubagentResult, source: "spawn" | "followup" | "recovered-exit" | "recovered-headless" | "recovered-pane", deliveryId: string, isIdle?: () => boolean) => void;
+export type DeliverTerminal = (running: RunningSubagent, result: SubagentResult, source: "spawn" | "followup" | "recovered-exit" | "recovered-headless" | "recovered-pane", deliveryId: string) => void;
 
 export interface SpawnAgentToolDeps {
   readonly startup: SubagentStartup;
@@ -133,16 +133,17 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
       "Choose fork_turns explicitly: none starts with only the task context, all inherits the parent history. " +
       "Unknown model references return model_not_found with up to three suggestions, ordered same-family first, then substring matches, then nearest by name distance. " +
       "The field is required; do not omit it. " +
+      "The run posts progress updates to the parent queue and its terminal result is delivered to this session automatically as a message — use wait_agent to receive updates, followup_task to continue the run, and close_agent to release the name. " +
       "The returned agent_id and canonical_task_name identify the new run.",
     promptSnippet: "Start an agent, choose fork_turns explicitly (none or all), and do not omit it.",
     parameters: Type.Object({
       task_name: Type.String({ description: "Use only lowercase letters, digits, and underscores; maximum 72 characters. Empty and overlong names are rejected by the plugin with a suggested_task_name." }),
-      message: Type.String({ minLength: 1 }),
+      message: Type.String({ minLength: 1, description: "The task for the new sub-agent: concrete work, needed context, and expected output. It becomes the sub-agent's first turn." }),
       agent_type: agentTypeParameterSchema(deps.discoverAgents),
       fork_turns: Type.Union([Type.Literal("none"), Type.Literal("all")], { description: FORK_TURNS_DESCRIPTION }),
-      model: Type.String({ minLength: 1 }),
-      reasoning_effort: Type.String({ minLength: 1 }),
-      display_mode: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("herdr"), Type.Literal("tmux")])),
+      model: Type.String({ minLength: 1, description: "Model for the run: a unique model id/name from subagent_models, or an exact provider/model route when several providers expose the same name." }),
+      reasoning_effort: Type.String({ minLength: 1, description: "Reasoning effort for the run; pick a host-supported level listed for the chosen model in subagent_models." }),
+      display_mode: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("herdr"), Type.Literal("tmux")], { description: "auto (default), herdr or tmux; auto picks a background run when no pane surface is available, and agents nested inside other sub-agents always run in the background." })),
     }),
     renderCall(args, theme, context) {
       const taskName = compactRenderText(args.task_name) || "(task)";
@@ -267,7 +268,17 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
           : occupant.status && ["completed", "failed", "interrupted", "waiting"].includes(occupant.status)
             ? "Use followup_task to continue it, or use close_agent to close it and reuse the name."
             : "Choose a different name.";
-        return errorResult({ code: "task_name_conflict", message: `Task name "${input.task_name}" is already in use. ${next}`, task_name: input.task_name, ...occupant });
+        const publicPath = deps.registry.publicPathFor(artifactDir);
+        const nameBlocked = (candidate: string) =>
+          deps.registry.isNameTaken(candidate)
+          || !!deps.registry.findByName(candidate)
+          || Object.prototype.hasOwnProperty.call(readNameRegistry(artifactDir), candidate)
+          || deps.registry.listPublic(publicPath).some((record) => record.task_name === candidate && record.status !== "closed");
+        const suggestedTaskNames = [2, 3, 4]
+          .map((suffix) => `${input.task_name}_${suffix}`)
+          .filter((candidate) => /^[a-z0-9_]{1,72}$/.test(candidate) && !nameBlocked(candidate))
+          .slice(0, 3);
+        return errorResult({ code: "task_name_conflict", message: `Task name "${input.task_name}" is already in use. ${next}`, task_name: input.task_name, ...(suggestedTaskNames.length > 0 ? { suggested_task_names: suggestedTaskNames } : {}), ...occupant });
       }
       deps.registry.reserveName(input.task_name);
       try {
@@ -333,7 +344,7 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
           const summary = watchResult?.summary || watchResult?.errorMessage || "Subagent finished.";
           const update = (watchResult?.userClosed ? producers.surfaceClosed : producers.watcherTerminal)({ agent_id: started.running.id, task_name: input.task_name, status, summary, update_id: `spawn:${started.running.id}:terminal`, final_text: watchResult?.summary || watchResult?.errorMessage || undefined });
           writeAgentTerminal({ rootDir, running: started.running, status, summary, artifactDir, ownerSessionId, update });
-          deps.deliverTerminal?.(started.running, watchResult as SubagentResult, "spawn", update.delivery_id, () => ctx.isIdle());
+          deps.deliverTerminal?.(started.running, watchResult as SubagentResult, "spawn", update.delivery_id);
           void update;
         }).catch((error) => {
           if (started.running.closed) return;

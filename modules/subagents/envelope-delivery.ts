@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { AGENT_QUEUE_DELIVERY, AGENT_TURN_DELIVERY } from "./agent-envelope.ts";
+import { AGENT_QUEUE_DELIVERY, AGENT_STEER_DELIVERY, AGENT_TURN_DELIVERY } from "./agent-envelope.ts";
 import { debugLog } from "./diagnostics.ts";
 
 export interface OutboundEnvelope {
@@ -11,7 +11,7 @@ export interface OutboundEnvelope {
 }
 
 export interface EnvelopeDelivery {
-  deliver(envelope: OutboundEnvelope, isIdle: () => boolean, host?: unknown): Promise<void>;
+  deliver(envelope: OutboundEnvelope, host?: unknown): Promise<void>;
   flushBeforeSettle(host?: unknown): Promise<boolean>;
   flushAfterSettle(aborted: boolean, host?: unknown): Promise<boolean>;
   pendingCount(): number;
@@ -124,11 +124,10 @@ export function createEnvelopeDelivery(deps: EnvelopeDeliveryDeps): EnvelopeDeli
   };
 
   return {
-    async deliver(envelope, isIdle, host) {
+    async deliver(envelope, host) {
       pending.set(envelope.key, { ...envelope, created_at: Date.now() });
       persist();
-      if (!isIdle()) return;
-      await flushWith(AGENT_TURN_DELIVERY, "idle", host);
+      await flushWith(AGENT_STEER_DELIVERY, "steer", host);
     },
     flushBeforeSettle(host) {
       return flushWith(AGENT_QUEUE_DELIVERY, "before-settle", host);

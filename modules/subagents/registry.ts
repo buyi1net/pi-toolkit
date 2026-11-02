@@ -20,6 +20,8 @@ export type { RuntimeRecord } from "./runtime-registry.ts";
 export type PublicAgentStatus =
   | "starting" | "running" | "waiting" | "completed" | "failed" | "interrupted" | "handed_off" | "closed";
 
+export const PUBLIC_AGENT_STATUSES = ["starting", "running", "waiting", "completed", "failed", "interrupted", "handed_off", "closed"] as const satisfies readonly PublicAgentStatus[];
+
 export interface PublicAgentRecord {
   agent_id: string;
   task_name: string;
@@ -96,7 +98,7 @@ export function createRuntimeRegistry(): RuntimeRegistry {
         const value = record as any;
         return value && typeof value.agent_id === "string" && typeof value.task_name === "string" &&
           typeof value.canonical_task_name === "string" &&
-          ["starting", "running", "waiting", "completed", "failed", "interrupted", "handed_off", "closed"].includes(value.status) &&
+          (PUBLIC_AGENT_STATUSES as readonly string[]).includes(value.status) &&
           (value.parent_agent_id == null || typeof value.parent_agent_id === "string") &&
           (value.parent_canonical_task_name == null || typeof value.parent_canonical_task_name === "string") &&
           typeof value.summary === "string" && typeof value.updated_at === "number";

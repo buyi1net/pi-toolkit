@@ -293,22 +293,21 @@ export async function watchSubagent(
 }
 
 export async function recoverRuntimeSubagents(
-  ctx: { sessionManager: { getSessionId(): string; getSessionDir(): string }; isIdle?: () => boolean },
+  ctx: { sessionManager: { getSessionId(): string; getSessionDir(): string } },
   pi: ExtensionAPI,
   startup: SubagentStartup,
 ): Promise<void> {
   const artifactDir = getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId());
-  const isIdle = () => ctx.isIdle?.() ?? true;
   for (const outcome of await startup.recover(ctx, pi)) {
     if (outcome.kind === "exited") {
-      await deliverRecoveredExit(outcome.record, outcome.exit, pi, artifactDir, isIdle);
+      await deliverRecoveredExit(outcome.record, outcome.exit, pi, artifactDir);
       continue;
     }
     if (outcome.kind === "running") {
       if (outcome.recovered === "pane") {
-        deliverRecoveredPane(outcome.run, pi, artifactDir, isIdle);
+        deliverRecoveredPane(outcome.run, pi, artifactDir);
       } else {
-        deliverRecoveredHeadless(outcome.run, pi, artifactDir, isIdle);
+        deliverRecoveredHeadless(outcome.run, pi, artifactDir);
       }
     }
   }
@@ -331,9 +330,8 @@ export function publishTerminalUpdate(artifactDir: string, running: RunningSubag
   return result.userClosed ? producers.surfaceClosed(input) : producers.watcherTerminal(input);
 }
 
-export function deliverSpawnTerminal(running: RunningSubagent, result: SubagentResult, pi: ExtensionAPI, deliveryId?: string, source: "spawn" | "followup" | "recovered-exit" | "recovered-headless" | "recovered-pane" = "spawn", isIdle: () => boolean = () => true): void {
+export function deliverSpawnTerminal(running: RunningSubagent, result: SubagentResult, pi: ExtensionAPI, deliveryId?: string, source: "spawn" | "followup" | "recovered-exit" | "recovered-headless" | "recovered-pane" = "spawn"): void {
   if (running.closed || result.handedOff || result.interruptedRound) return;
-  const failed = result.exitCode !== 0 || !!result.errorMessage;
   const routeException = routeExceptionFromResult(result, running.model);
   const parts = buildResultEnvelopeParts(result, running.name);
   const content = buildResultEnvelope({ taskName: agentTaskName(running), payload: parts.payload, hostNote: parts.hostNote });
@@ -349,7 +347,7 @@ export function deliverSpawnTerminal(running: RunningSubagent, result: SubagentR
       exitCode: result.exitCode,
       elapsed: result.elapsed,
       sessionFile: result.sessionFile,
-      status: result.userClosed ? "user_closed" : result.stopped ? "cancelled" : failed ? "failed" : "completed",
+      status: terminalStatus(result),
       ...(result.userClosed ? { userClosed: true } : {}),
       ...(running.cohortId ? { cohortId: running.cohortId } : {}),
       ...(result.sessionId ? { sessionId: result.sessionId } : {}),
@@ -360,7 +358,7 @@ export function deliverSpawnTerminal(running: RunningSubagent, result: SubagentR
       ...(source.startsWith("recovered-") ? { recovered: source === "recovered-exit" ? "headless-exited" : source.slice("recovered-".length) } : {}),
       ...(deliveryId ? { delivery_id: deliveryId } : {}),
     },
-  }, isIdle, pi);
+  }, pi);
 }
 
 export async function deliverRecoveredExit(
@@ -368,7 +366,6 @@ export async function deliverRecoveredExit(
   exit: { exitCode: number; errorMessage?: string },
   pi: ExtensionAPI,
   artifactDir: string,
-  isIdle: () => boolean = () => true,
 ): Promise<void> {
   try {
     const extracted = await extractSubagentResult(
@@ -389,13 +386,13 @@ export async function deliverRecoveredExit(
 
     settleCompletionFromResult(record.name, exitResult);
     const update = publishTerminalUpdate(artifactDir, record as unknown as RunningSubagent, exitResult as SubagentResult, `recover:${record.id}:terminal`);
-    deliverSpawnTerminal(record as unknown as RunningSubagent, exitResult as SubagentResult, pi, update.delivery_id, "recovered-exit", isIdle);
+    deliverSpawnTerminal(record as unknown as RunningSubagent, exitResult as SubagentResult, pi, update.delivery_id, "recovered-exit");
   } catch (error) {
     debugLog(`Could not recover finished headless subagent ${record.name}`, error);
   }
 }
 
-export function deliverRecoveredHeadless(run: StartedRun, pi: ExtensionAPI, artifactDir: string, isIdle: () => boolean = () => true): void {
+export function deliverRecoveredHeadless(run: StartedRun, pi: ExtensionAPI, artifactDir: string): void {
   const running = run.running;
   const recoveredSource = "recovered-headless" as const;
   run.watch
@@ -406,18 +403,18 @@ export function deliverRecoveredHeadless(run: StartedRun, pi: ExtensionAPI, arti
 
       if (terminal.handedOff || terminal.interruptedRound) return;
       const update = publishTerminalUpdate(artifactDir, running, terminal, `recover:${running.id}:terminal`);
-      deliverSpawnTerminal(running, terminal, pi, update.delivery_id, recoveredSource, isIdle);
+      deliverSpawnTerminal(running, terminal, pi, update.delivery_id, recoveredSource);
     })
     .catch((error) => {
       updateWidget();
       settleCompletionFromResult(running.name, { exitCode: 1, errorMessage: error?.message ?? String(error) });
       const failure = { exitCode: 1, errorMessage: error?.message ?? String(error) } as SubagentResult;
       const update = publishTerminalUpdate(artifactDir, running, failure, `recover:${running.id}:terminal`);
-      deliverSpawnTerminal(running, failure, pi, update.delivery_id, recoveredSource, isIdle);
+      deliverSpawnTerminal(running, failure, pi, update.delivery_id, recoveredSource);
     });
 }
 
-export function deliverRecoveredPane(run: StartedRun, pi: ExtensionAPI, artifactDir: string, isIdle: () => boolean = () => true): void {
+export function deliverRecoveredPane(run: StartedRun, pi: ExtensionAPI, artifactDir: string): void {
   const running = run.running;
   const recoveredSource = "recovered-pane" as const;
   run.watch
@@ -431,13 +428,13 @@ export function deliverRecoveredPane(run: StartedRun, pi: ExtensionAPI, artifact
 
       if (terminal.handedOff || terminal.interruptedRound) return;
       const update = publishTerminalUpdate(artifactDir, running, terminal, `recover:${running.id}:terminal`);
-      deliverSpawnTerminal(running, terminal, pi, update.delivery_id, recoveredSource, isIdle);
+      deliverSpawnTerminal(running, terminal, pi, update.delivery_id, recoveredSource);
     })
     .catch((error) => {
       updateWidget();
       settleCompletionFromResult(running.name, { exitCode: 1, errorMessage: error?.message ?? String(error) });
       const failure = { exitCode: 1, errorMessage: error?.message ?? String(error) } as SubagentResult;
       const update = publishTerminalUpdate(artifactDir, running, failure, `recover:${running.id}:terminal`);
-      deliverSpawnTerminal(running, failure, pi, update.delivery_id, recoveredSource, isIdle);
+      deliverSpawnTerminal(running, failure, pi, update.delivery_id, recoveredSource);
     });
 }

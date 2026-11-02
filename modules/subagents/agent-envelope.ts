@@ -11,6 +11,8 @@ export const AGENT_TURN_DELIVERY = { triggerTurn: true, deliverAs: "followUp" } 
 
 export const AGENT_QUEUE_DELIVERY = { triggerTurn: false } as const;
 
+export const AGENT_STEER_DELIVERY = { triggerTurn: true, deliverAs: "steer" } as const;
+
 export function buildAgentEnvelope(input: AgentEnvelopeInput): string {
   const sender = input.sender ?? input.taskName;
   return `Message Type: ${input.kind}\nTask name: ${input.taskName}\nSender: ${sender}\nPayload:\n${input.payload}`;

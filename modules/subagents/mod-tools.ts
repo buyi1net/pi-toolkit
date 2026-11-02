@@ -78,7 +78,7 @@ export function registerSubagentTools(pi: ExtensionAPI, startup: SubagentStartup
     },
     getModelDirectory: getSharedModelDirectory,
     t: widgetText,
-    deliverTerminal: (running, result, source, deliveryId, isIdle) => deliverSpawnTerminal(running, result, pi, deliveryId, source, isIdle),
+    deliverTerminal: (running, result, source, deliveryId) => deliverSpawnTerminal(running, result, pi, deliveryId, source),
   });
 
   registerWaitAgentTool(pi, {
@@ -93,7 +93,7 @@ export function registerSubagentTools(pi: ExtensionAPI, startup: SubagentStartup
     getArtifactDir,
     handleSubagentSteer,
     t: widgetText,
-    deliverTerminal: (running, result, source, deliveryId, isIdle) => deliverSpawnTerminal(running, result, pi, deliveryId, source, isIdle),
+    deliverTerminal: (running, result, source, deliveryId) => deliverSpawnTerminal(running, result, pi, deliveryId, source),
   });
   registerSendMessageTool(pi, {
     registry: runtimeRegistry,

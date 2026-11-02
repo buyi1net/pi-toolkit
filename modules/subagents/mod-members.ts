@@ -144,7 +144,6 @@ export async function deliverMemberRoundResult(
         ...(running.cohortId ? { cohortId: running.cohortId } : {}),
       },
     },
-    () => latestCtx?.isIdle() ?? true,
     latestPi,
   );
 }

@@ -122,15 +122,15 @@ export function registerSubagentMessageTool(
       if (details?.status === "timed-out") {
         return new Text(theme.fg("warning", t("module.subagents.tool.subagent_message.result.timedOut")), 0, 0);
       }
-      if (details?.status === "completed" || details?.status === "failed" || details?.status === "cancelled") {
+      if (details?.status === "completed" || details?.status === "failed" || details?.status === "cancelled" || details?.status === "interrupted") {
         if (details.status === "completed" && !options.expanded) return new Text("", 0, 0);
         const label = details.status === "completed"
           ? t("module.subagents.widget.result.completed")
-          : details.status === "cancelled"
-            ? t("module.subagents.widget.result.cancelled")
-            : t("module.subagents.widget.result.failed");
+          : details.status === "failed"
+            ? t("module.subagents.widget.result.failed")
+            : t("module.subagents.widget.result.cancelled");
         return new Text(
-          [theme.fg(details.status === "failed" ? "error" : details.status === "cancelled" ? "warning" : "toolOutput", label), options.expanded && rawText ? theme.fg("muted", rawText) : ""].filter(Boolean).join("\n"),
+          [theme.fg(details.status === "failed" ? "error" : details.status === "completed" ? "toolOutput" : "warning", label), options.expanded && rawText ? theme.fg("muted", rawText) : ""].filter(Boolean).join("\n"),
           0,
           0,
         );
@@ -280,7 +280,7 @@ export function registerSubagentMessageTool(
                     elapsed: late.elapsed,
                     sessionFile: sessionPath,
                     sessionId: resumedSessionId,
-                    status: late.userClosed ? "user_closed" : late.stopped ? "cancelled" : late.exitCode !== 0 || late.errorMessage ? "failed" : "completed",
+                    status: late.userClosed || late.stopped ? "interrupted" : late.exitCode !== 0 || late.errorMessage ? "failed" : "completed",
                     lateDelivery: "detached",
                     ...(late.userClosed ? { userClosed: true } : {}),
                     ...(late.errorMessage ? { errorMessage: late.errorMessage } : {}),
@@ -422,7 +422,7 @@ export function registerSubagentMessageTool(
             sessionFile: sessionPath,
             exitCode: finalResult.exitCode,
             elapsed: finalResult.elapsed,
-            status: userClosed ? "user_closed" : cancelled ? "cancelled" : failed ? "failed" : "completed",
+            status: userClosed || cancelled ? "interrupted" : failed ? "failed" : "completed",
             ...(userClosed ? { userClosed: true } : {}),
             ...(finalResult.errorMessage ? { errorMessage: finalResult.errorMessage } : {}),
             ...(finalResult.stats ? { stats: finalResult.stats } : {}),
@@ -469,7 +469,7 @@ export function registerSubagentMessageTool(
                 elapsed: result.elapsed,
                 sessionFile: sessionPath,
                 sessionId: resumedSessionId,
-                status: result.userClosed ? "user_closed" : result.exitCode !== 0 || result.errorMessage ? "failed" : "completed",
+                status: result.userClosed ? "interrupted" : result.exitCode !== 0 || result.errorMessage ? "failed" : "completed",
                 ...(result.userClosed ? { userClosed: true } : {}),
                 ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
                 ...(result.stats ? { stats: result.stats } : {}),

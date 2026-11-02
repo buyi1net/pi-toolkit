@@ -18,9 +18,7 @@ import {
   type ToolContext,
 } from "./send-message-tool.ts";
 
-interface FollowupToolContext extends ToolContext {
-  isIdle?: () => boolean;
-}
+interface FollowupToolContext extends ToolContext {}
 
 export interface FollowupTaskToolDeps extends SendMessageToolDeps {
   startup: SubagentStartup;
@@ -162,7 +160,7 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
           if (!result) {
             const terminal: SubagentResult = { exitCode: 1, errorMessage: "Follow-up watcher ended without a terminal result." } as SubagentResult;
             const update = terminate("failed", terminal.errorMessage!, `${submissionId}:terminal`, terminal.errorMessage);
-            if (update) deps.deliverTerminal?.(running, terminal, "followup", update.delivery_id, () => ctx.isIdle?.() ?? true);
+            if (update) deps.deliverTerminal?.(running, terminal, "followup", update.delivery_id);
             return;
           }
           if (result.interruptedRound) return;
@@ -173,12 +171,12 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
             `${submissionId}:terminal`,
             result.summary || result.errorMessage || undefined,
           );
-          if (update) deps.deliverTerminal?.(running, result, "followup", update.delivery_id, () => ctx.isIdle?.() ?? true);
+          if (update) deps.deliverTerminal?.(running, result, "followup", update.delivery_id);
         }).catch((error) => {
           if (running.closed) return;
           const terminal: SubagentResult = { exitCode: 1, errorMessage: error instanceof Error ? error.message : String(error) } as SubagentResult;
           const update = terminate("failed", terminal.errorMessage!, `${submissionId}:terminal`, terminal.errorMessage);
-          if (update) deps.deliverTerminal?.(running, terminal, "followup", update.delivery_id, () => ctx.isIdle?.() ?? true);
+          if (update) deps.deliverTerminal?.(running, terminal, "followup", update.delivery_id);
         });
         return {
           content: [{ type: "text" as const, text: JSON.stringify({ ...details, status: "running" }) }],

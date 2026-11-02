@@ -161,6 +161,7 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
     description:
       "Wait for the next update in the current parent session queue. " +
       "This does not take a target list and a timeout never cancels a sub-agent. " +
+      "Each update carries kind: message (a sub-agent sent content), status (progress such as starting or running), or terminal (final state of a run). " +
       "timeout_ms defaults to 30000 and must be an integer from 1000 to 120000. " +
       "Read the returned update to identify its agent and event kind. " +
       "update_seq is strictly increasing inside this queue but is not contiguous: a skipped number means the event was dropped by design or belongs to another queue (descendant bubbles reuse the descendant sequence), so never infer lost updates from gaps; correlate and deduplicate by agent_id plus update_id. " +

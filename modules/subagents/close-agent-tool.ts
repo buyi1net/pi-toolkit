@@ -5,6 +5,7 @@ import { unregisterName } from "./session.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { RunningSubagent } from "./types.ts";
 import type { PublicAgentRecord } from "./registry.ts";
+import { PUBLIC_AGENT_STATUSES } from "./registry.ts";
 import {
   agentTreeRootDir,
   appendAgentTreeRecord,
@@ -15,6 +16,7 @@ import {
 import { subagentTaskDepth } from "./launch-config.ts";
 import { terminateHeadlessProcess } from "./headless.ts";
 import { adoptSurfaceFor, closeSurfaceFor } from "./surface.ts";
+import { compactRenderText, renderToolCardCall, renderToolCardResult, toolCardFailureReason } from "../../kit/tool-card.ts";
 import {
   lifecycleQueue,
   resolveLifecycleTarget,
@@ -57,9 +59,60 @@ export function registerCloseAgentTool(pi: ExtensionAPI, deps: CloseAgentToolDep
     name: "close_agent",
     label: "Close Agent",
     renderShell: "self",
-    description: "Close a subagent, release its task name, and keep its session file for records. A running agent is interrupted first; target accepts agent_id, canonical_task_name, or a local task name.",
+    description: "Close a subagent, release its task name, and keep its session file for records. A running agent is interrupted first, and its descendants are closed recursively: closed_descendants lists each closed child with agent_id, task_name and previous_status. target accepts agent_id, canonical_task_name, or a local task name; closing an already-closed agent is a no-op reported with already_closed=true.",
     promptSnippet: "Close a subagent and release its task name; a closed agent can no longer receive messages or follow-ups.",
     parameters: Type.Object({ target: Type.String({ minLength: 1 }) }),
+    renderCall(args, theme, context) {
+      return renderToolCardCall(
+        { title: deps.t?.("module.subagents.tool.close_agent.display") ?? "Close subagent", object: compactRenderText(args.target) || "(target)" },
+        theme,
+        context,
+      );
+    },
+    renderResult(result, options, theme, context) {
+      const details = (result.details ?? {}) as Record<string, unknown> & {
+        status?: unknown;
+        task_name?: unknown;
+        target?: unknown;
+        already_closed?: unknown;
+        closed_descendants?: unknown;
+        process_control?: unknown;
+      };
+      const text = result.content[0]?.type === "text" ? result.content[0].text : "Close failed";
+      const success = details.status === "closed";
+      const descendants = Array.isArray(details.closed_descendants) ? details.closed_descendants as Array<Record<string, unknown>> : [];
+      const names = descendants.map((entry) => compactRenderText(entry.task_name)).filter(Boolean);
+      const lines: string[] = [];
+      if (names.length > 0) {
+        lines.push(
+          deps.t?.("module.subagents.tool.close_agent.result.descendants", { count: String(names.length), names: names.join(", ") })
+            ?? `Also closed ${names.length} descendant(s): ${names.join(", ")}`,
+        );
+      }
+      if (Array.isArray(details.process_control)) {
+        for (const control of details.process_control as Array<Record<string, unknown>>) {
+          const agentId = compactRenderText(control.agent_id);
+          const action = compactRenderText(control.action) || "process";
+          const outcome = control.ok === true ? "ok" : control.ok === false ? "failed" : "skipped";
+          lines.push(`process ${agentId}: ${action} ${outcome}`);
+        }
+      }
+      return renderToolCardResult(
+        {
+          title: deps.t?.("module.subagents.tool.close_agent.display") ?? "Close subagent",
+          object: typeof details.task_name === "string" ? details.task_name : typeof details.target === "string" ? details.target : undefined,
+          status: success
+            ? details.already_closed === true
+              ? deps.t?.("module.subagents.tool.close_agent.result.alreadyClosed") ?? "Already closed"
+              : deps.t?.("module.subagents.tool.close_agent.result.closed") ?? "Closed"
+            : toolCardFailureReason(text, details),
+          details: options.expanded ? lines : [],
+        },
+        theme,
+        options,
+        context,
+      );
+    },
     async execute(_toolCallId: string, params: { target: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ToolContext) {
       const resolved = resolveLifecycleTarget(deps, ctx, params.target);
       if ("error" in resolved) return resolved.error;
@@ -200,11 +253,12 @@ export function registerCloseAgentTool(pi: ExtensionAPI, deps: CloseAgentToolDep
 
       const foundLocal = records.find((entry) => entry.record.agent_id === target.agentId);
       const foundRemote = remoteById.get(target.agentId);
+      const fallbackStatus = PUBLIC_AGENT_STATUSES.find((status) => status === target.status) ?? "completed";
       const record = foundLocal?.record ?? foundRemote ?? {
         agent_id: target.agentId,
         task_name: target.name,
         canonical_task_name: target.canonicalTaskName,
-        status: (target.status ?? "completed") as any,
+        status: fallbackStatus,
         parent_agent_id: null,
         parent_canonical_task_name: null,
         summary: "",
@@ -232,5 +286,5 @@ export function registerCloseAgentTool(pi: ExtensionAPI, deps: CloseAgentToolDep
         details,
       };
     },
-  } as any);
+  });
 }

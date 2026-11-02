@@ -45,8 +45,9 @@ export const SubagentParams = Type.Object({
   name: Type.Optional(
     Type.String({
       description:
-        "Optional cosmetic label for the subagent's pane and widget row. Defaults to the agent name. " +
-        "Has no effect on which agent runs — use `agent` for that.",
+        "Session-wide name key for this subagent: dependsOn entries reference it, stop and message tools address it by this name, " +
+        "and completion announcements are recorded under it; it also labels the pane and widget row. " +
+        "Defaults to a unique name derived from the agent type when omitted. Must be unique among the session's live and historical subagents.",
     }),
   ),
   cohortId: Type.Optional(
