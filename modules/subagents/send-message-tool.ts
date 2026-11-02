@@ -1,7 +1,8 @@
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { toolCardFailureReason, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
+import { Box, Text, stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { toolCardFailureReason, renderToolCardCall, formatToolCardLine, cardBackground } from "../../kit/tool-card.ts";
 import { readNameRegistry } from "./session.ts";
 import type { RuntimeRegistry } from "./registry.ts";
 import type { SubagentsTranslate } from "./messages/index.ts";
@@ -246,18 +247,54 @@ export function registerSendMessageTool(pi: ExtensionAPI, deps: SendMessageToolD
     renderResult(result, options, theme, context) {
       const details = result.details as any;
       const text = result.content[0]?.type === "text" ? result.content[0].text : "Message delivery failed";
-      const success = details?.submission_id;
-      return renderToolCardResult(
-        {
-          title: deps.t?.("module.subagents.tool.send_message.display") ?? "Message subagent",
-          object: typeof details?.task_name === "string" ? details.task_name : typeof details?.target === "string" ? details.target : undefined,
-          status: success ? deps.t?.("module.subagents.tool.send_message.result.submitted") ?? "Message submitted" : toolCardFailureReason(text, details),
-          details: options.expanded ? [text] : [],
+      const submitted = typeof details?.submission_id === "string";
+      const title = deps.t?.("module.subagents.tool.send_message.display") ?? "Message subagent";
+      const object = typeof details?.task_name === "string" ? details.task_name : typeof details?.target === "string" ? details.target : undefined;
+      const status = submitted
+        ? deps.t?.("module.subagents.tool.send_message.result.submitted") ?? "Message submitted"
+        : toolCardFailureReason(text, details);
+      const message = typeof context?.args?.message === "string" ? context.args.message : "";
+      const meta = submitted
+        ? [
+            ["agent_id", details.agent_id],
+            ["canonical_task_name", details.canonical_task_name],
+            ["submission_id", details.submission_id],
+            ["update_id", details.update_id],
+          ]
+            .filter(([, value]) => typeof value === "string" && value !== "")
+            .map(([key, value]) => `${key}: ${value}`)
+        : [];
+      const failure = typeof details?.message === "string" && details.message !== "" ? details.message : "The message could not be submitted.";
+
+      const component = {
+        invalidate() {},
+        render(width: number): string[] {
+          const lineWidth = Math.max(1, width - 2);
+          const lines = [formatToolCardLine({ title, object, status }, theme, context?.isError === true)];
+          if (options.expanded) {
+            const bodyLines = message
+              .split("\n")
+              .flatMap((line) => wrapTextWithAnsi(stripTerminalSequences(line), lineWidth));
+            if (submitted && bodyLines.length > 0) {
+              lines.push(
+                "",
+                theme.fg("muted", deps.t?.("module.subagents.tool.send_message.result.bodyLabel") ?? "Message text"),
+                ...bodyLines.map((line) => theme.fg("toolOutput", line)),
+              );
+            }
+            if (submitted && meta.length > 0) {
+              lines.push("", ...meta.map((entry) => theme.fg("dim", truncateToWidth(entry, lineWidth))));
+            }
+            if (!submitted && failure) {
+              lines.push("", ...failure.split("\n").flatMap((line: string) => wrapTextWithAnsi(stripTerminalSequences(line), lineWidth)).map((line: string) => theme.fg("error", line)));
+            }
+          }
+          const box = new Box(1, 1, cardBackground(theme, context?.isError === true ? "toolErrorBg" : "toolSuccessBg"));
+          box.addChild(new Text(lines.join("\n"), 0, 0));
+          return ["", ...box.render(width)];
         },
-        theme,
-        options,
-        context,
-      );
+      };
+      return component;
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx: ToolContext) {
       const message = params.message.trim();
@@ -286,10 +323,17 @@ export function registerSendMessageTool(pi: ExtensionAPI, deps: SendMessageToolD
         agent_id: target.agentId,
         task_name: target.name,
         status: "running",
-        summary: `Immediate message ${submissionId} delivered.`,
+        summary: `Immediate message ${submissionId} submitted.`,
         update_id: submissionId,
       });
-      return { content: [{ type: "text" as const, text: JSON.stringify({ ...lifecycleUpdateDetails(update, target, submissionId), status: "delivered" }) }], details: { ...lifecycleUpdateDetails(update, target, submissionId), status: "delivered" } };
+      const ids = lifecycleUpdateDetails(update, target, submissionId);
+      const text =
+        `Message submitted to subagent "${target.name}" (submission id ${submissionId}, agent id ${target.agentId}, ` +
+        `canonical task name ${target.canonicalTaskName}, update id ${update.update_id}). ` +
+        `This records the submission and the runtime's delivery attempt at the subagent's next turn boundary. ` +
+        `There is no acknowledgement: nothing here proves that the subagent read the message or added it to its context, ` +
+        `and the message may never be processed if the subagent exits first.`;
+      return { content: [{ type: "text" as const, text }], details: { ...ids, status: "submitted" } };
     },
   });
 }

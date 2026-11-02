@@ -13,6 +13,8 @@ import {
   type PeersReasonCode,
   type PeersRequestFrame,
   type PeersResponseFrame,
+  type PeersSubscribeFrame,
+  type PeersSubscriptionAck,
   type PeersTransport,
   type PeersTransportConnection,
 } from "./protocol.ts";
@@ -54,10 +56,15 @@ export function peersUnixSocketAddress(agentDir: string, instanceId: string): st
 export interface PeersEndpointReply {
   readonly result: PeersDeliveryResult;
   readonly reason: PeersReasonCode | null;
+  readonly subscription?: PeersSubscriptionAck | null;
 }
 
 export type PeersEndpointRequestHandler = (
   request: PeersRequestFrame,
+) => PeersEndpointReply | Promise<PeersEndpointReply>;
+
+export type PeersEndpointSubscribeHandler = (
+  request: PeersSubscribeFrame,
 ) => PeersEndpointReply | Promise<PeersEndpointReply>;
 
 export interface PeersEndpointServerOptions {
@@ -67,6 +74,8 @@ export interface PeersEndpointServerOptions {
 
   readonly getSettings: () => Pick<PeersSettings, "maxFrameBytes">;
   readonly onRequest: PeersEndpointRequestHandler;
+
+  readonly onSubscribe?: PeersEndpointSubscribeHandler;
 
   readonly onError?: (detail: string) => void;
   readonly now?: () => number;
@@ -204,6 +213,32 @@ export function createPeersEndpointServer(options: PeersEndpointServerOptions): 
     };
     const handleEvent = (event: PeersDecodeEvent): void => {
       if (event.kind === "frame") {
+        if (event.frame.type === "subscribe") {
+          const subscribe = event.frame;
+          const subscribeHandler = options.onSubscribe;
+          if (subscribeHandler === undefined) {
+            errorReply(subscribe.subscriptionId, "rejected");
+            return;
+          }
+          void Promise.resolve().then(() => subscribeHandler(subscribe)).then(
+            (reply) => {
+              send({
+                type: "response",
+                protocolVersion: PEERS_PROTOCOL_VERSION,
+                messageId: subscribe.subscriptionId,
+                result: reply.result,
+                reason: reply.reason,
+                serverTime: now(),
+                ...(reply.subscription !== undefined ? { subscription: reply.subscription } : {}),
+              });
+            },
+            (error) => {
+              errorReply(subscribe.subscriptionId, "receiver-injection-failed");
+              options.onError?.(`端点订阅处理异常（订阅 id ${subscribe.subscriptionId}）：${describeError(error)}`);
+            },
+          );
+          return;
+        }
         if (event.frame.type === "request") {
           const request = event.frame;
 
@@ -212,7 +247,7 @@ export function createPeersEndpointServer(options: PeersEndpointServerOptions): 
               send({
                 type: "response",
                 protocolVersion: PEERS_PROTOCOL_VERSION,
-                messageId: event.frame.messageId,
+                messageId: request.messageId,
                 result: reply.result,
                 reason: reply.reason,
                 serverTime: now(),
@@ -220,8 +255,8 @@ export function createPeersEndpointServer(options: PeersEndpointServerOptions): 
             },
             (error) => {
 
-              errorReply(event.frame.messageId, "invalid-frame");
-              options.onError?.(`端点请求处理异常（消息 id ${event.frame.messageId}）：${describeError(error)}`);
+              errorReply(request.messageId, "receiver-injection-failed");
+              options.onError?.(`端点请求处理异常（消息 id ${request.messageId}）：${describeError(error)}`);
             },
           );
         } else {

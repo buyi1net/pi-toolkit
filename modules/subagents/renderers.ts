@@ -94,7 +94,13 @@ export function registerSubagentRenderers(
           const summaryLines = summary
             ? summary.split("\n").flatMap((line: string) => wrapTextWithAnsi(stripTerminalSequences(line), Math.max(1, width - 2)))
             : [];
-          if (summaryLines.length > 0) contentLines.push(...summaryLines.map((line) => theme.fg("dim", line)));
+          if (summaryLines.length > 0) {
+            contentLines.push(
+              "",
+              theme.fg("muted", t("module.subagents.widget.result.bodyLabel")),
+              ...summaryLines.map((line) => theme.fg("toolOutput", line)),
+            );
+          }
 
           if (details.name || details.sessionFile) {
             contentLines.push("");

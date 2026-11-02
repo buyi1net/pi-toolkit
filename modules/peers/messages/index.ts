@@ -1,6 +1,9 @@
 import { formatMessage } from "../../../i18n/index.ts";
 import type { MessageTables, MessageVars, ResolvedLanguage, Translator } from "../../../i18n/index.ts";
 
+export const PEERS_SEND_REPLY_HINT =
+  "The peer endpoint accepted this message into its injection flow; that is not a read receipt and the receiver may never process it. A reply, if any, arrives automatically as a new external message; do not wait or poll for it, and end this turn.";
+
 const EN = {
   "module.peers.label": "Session discovery & messaging",
   "module.peers.description": "Discover peer pi sessions on this machine and exchange messages between them",
@@ -16,14 +19,23 @@ const EN = {
 
   "module.peers.tool.send.label": "Send message to peer session",
   "module.peers.tool.send.display": "Message",
-  "module.peers.tool.send.result.delivered": "Delivered",
+  "module.peers.tool.send.result.submitted": "Peer endpoint accepted",
   "module.peers.tool.send.result.failed": "Delivery failed: {reason}",
   "module.peers.tool.send.result.moreLines": "… {count} more lines",
   "module.peers.tool.send.result.bodyUnavailable": "Message body unavailable",
+  "module.peers.tool.send.result.replyHint": PEERS_SEND_REPLY_HINT,
+
+  "module.peers.tool.notify.label": "Subscribe to an idle notice",
+  "module.peers.tool.notify.display": "Notify when idle",
+  "module.peers.tool.notify.result.armed": "Idle notice subscribed",
+  "module.peers.tool.notify.result.fired": "Target already idle; notice accepted",
+  "module.peers.tool.notify.result.failed": "Subscription failed: {reason}",
+  "module.peers.tool.send.result.subscribed": "idle notice subscribed",
 
   "module.peers.renderer.title": "External session",
   "module.peers.renderer.instance": "instance {id}",
   "module.peers.renderer.sentAt": "Sent {time}",
+  "module.peers.renderer.received": "Received",
   "module.peers.renderer.cwd": "Working directory: {cwd}",
   "module.peers.renderer.bodyUnavailable": "Message body unavailable",
 } satisfies Record<string, string>;
@@ -43,14 +55,23 @@ const ZH_CN: typeof EN = {
 
   "module.peers.tool.send.label": "给本机会话发消息",
   "module.peers.tool.send.display": "发消息给",
-  "module.peers.tool.send.result.delivered": "已送达",
+  "module.peers.tool.send.result.submitted": "对方端点已接受",
   "module.peers.tool.send.result.failed": "发送失败：{reason}",
   "module.peers.tool.send.result.moreLines": "… 还有 {count} 行",
   "module.peers.tool.send.result.bodyUnavailable": "消息正文不可用",
+  "module.peers.tool.send.result.replyHint": "对方端点已接受这条消息并交给自己的注入流程；这不等于已读，对方可能始终不处理。对方若有回复，会作为新的外部消息自动到达；不要等待、也不要轮询，直接结束当前轮即可。",
+
+  "module.peers.tool.notify.label": "订阅对方空闲通知",
+  "module.peers.tool.notify.display": "空闲时通知我",
+  "module.peers.tool.notify.result.armed": "已订阅空闲通知",
+  "module.peers.tool.notify.result.fired": "对方已空闲，通知已被接受",
+  "module.peers.tool.notify.result.failed": "订阅失败：{reason}",
+  "module.peers.tool.send.result.subscribed": "已订阅空闲通知",
 
   "module.peers.renderer.title": "外部会话",
   "module.peers.renderer.instance": "实例 {id}",
   "module.peers.renderer.sentAt": "发送于 {time}",
+  "module.peers.renderer.received": "已接收",
   "module.peers.renderer.cwd": "工作目录：{cwd}",
   "module.peers.renderer.bodyUnavailable": "正文不可用",
 };
@@ -70,14 +91,23 @@ const ZH_TW: typeof EN = {
 
   "module.peers.tool.send.label": "給本機會話傳訊息",
   "module.peers.tool.send.display": "發訊息給",
-  "module.peers.tool.send.result.delivered": "已送達",
+  "module.peers.tool.send.result.submitted": "對方端點已接受",
   "module.peers.tool.send.result.failed": "傳送失敗：{reason}",
   "module.peers.tool.send.result.moreLines": "… 還有 {count} 行",
   "module.peers.tool.send.result.bodyUnavailable": "訊息內文無法取得",
+  "module.peers.tool.send.result.replyHint": "對方端點已接受這則訊息並交給自己的注入流程；這不等於已讀，對方可能始終不處理。對方若有回覆，會作為新的外部訊息自動到達；不要等待、也不要輪詢，直接結束目前輪即可。",
+
+  "module.peers.tool.notify.label": "訂閱對方空閒通知",
+  "module.peers.tool.notify.display": "空閒時通知我",
+  "module.peers.tool.notify.result.armed": "已訂閱空閒通知",
+  "module.peers.tool.notify.result.fired": "對方已空閒，通知已被接受",
+  "module.peers.tool.notify.result.failed": "訂閱失敗：{reason}",
+  "module.peers.tool.send.result.subscribed": "已訂閱空閒通知",
 
   "module.peers.renderer.title": "外部會話",
   "module.peers.renderer.instance": "實例 {id}",
   "module.peers.renderer.sentAt": "傳送於 {time}",
+  "module.peers.renderer.received": "已接收",
   "module.peers.renderer.cwd": "工作目錄：{cwd}",
   "module.peers.renderer.bodyUnavailable": "內文無法取得",
 };

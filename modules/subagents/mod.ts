@@ -328,7 +328,15 @@ function steerSubagent(
           `Use followup_task after the result arrives to continue its session.`,
       };
     }
-    child.steer(flattened);
+    if (child.steer(flattened) === false) {
+      return {
+        error:
+          `Cannot deliver message to headless sub-agent "${running.name}": its input stream no longer ` +
+          `accepts input (the process may have just exited). Nothing was written. Its result will ` +
+          `still be delivered when the process exits; use followup_task after the result arrives to ` +
+          `continue its session.`,
+      };
+    }
     return { ok: true };
   }
   try {

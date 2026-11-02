@@ -8,6 +8,11 @@ export type PeerLiveness = "online" | "stale" | "offline";
 
 export type PeerActivity = "working" | "idle";
 
+export interface PeerBlockedState {
+  readonly waitingFor: string;
+  readonly since: number;
+}
+
 export interface PeerLiveEntry {
   readonly sessionId: string;
   readonly instanceId: string;
@@ -18,6 +23,7 @@ export interface PeerLiveEntry {
   readonly sessionFile: string | null;
   readonly liveness: "online" | "stale";
   readonly activity: PeerActivity;
+  readonly blocked?: PeerBlockedState | null;
 }
 
 export interface PeerOfflineEntry {

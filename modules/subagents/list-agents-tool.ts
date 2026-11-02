@@ -131,7 +131,7 @@ export function registerListAgentsTool(pi: ExtensionAPI, deps: ListAgentsToolDep
     label: "List Agents",
     renderShell: "self",
     description:
-      "List the live agents in the current root agent tree, including descendants spawned by sub-agents. " +
+      "List the whole agent tree for the current root session, including descendants spawned by sub-agents and agents that already reached a terminal state. " +
       "path_prefix optionally filters by canonical task path: an absolute path such as /root/research, or a path relative to the caller. " +
       `summary is truncated to ${AGENT_SUMMARY_LIMIT} characters, the same limit the agent tree log keeps; read the full answer from the FINAL_ANSWER envelope delivered to this session or from the sub-agent session file. ` +
       "status prefers the terminal state recorded in the agent tree; only while the tree still reports a non-terminal state is the live status used.",

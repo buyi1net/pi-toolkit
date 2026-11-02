@@ -163,7 +163,7 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
       };
       const args = (context?.args ?? {}) as { task_name?: unknown };
       const taskName = compactRenderText(args.task_name) || compactRenderText(details.task_name) || "(task)";
-      const succeeded = details.status === "running";
+      const succeeded = context?.isError !== true && details.status === "running";
       if (!succeeded) {
         const reason = spawnFailureReason(details, deps.t);
         const rawMessage = compactRenderText(details.message);

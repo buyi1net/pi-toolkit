@@ -1,12 +1,17 @@
-import type { PeerActivity, PeerLiveEntry, PeerLiveness, PeerOfflineEntry, PeersScanResult } from "./api.ts";
+import type { PeerActivity, PeerBlockedState, PeerLiveEntry, PeerLiveness, PeerOfflineEntry, PeersScanResult } from "./api.ts";
 import type { PeerRegistration, PeerRegistrationRead } from "./registry.ts";
 import type { PeersDiskSession } from "./scan.ts";
 
-export type PeerDisplayStatus = "working" | "idle" | "sluggish" | "offline";
+export type PeerDisplayStatus = "working" | "idle" | "blocked" | "sluggish" | "offline";
 
-export function peerDisplayStatus(liveness: PeerLiveness, activity: PeerActivity): PeerDisplayStatus {
+export function peerDisplayStatus(
+  liveness: PeerLiveness,
+  activity: PeerActivity,
+  blocked?: PeerBlockedState | null,
+): PeerDisplayStatus {
   if (liveness === "offline") return "offline";
   if (liveness === "stale") return "sluggish";
+  if (blocked !== undefined && blocked !== null) return "blocked";
   return activity;
 }
 
@@ -88,6 +93,9 @@ export function mergePeerDiscovery(input: PeersDiscoveryMergeInput): PeersScanRe
     sessionFile: candidates.get(read.registration.sessionId)?.newestDisk?.sessionFile ?? null,
     liveness: read.liveness,
     activity: read.registration.activity,
+    ...(read.registration.blocked !== undefined && read.registration.blocked !== null
+      ? { blocked: read.registration.blocked }
+      : {}),
   }));
 
   const offlineCandidates: PeerOfflineEntry[] = [...candidates.values()]

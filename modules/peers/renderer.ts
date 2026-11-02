@@ -9,6 +9,7 @@ export const PEERS_RENDERER_MESSAGE_KEYS = [
   "module.peers.renderer.title",
   "module.peers.renderer.instance",
   "module.peers.renderer.sentAt",
+  "module.peers.renderer.received",
   "module.peers.renderer.cwd",
   "module.peers.renderer.bodyUnavailable",
 ] as const;
@@ -83,6 +84,25 @@ function cardSource(data: PeersCardData | null): string | null {
   return shortId !== null ? `#${shortId}` : data.sessionId;
 }
 
+function compactCardTime(ms: number): string {
+  const date = new Date(ms);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function compactCardBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function cardStatus(data: PeersCardData | null, t: PeersTranslate): string {
+  const parts = [t("module.peers.renderer.received")];
+  if (data !== null && data.sentAt !== null) parts.push(compactCardTime(data.sentAt));
+  if (data !== null && data.bodyBytes !== null) parts.push(compactCardBytes(data.bodyBytes));
+  return parts.join(" · ");
+}
+
 function peersMessageKey(details: unknown): string | null {
   if (typeof details !== "object" || details === null) return null;
   const messageId = (details as Record<string, unknown>).messageId;
@@ -110,6 +130,7 @@ export function registerPeersRenderers(
         const contentLines = [formatToolCardLine({
           title: t("module.peers.renderer.title"),
           object: source ?? undefined,
+          status: cardStatus(data, t),
         }, theme)];
         const expanded = options.expanded || (key !== null && expandedPeersMessageIds.has(key));
 

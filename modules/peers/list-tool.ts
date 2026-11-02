@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import { Type } from "typebox";
 import { deriveSessionShortId } from "../../shared/short-id.ts";
-import type { PeersDiscoverySnapshot, PeersSnapshotError } from "./api.ts";
+import type { PeerBlockedState, PeersDiscoverySnapshot, PeersSnapshotError } from "./api.ts";
 import { peerDisplayStatus, type PeerDisplayStatus } from "./discovery.ts";
 import type { PeersTranslate } from "./messages/index.ts";
 
@@ -25,6 +25,7 @@ export interface PeersListEntryView {
 
   readonly instanceId: string | null;
   readonly status: PeerDisplayStatus;
+  readonly blocked: PeerBlockedState | null;
   readonly name: string | null;
   readonly cwd: string | null;
   readonly sessionFile: string | null;
@@ -79,7 +80,8 @@ function buildEntryViews(
       sessionId: entry.sessionId,
       shortId,
       instanceId: entry.instanceId,
-      status: peerDisplayStatus(entry.liveness, entry.activity),
+      status: peerDisplayStatus(entry.liveness, entry.activity, entry.blocked),
+      blocked: entry.blocked ?? null,
       name: entry.name,
       cwd: entry.cwd,
       sessionFile: entry.sessionFile,
@@ -96,6 +98,7 @@ function buildEntryViews(
       shortId,
       instanceId: null,
       status: "offline" as const,
+      blocked: null,
       name: entry.name,
       cwd: entry.cwd,
       sessionFile: entry.sessionFile,
@@ -124,6 +127,7 @@ function formatEntryLine(entry: PeersListEntryView, truncated: boolean): string 
     `cwd ${entry.cwd !== null && entry.cwd !== "" ? entry.cwd : "(unknown)"}`,
     `file ${file}`,
   ];
+  if (entry.blocked !== null) segments.push(`waitingFor ${entry.blocked.waitingFor}`);
   if (entry.ownInstance) segments.push("you (self-delivery not supported)");
   else if (entry.self) segments.push("you (another instance of this session)");
   if (entry.shortId === null) segments.push("no valid short id");
@@ -143,7 +147,7 @@ export function buildPeersListOutput(snapshot: PeersDiscoverySnapshot, identity:
 
   if ([...online, ...offline].some((entry) => entry.duplicateShortId)) {
     lines.push(
-      "DUPLICATE SHORT IDS: a target that matches both live and offline sessions is delivered to the live instance; only multiple live instances are ambiguous.",
+      "DUPLICATE SHORT IDS: a target that matches both live and offline sessions resolves to the live instance; only multiple live instances are ambiguous.",
     );
   }
   if (online.length === 0 && offline.length === 0 && snapshot.error === null) {
@@ -173,9 +177,11 @@ export function registerPeersListTool(pi: ExtensionAPI, deps: PeersListToolDeps)
       "List peer pi sessions on this machine (same agent directory). " +
       "Two sections: ACTIVE sessions (running instances, with liveness/activity status) and OFFLINE sessions (recently exited, discovered from session files). " +
       "Each entry carries: 6-char short id (like #62nvbt), full session id, instance id (empty for offline), name, working directory, session file path and status. " +
+      "Status values: working means a run is in progress and the message is read between tool calls; idle means no run is active and a message starts a new turn; " +
+      "blocked means the session is waiting on a user-facing prompt and cannot act until the user answers (waitingFor names the prompt kind); sluggish means the heartbeat is stale and the session may be gone; offline means no live instance. " +
       "Entries are annotated for: yourself, multiple instances of one session, duplicate short ids, missing session files, and list truncation. " +
       "The entry marked you is informational and cannot be used as a peers_send target. " +
-      "An offline entry never makes a target ambiguous: a target matching both live and offline sessions is delivered to the live instance, and only multiple live instances refuse as ambiguous-address. ",
+      "An offline entry never makes a target ambiguous: a target matching both live and offline sessions resolves to the live instance, and only multiple live instances refuse as ambiguous-address. ",
     promptSnippet:
       "List local peer pi sessions (active/offline) with short id, session id, instance id, name, cwd, file path and status",
     parameters: Type.Object({}),

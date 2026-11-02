@@ -219,16 +219,17 @@ export class HeadlessChild {
     });
   }
 
-  send(command: Record<string, unknown>): void {
+  send(command: Record<string, unknown>): boolean {
     if (this.exited || !this.child.stdin?.writable) {
       this.droppedWrites += 1;
-      return;
+      return false;
     }
     this.child.stdin.write(serializeJsonLine(command));
+    return true;
   }
 
-  steer(message: string): void {
-    this.send({ type: "prompt", message, streamingBehavior: "steer" });
+  steer(message: string): boolean {
+    return this.send({ type: "prompt", message, streamingBehavior: "steer" });
   }
 
   abort(): void {

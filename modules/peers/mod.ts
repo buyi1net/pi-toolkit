@@ -11,11 +11,20 @@ import {
   type PeersSnapshotError,
 } from "./api.ts";
 import { readPeersSettings } from "./config.ts";
-import { collectPeerSessionCandidates, mergePeerDiscovery } from "./discovery.ts";
+import { collectPeerSessionCandidates, mergePeerDiscovery, type PeerSessionCandidate } from "./discovery.ts";
 import { createPeersEndpointServer, createPeersTransport, type PeersEndpointServer } from "./endpoint.ts";
 import { cleanupPeersExpiredFiles } from "./file-store.ts";
 import { registerPeersListTool } from "./list-tool.ts";
-import { createPeersDedupeWindow, createPeersInboundHandler, createPeersRateGuard } from "./messaging.ts";
+import {
+  createPeersDedupeWindow,
+  createPeersInboundHandler,
+  createPeersRateGuard,
+  deliverPeersIdleNotice,
+  judgePeersInboundRequest,
+  subscribePeersIdle,
+} from "./messaging.ts";
+import { registerPeersNotifyIdleTool } from "./notify-idle-tool.ts";
+import { createPeersIdleSubscriptionTable, clampPeersIdleSubscriptionTtl } from "./subscriptions.ts";
 import { registerPeersRenderers } from "./renderer.ts";
 import { registerPeersSendTool } from "./send-tool.ts";
 import { createHeartbeatMaintainer, readPeerRegistrationByIdentity, readPeerRegistrations } from "./registry.ts";
@@ -238,18 +247,73 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
 
   const currentSettings = (): PeersSettings => readPeersSettings(context.getConfig()).settings;
 
+  const now = moduleOptions.now ?? Date.now;
+  const idleSubscriptions = createPeersIdleSubscriptionTable({ now });
+
   const heartbeat = createHeartbeatMaintainer({
     agentDir,
     getSettings: () => readPeersSettings(context.getConfig()).settings,
     now: moduleOptions.now,
     onError: (detail) => runtime.reportRuntime(detail),
-    onTick: () =>
-      cleanupPeersExpiredFiles(agentDir, currentSettings().fileTtlMs, (moduleOptions.now ?? Date.now)()),
+    onTick: () => {
+      cleanupPeersExpiredFiles(agentDir, currentSettings().fileTtlMs, (moduleOptions.now ?? Date.now)());
+      idleSubscriptions.maintain(now());
+    },
   });
 
   const rateGuard = createPeersRateGuard({
     getSettings: () => currentSettings(),
   });
+
+  const transport = createPeersTransport();
+
+  let injectedSinceIdle = 0;
+
+  const loadRegistryCandidates = (): readonly PeerSessionCandidate[] => {
+    const settings = currentSettings();
+    const at = now();
+    const { registrations } = readPeerRegistrations(agentDir, { now: at, settings });
+    return [...collectPeerSessionCandidates({ registrations, disk: [] }).values()];
+  };
+
+  const loadAllCandidates = (): readonly PeerSessionCandidate[] | { failure: string } => {
+    const settings = currentSettings();
+    const at = now();
+    try {
+      const { registrations } = readPeerRegistrations(agentDir, { now: at, settings });
+      const disk = diskScanner.scan();
+      return [...collectPeerSessionCandidates({ registrations, disk: disk.sessions }).values()];
+    } catch (error) {
+      return { failure: describeError(error) };
+    }
+  };
+
+  const sendDeps = {
+    getOwnIdentity: () => heartbeat.identity(),
+    loadCandidates: loadAllCandidates,
+    loadRegistryCandidates,
+    transport,
+    getSettings: () => readPeersSettings(context.getConfig()).settings,
+    agentDir,
+    rateGuard,
+    reportDiagnostic: (detail: string) => runtime.reportRuntime(detail),
+    now,
+  };
+
+  const flushIdleNotices = (kind: "idle" | "exit"): void | Promise<void> => {
+    const triggered = idleSubscriptions.takeTriggered(now());
+    if (triggered.length === 0) return;
+    return Promise.allSettled(
+      triggered.map((subscription) =>
+        deliverPeersIdleNotice(sendDeps, {
+          subscriptionId: subscription.subscriptionId,
+          sessionId: subscription.sessionId,
+          instanceId: subscription.instanceId,
+          kind,
+        }),
+      ),
+    ).then(() => undefined);
+  };
 
   const inboundHandler = createPeersInboundHandler({
     getOwnIdentity: () => heartbeat.identity(),
@@ -263,7 +327,15 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
         onDiagnostic: (detail) => runtime.reportRuntime(detail),
       }),
     dedupe: createPeersDedupeWindow({ getWindowMs: () => currentSettings().dedupeWindowMs, now: moduleOptions.now ?? Date.now }),
-    inject: (message, deliverOptions) => context.pi.sendMessage(message, deliverOptions),
+    inject: (message, deliverOptions) => {
+      injectedSinceIdle += 1;
+      try {
+        return context.pi.sendMessage(message, deliverOptions);
+      } catch (error) {
+        injectedSinceIdle = Math.max(0, injectedSinceIdle - 1);
+        throw error;
+      }
+    },
     now: moduleOptions.now ?? Date.now,
     getThrottle: () => currentSettings(),
     rateGuard,
@@ -282,6 +354,62 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
       getSettings: () => currentSettings(),
 
       onRequest: inboundHandler,
+      onSubscribe: async (frame) => {
+        const at = now();
+        const settings = currentSettings();
+        const own = heartbeat.identity();
+        const source = readPeerRegistrationByIdentity(agentDir, {
+          sessionId: frame.sessionId,
+          instanceId: frame.instanceId,
+          now: at,
+          settings,
+          onDiagnostic: (detail) => runtime.reportRuntime(detail),
+        });
+        const judgment = judgePeersInboundRequest({
+          request: frame,
+          ownSessionId: own?.sessionId ?? null,
+          ownInstanceId: own?.instanceId ?? null,
+          sourceRegistration: source,
+          duplicate: false,
+          throttle: {
+            queueDepth: 0,
+            queueLimit: settings.inboundQueueLimit,
+            rateAllowed: rateGuard.allowsInbound(frame.sessionId, own?.sessionId ?? null, at),
+          },
+        });
+        if (judgment.result !== "accepted") {
+          return { result: judgment.result, reason: judgment.reason };
+        }
+        rateGuard.recordInbound(frame.sessionId, own?.sessionId ?? null, at);
+        const armed = idleSubscriptions.arm({
+          subscriptionId: frame.subscriptionId,
+          sessionId: frame.sessionId,
+          instanceId: frame.instanceId,
+          ttlMs: clampPeersIdleSubscriptionTtl(frame.ttlMs),
+          targetIdle:
+            heartbeat.activity() === "idle" && heartbeat.blockedState() === null && injectedSinceIdle === 0,
+        });
+        if (armed.state === "fired") {
+          const notice = await deliverPeersIdleNotice(sendDeps, {
+            subscriptionId: frame.subscriptionId,
+            sessionId: frame.sessionId,
+            instanceId: frame.instanceId,
+            kind: "idle",
+          });
+          if (!notice.ok) {
+            return { result: "error" as const, reason: "receiver-injection-failed" as const };
+          }
+        }
+        return {
+          result: "accepted" as const,
+          reason: null,
+          subscription: {
+            id: frame.subscriptionId,
+            expiresAt: armed.subscription.expiresAt,
+            state: armed.state,
+          },
+        };
+      },
 
       onError: (detail) => {
         if (endpointServer === next) heartbeat.setEndpoint(null);
@@ -322,15 +450,36 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
     void runtime.refresh();
   });
 
-  context.pi.on("agent_start", () => heartbeat.setActivity("working"));
-  context.pi.on("agent_settled", () => heartbeat.setActivity("idle"));
+  context.pi.on("agent_start", () => {
+    injectedSinceIdle = 0;
+    heartbeat.setActivity("working");
+  });
+  context.pi.on("agent_settled", () => {
+    injectedSinceIdle = 0;
+    heartbeat.setBlocked(null);
+    heartbeat.setActivity("idle");
+    void flushIdleNotices("idle");
+  });
+
+  context.pi.on("ui_prompt_start", (event) =>
+    heartbeat.setBlocked({ waitingFor: `ui-prompt:${event.kind}`, since: (moduleOptions.now ?? Date.now)() }),
+  );
+  context.pi.on("ui_prompt_end", () => heartbeat.setBlocked(null));
 
   context.pi.on("session_info_changed", (event) => heartbeat.setName(event.name ?? null));
   context.pi.on("session_shutdown", () => {
-    endpointServer?.close();
-    endpointServer = undefined;
-    heartbeat.stop();
-    runtime.dispose();
+    const finish = (): void => {
+      endpointServer?.close();
+      endpointServer = undefined;
+      heartbeat.stop();
+      runtime.dispose();
+    };
+    const flushing = flushIdleNotices("exit");
+    if (flushing === undefined) {
+      finish();
+      return;
+    }
+    return flushing.then(finish, finish);
   });
 
   context.services.register(PEERS_DISCOVERY_SERVICE_NAME, {
@@ -347,35 +496,26 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
     t: context.t,
   });
 
+  const subscribeIdle = (target: string, ttlMs: number) => subscribePeersIdle(sendDeps, target, ttlMs);
+
   registerPeersSendTool(context.pi, {
     getOwnIdentity: () => heartbeat.identity(),
-    loadRegistryCandidates: () => {
-      const settings = currentSettings();
-      const now = (moduleOptions.now ?? Date.now)();
-      const { registrations } = readPeerRegistrations(agentDir, { now, settings });
-      return [...collectPeerSessionCandidates({ registrations, disk: [] }).values()];
-    },
-    loadCandidates: () => {
-      const settings = currentSettings();
-      const now = (moduleOptions.now ?? Date.now)();
-      try {
-
-        const { registrations } = readPeerRegistrations(agentDir, { now, settings });
-
-        const disk = diskScanner.scan();
-        return [...collectPeerSessionCandidates({ registrations, disk: disk.sessions }).values()];
-      } catch (error) {
-
-        return { failure: describeError(error) };
-      }
-    },
+    loadRegistryCandidates,
+    loadCandidates: loadAllCandidates,
     reportDiagnostic: (detail) => runtime.reportRuntime(detail),
-    transport: createPeersTransport(),
+    transport,
     getSettings: () => currentSettings(),
     agentDir,
     rateGuard,
     now: moduleOptions.now,
     label: context.t("module.peers.tool.send.label"),
+    t: context.t,
+    subscribeIdle,
+  });
+
+  registerPeersNotifyIdleTool(context.pi, {
+    ...sendDeps,
+    label: context.t("module.peers.tool.notify.label"),
     t: context.t,
   });
 

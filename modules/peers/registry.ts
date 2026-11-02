@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
-import { peersSharedDir, type PeerActivity, type PeerLiveness, type PeersSettings } from "./api.ts";
+import { peersSharedDir, type PeerActivity, type PeerBlockedState, type PeerLiveness, type PeersSettings } from "./api.ts";
 
 const REGISTRATION_VERSION = 1;
 
@@ -22,6 +22,8 @@ export interface PeerRegistration {
   readonly cwd: string | null;
   readonly pid: number;
   readonly activity: PeerActivity;
+
+  readonly blocked?: PeerBlockedState | null;
 
   readonly heartbeatAt: number;
 
@@ -48,6 +50,14 @@ function optionalString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function optionalBlocked(value: unknown): PeerBlockedState | null {
+  if (typeof value !== "object" || value === null) return null;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.waitingFor !== "string" || raw.waitingFor === "") return null;
+  if (typeof raw.since !== "number" || !Number.isFinite(raw.since)) return null;
+  return { waitingFor: raw.waitingFor, since: raw.since };
+}
+
 function validateRegistration(value: unknown): PeerRegistration | null {
   if (typeof value !== "object" || value === null) return null;
   const raw = value as Record<string, unknown>;
@@ -57,6 +67,7 @@ function validateRegistration(value: unknown): PeerRegistration | null {
   if (typeof raw.pid !== "number" || !Number.isInteger(raw.pid)) return null;
   if (raw.activity !== "working" && raw.activity !== "idle") return null;
   if (typeof raw.heartbeatAt !== "number" || !Number.isFinite(raw.heartbeatAt)) return null;
+  const blocked = optionalBlocked(raw.blocked);
   return {
     sessionId: raw.sessionId,
     instanceId: raw.instanceId,
@@ -64,6 +75,7 @@ function validateRegistration(value: unknown): PeerRegistration | null {
     cwd: optionalString(raw.cwd),
     pid: raw.pid,
     activity: raw.activity,
+    ...(blocked !== null ? { blocked } : {}),
     heartbeatAt: raw.heartbeatAt,
     endpoint: optionalString(raw.endpoint),
   };
@@ -265,6 +277,12 @@ export interface HeartbeatMaintainer {
 
   setActivity(activity: PeerActivity): void;
 
+  activity(): PeerActivity;
+
+  setBlocked(state: PeerBlockedState | null): void;
+
+  blockedState(): PeerBlockedState | null;
+
   setName(name: string | null): void;
 
   setEndpoint(endpoint: string | null): void;
@@ -286,6 +304,7 @@ export function createHeartbeatMaintainer(options: HeartbeatMaintainerOptions): 
   let name: string | null = null;
   let endpoint: string | null = null;
   let activity: PeerActivity = "idle";
+  let blocked: PeerBlockedState | null = null;
   let ownFile: string | undefined;
   let timer: PeerHeartbeatTimer | undefined;
   let settings: PeersSettings | undefined;
@@ -309,6 +328,7 @@ export function createHeartbeatMaintainer(options: HeartbeatMaintainerOptions): 
       cwd: identity.cwd,
       pid: process.pid,
       activity,
+      ...(blocked !== null ? { blocked } : {}),
       heartbeatAt: now(),
       endpoint,
     });
@@ -408,6 +428,7 @@ export function createHeartbeatMaintainer(options: HeartbeatMaintainerOptions): 
     ownFile = undefined;
     settings = undefined;
     activity = "idle";
+    blocked = null;
     endpoint = null;
     name = null;
     cleanupCandidates.clear();
@@ -423,6 +444,7 @@ export function createHeartbeatMaintainer(options: HeartbeatMaintainerOptions): 
         ownFile = peerRegistrationFile(options.agentDir, nextIdentity.sessionId, instanceId);
 
         activity = "idle";
+        blocked = null;
         endpoint = null;
         settings = options.getSettings();
         safeHeartbeat();
@@ -439,10 +461,35 @@ export function createHeartbeatMaintainer(options: HeartbeatMaintainerOptions): 
     },
 
     setActivity(next: PeerActivity): void {
-      if (!identity || activity === next) return;
+      if (!identity || (activity === next && blocked === null)) return;
       activity = next;
+      blocked = null;
 
       safeHeartbeat();
+    },
+
+    setBlocked(next: PeerBlockedState | null): void {
+      if (!identity) return;
+      const current = blocked;
+      if (current === next) return;
+      if (
+        current !== null &&
+        next !== null &&
+        current.waitingFor === next.waitingFor &&
+        current.since === next.since
+      ) {
+        return;
+      }
+      blocked = next;
+      safeHeartbeat();
+    },
+
+    activity(): PeerActivity {
+      return activity;
+    },
+
+    blockedState(): PeerBlockedState | null {
+      return blocked;
     },
 
     setName(next: string | null): void {

@@ -18,7 +18,8 @@ export type PeersReasonCode =
   | "content-too-large"
   | "ambiguous-address"
   | "unknown-target"
-  | "duplicate-message";
+  | "duplicate-message"
+  | "receiver-injection-failed";
 
 export const PEERS_REASON_CODES: readonly PeersReasonCode[] = Object.freeze([
   "offline",
@@ -36,6 +37,7 @@ export const PEERS_REASON_CODES: readonly PeersReasonCode[] = Object.freeze([
   "ambiguous-address",
   "unknown-target",
   "duplicate-message",
+  "receiver-injection-failed",
 ]);
 
 export function isPeersReasonCode(value: unknown): value is PeersReasonCode {
@@ -46,6 +48,12 @@ export interface PeersFileRef {
   readonly path: string;
   readonly bytes: number;
   readonly sha256: string;
+}
+
+export interface PeersIdleNotice {
+  readonly kind: "idle" | "exit";
+  readonly subscriptionId: string;
+  readonly triggerAt: number;
 }
 
 export interface PeersRequestFrame {
@@ -60,9 +68,30 @@ export interface PeersRequestFrame {
   readonly body: string;
   readonly file: PeersFileRef | null;
   readonly sentAt: number;
+  readonly notice?: PeersIdleNotice | null;
+}
+
+export interface PeersSubscribeFrame {
+  readonly type: "subscribe";
+  readonly protocolVersion: number;
+  readonly subscriptionId: string;
+  readonly sessionId: string;
+  readonly instanceId: string;
+  readonly name: string | null;
+  readonly cwd: string | null;
+  readonly ttlMs: number;
+  readonly sentAt: number;
 }
 
 export type PeersDeliveryResult = "accepted" | "rejected" | "error";
+
+export type PeersSubscriptionState = "armed" | "fired";
+
+export interface PeersSubscriptionAck {
+  readonly id: string;
+  readonly expiresAt: number;
+  readonly state: PeersSubscriptionState;
+}
 
 export interface PeersResponseFrame {
   readonly type: "response";
@@ -71,9 +100,10 @@ export interface PeersResponseFrame {
   readonly result: PeersDeliveryResult;
   readonly reason: PeersReasonCode | null;
   readonly serverTime: number;
+  readonly subscription?: PeersSubscriptionAck | null;
 }
 
-export type PeersFrame = PeersRequestFrame | PeersResponseFrame;
+export type PeersFrame = PeersRequestFrame | PeersResponseFrame | PeersSubscribeFrame;
 
 const LENGTH_PREFIX_BYTES = 4;
 
@@ -187,7 +217,14 @@ function validateRequest(raw: Record<string, unknown>): PeersRequestFrame | Peer
   }
   const sentAt = requireFiniteNumber(raw.sentAt, "sentAt");
   if (typeof sentAt !== "number") return sentAt;
+  let notice: PeersIdleNotice | null = null;
+  if (raw.notice !== undefined && raw.notice !== null) {
+    const parsedNotice = validateIdleNotice(raw.notice);
+    if ("reason" in parsedNotice) return parsedNotice;
+    notice = parsedNotice;
+  }
   return {
+    ...(notice !== null ? { notice } : {}),
     type: "request",
     protocolVersion: PEERS_PROTOCOL_VERSION,
     messageId,
@@ -200,6 +237,55 @@ function validateRequest(raw: Record<string, unknown>): PeersRequestFrame | Peer
     file,
     sentAt,
   };
+}
+
+function validateIdleNotice(value: unknown): PeersIdleNotice | PeersPayloadIssue {
+  if (!isPlainObject(value)) return { reason: "invalid-frame", detail: "notice 必须是对象或 null" };
+  if (value.kind !== "idle" && value.kind !== "exit") {
+    return { reason: "invalid-frame", detail: "notice.kind 必须是 idle / exit" };
+  }
+  const subscriptionId = requireText(value.subscriptionId, "notice.subscriptionId");
+  if (typeof subscriptionId !== "string") return subscriptionId;
+  const triggerAt = requireFiniteNumber(value.triggerAt, "notice.triggerAt");
+  if (typeof triggerAt !== "number") return triggerAt;
+  return { kind: value.kind, subscriptionId, triggerAt };
+}
+
+function validateSubscribe(raw: Record<string, unknown>): PeersSubscribeFrame | PeersPayloadIssue {
+  const subscriptionId = requireText(raw.subscriptionId, "subscriptionId");
+  if (typeof subscriptionId !== "string") return subscriptionId;
+  const sessionId = requireText(raw.sessionId, "sessionId");
+  if (typeof sessionId !== "string") return sessionId;
+  const instanceId = requireText(raw.instanceId, "instanceId");
+  if (typeof instanceId !== "string") return instanceId;
+  const name = optionalText(raw.name);
+  if (name === undefined) return { reason: "invalid-frame", detail: "name 必须是字符串或 null" };
+  const cwd = optionalText(raw.cwd);
+  if (cwd === undefined) return { reason: "invalid-frame", detail: "cwd 必须是字符串或 null" };
+  const ttlMs = requireFiniteNumber(raw.ttlMs, "ttlMs");
+  if (typeof ttlMs !== "number") return ttlMs;
+  if (ttlMs <= 0) return { reason: "invalid-frame", detail: "ttlMs 必须大于 0" };
+  const sentAt = requireFiniteNumber(raw.sentAt, "sentAt");
+  if (typeof sentAt !== "number") return sentAt;
+  return {
+    type: "subscribe",
+    protocolVersion: PEERS_PROTOCOL_VERSION,
+    subscriptionId,
+    sessionId,
+    instanceId,
+    name,
+    cwd,
+    ttlMs,
+    sentAt,
+  };
+}
+
+function validateSubscriptionAck(value: unknown): PeersSubscriptionAck | null {
+  if (!isPlainObject(value)) return null;
+  if (typeof value.id !== "string" || value.id === "") return null;
+  if (typeof value.expiresAt !== "number" || !Number.isFinite(value.expiresAt)) return null;
+  if (value.state !== "armed" && value.state !== "fired") return null;
+  return { id: value.id, expiresAt: value.expiresAt, state: value.state };
 }
 
 function validateResponse(raw: Record<string, unknown>): PeersResponseFrame | PeersPayloadIssue {
@@ -224,6 +310,12 @@ function validateResponse(raw: Record<string, unknown>): PeersResponseFrame | Pe
   }
   const serverTime = requireFiniteNumber(raw.serverTime, "serverTime");
   if (typeof serverTime !== "number") return serverTime;
+  let subscription: PeersSubscriptionAck | null = null;
+  if (raw.subscription !== undefined && raw.subscription !== null) {
+    const ack = validateSubscriptionAck(raw.subscription);
+    if (ack === null) return { reason: "invalid-frame", detail: "subscription 回执结构非法" };
+    subscription = ack;
+  }
   return {
     type: "response",
     protocolVersion: PEERS_PROTOCOL_VERSION,
@@ -231,6 +323,7 @@ function validateResponse(raw: Record<string, unknown>): PeersResponseFrame | Pe
     result: raw.result,
     reason,
     serverTime,
+    ...(subscription !== null ? { subscription } : {}),
   };
 }
 
@@ -247,6 +340,7 @@ function validateFramePayload(value: unknown): PeersFrame | PeersPayloadIssue {
   }
   if (value.type === "request") return validateRequest(value);
   if (value.type === "response") return validateResponse(value);
+  if (value.type === "subscribe") return validateSubscribe(value);
   return { reason: "invalid-frame", detail: "未知帧类型" };
 }
 
@@ -410,9 +504,10 @@ function safeClose(connection: PeersTransportConnection): void {
 export async function sendPeersFrame(
   transport: PeersTransport,
   endpoint: string,
-  frame: PeersFrame,
+  frame: PeersRequestFrame | PeersSubscribeFrame,
   options: PeersSendOptions,
 ): Promise<PeersSendOutcome> {
+  const correlationId = frame.type === "subscribe" ? frame.subscriptionId : frame.messageId;
   const schedule = options.scheduleTimeout ?? defaultPeersTimeoutScheduler;
   const now = options.now ?? Date.now;
   const { maxFrameBytes, connectTimeoutMs, writeTimeoutMs } = options.settings;
@@ -489,7 +584,7 @@ export async function sendPeersFrame(
         if (event.frame.type !== "response") {
           return { kind: "failure", stage: "response", reason: "invalid-frame", detail: "响应通道收到请求帧" };
         }
-        if (event.frame.messageId !== frame.messageId) {
+        if (event.frame.messageId !== correlationId) {
           return { kind: "failure", stage: "response", reason: "invalid-frame", detail: "响应消息 id 与请求不匹配" };
         }
         return { kind: "response", response: event.frame };
