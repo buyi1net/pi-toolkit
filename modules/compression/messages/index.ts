@@ -143,9 +143,6 @@ const EN = {
   "module.compression.display.reasonFallback": "see the notification or log for details",
   "module.compression.display.reason.aborted": "compaction was aborted",
 
-  "module.compression.statusLabel.native": "Cmp:native",
-  "module.compression.statusLabel.acp": "Cmp:ACP",
-  "module.compression.statusLabel.codex": "Cmp:Codex",
 
   "module.compression.tool.compress.display": "Compress",
   "module.compression.tool.decompress.display": "Decompress",
@@ -527,9 +524,6 @@ const ZH_CN: typeof EN = {
   "module.compression.display.reasonFallback": "详见通知或日志",
   "module.compression.display.reason.aborted": "压缩已中止",
 
-  "module.compression.statusLabel.native": "压缩:原生",
-  "module.compression.statusLabel.acp": "压缩:ACP",
-  "module.compression.statusLabel.codex": "压缩:Codex",
 
   "module.compression.tool.compress.display": "压缩上下文",
   "module.compression.tool.decompress.display": "恢复内容",
@@ -903,9 +897,6 @@ const ZH_TW: typeof EN = {
   "module.compression.display.reasonFallback": "詳見通知或日誌",
   "module.compression.display.reason.aborted": "壓縮已中止",
 
-  "module.compression.statusLabel.native": "壓縮:原生",
-  "module.compression.statusLabel.acp": "壓縮:ACP",
-  "module.compression.statusLabel.codex": "壓縮:Codex",
 
   "module.compression.tool.compress.display": "壓縮上下文",
   "module.compression.tool.decompress.display": "還原內容",
@@ -1210,10 +1201,6 @@ export function compressionSourceLabel(source: CompressionSource, t: Translator)
 
 export function compressionFallbackLabel(reason: CompressionFallbackReason, t: Translator): string {
   return t(`module.compression.fallback.${reason}`);
-}
-
-export function compressionStatusLabel(mode: "native" | "acp" | "codex", t: Translator): string {
-  return t(`module.compression.statusLabel.${mode}`);
 }
 
 const DISPLAY_REASON_KEYS: Record<string, CompressionMessageKey> = {

@@ -5,8 +5,6 @@ import type {
   ModelIdentity,
   SessionCompressionOverride,
 } from "./api.ts";
-import type { Translator } from "../../i18n/index.ts";
-import { compressionStatusLabel } from "./messages/index.ts";
 import { resolveCompressionStrategy } from "./strategy.ts";
 
 export interface CompressionFallbackRecord {
@@ -15,8 +13,6 @@ export interface CompressionFallbackRecord {
 }
 
 export interface CompressionStatusServiceOptions {
-
-  readonly t: Translator;
 
   readonly isEnabled: () => boolean;
 
@@ -40,17 +36,16 @@ type CompressionStatusContent = Omit<CompressionStatusSnapshot, "revision">;
 
 export function formatCompressionStatusLabel(
   snapshot: CompressionStatusSnapshot,
-  t: Translator,
   _compact = false,
 ): string {
   if (snapshot.status === "disabled" || snapshot.status === "unavailable") return "";
   switch (snapshot.effectiveMode) {
     case "native":
-      return compressionStatusLabel("native", t);
+      return "Cmp:auto";
     case "acp":
-      return compressionStatusLabel("acp", t);
+      return "Cmp:ACP";
     case "codex":
-      return compressionStatusLabel("codex", t);
+      return "Cmp:Codex";
     case "none":
 
       return "";
@@ -102,7 +97,7 @@ export function createCompressionStatusService(
   const service: CompressionStatusRuntime = {
     id: "compression",
     snapshot,
-    label: (compact = false) => formatCompressionStatusLabel(snapshot(), options.t, compact),
+    label: (compact = false) => formatCompressionStatusLabel(snapshot(), compact),
     clearFallback: () => {
 
       if (options.readFallback?.() === undefined) return;

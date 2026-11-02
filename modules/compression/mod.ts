@@ -57,7 +57,6 @@ export function registerCompression(context: ModuleContext): void {
   const fallbackLedger = createCompressionFallbackLedger();
 
   const statusService = createCompressionStatusService({
-    t: context.t,
     isEnabled: compressionEnabled,
     readSettings: () => readCompressionSettings(context.getConfig()).settings,
     readModel: () => sessionModel,
