@@ -5,6 +5,8 @@ export interface AgentEnvelopeInput {
   taskName: string;
   payload: string;
   sender?: string;
+  /** Extra header line (facts about the sender/child), printed before Payload. */
+  note?: string;
 }
 
 export const AGENT_TURN_DELIVERY = { triggerTurn: true, deliverAs: "followUp" } as const;
@@ -15,7 +17,8 @@ export const AGENT_STEER_DELIVERY = { triggerTurn: true, deliverAs: "steer" } as
 
 export function buildAgentEnvelope(input: AgentEnvelopeInput): string {
   const sender = input.sender ?? input.taskName;
-  return `Message Type: ${input.kind}\nTask name: ${input.taskName}\nSender: ${sender}\nPayload:\n${input.payload}`;
+  const note = input.note ? `${input.note}\n` : "";
+  return `Message Type: ${input.kind}\nTask name: ${input.taskName}\nSender: ${sender}\n${note}Payload:\n${input.payload}`;
 }
 
 export function buildResultEnvelope(input: { taskName: string; payload: string; hostNote: string }): string {
@@ -36,6 +39,8 @@ export function rootTaskName(): string {
   return process.env.PI_SUBAGENT_TASK_PATH?.trim() || "/root";
 }
 
+export const QUESTION_SUMMARY_PREFIX = "QUESTION: ";
+
 export function questionSummary(question: string): string {
-  return `QUESTION: ${question.trim().slice(0, 200)}`;
+  return `${QUESTION_SUMMARY_PREFIX}${question.trim().slice(0, 200)}`;
 }

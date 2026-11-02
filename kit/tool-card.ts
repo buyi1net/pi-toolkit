@@ -22,7 +22,15 @@ export interface ToolCardContent {
   readonly title: string;
   readonly object?: string;
   readonly status?: string;
+  /** 展开区行：只放面向用户的说明，不得直接放工具返回给模型的结果原文。 */
   readonly details?: readonly string[];
+}
+
+export interface ToolCardFailureLabels {
+  /** 没有对应人话时使用的通用文案。 */
+  readonly fallback: string;
+  /** 机器码 → 面向用户的文案；码只当查找键，查不到时用 fallback。 */
+  readonly byCode?: Readonly<Record<string, string>>;
 }
 
 type BackgroundToken = Parameters<Theme["bg"]>[0];
@@ -86,11 +94,11 @@ export function compactSegment(value: string | undefined, width: number): string
   return text ? truncateToWidth(text, width, "…") : undefined;
 }
 
-/** 失败结果折叠态的单行原因：优先结构化 code，其次文本首行；完整文本放展开区。 */
-export function toolCardFailureReason(text: string, details?: unknown, maxWidth = 60): string {
+/** 失败结果折叠态的单行原因：code 只用于查人话，查不到时回落到调用方提供的通用文案。 */
+export function toolCardFailureReason(details: unknown, labels: ToolCardFailureLabels, maxWidth = 60): string {
   const code = (details as { code?: unknown } | undefined)?.code;
-  const raw = typeof code === "string" && code !== "" ? code : text;
-  return truncateToWidth(compactRenderText(raw), maxWidth, "…");
+  const label = typeof code === "string" && code !== "" ? labels.byCode?.[code] : undefined;
+  return truncateToWidth(compactRenderText(label ?? labels.fallback), maxWidth, "…");
 }
 
 export interface ToolCardTextPart {
@@ -105,11 +113,6 @@ export interface ToolCardTextResult {
 export function toolCardText(result: ToolCardTextResult | undefined): string {
   const part = result?.content?.find((candidate) => candidate?.type === "text");
   return typeof part?.text === "string" ? part.text : "";
-}
-
-export function toolCardTextLines(result: ToolCardTextResult | undefined): string[] {
-  const text = toolCardText(result);
-  return text ? text.split("\n") : [];
 }
 
 function cardBox(
@@ -127,15 +130,27 @@ function cardBox(
   return box;
 }
 
-export const expandedToolCardIds = new Map<string, true>();
+export const EXPANDED_TOOL_CARD_LIMIT = 256;
+
+const expandedToolCardIds = new Map<string, true>();
 
 export function isToolCardExpanded(key: string | null, globallyExpanded: boolean): boolean {
   return globallyExpanded || (key !== null && expandedToolCardIds.has(key));
 }
 
+export function setToolCardExpanded(key: string, expanded: boolean): void {
+  expandedToolCardIds.delete(key);
+  if (!expanded) return;
+  expandedToolCardIds.set(key, true);
+  while (expandedToolCardIds.size > EXPANDED_TOOL_CARD_LIMIT) {
+    const oldest = expandedToolCardIds.keys().next();
+    if (oldest.done) break;
+    expandedToolCardIds.delete(oldest.value);
+  }
+}
+
 export function toggleToolCardExpanded(key: string): void {
-  if (expandedToolCardIds.has(key)) expandedToolCardIds.delete(key);
-  else expandedToolCardIds.set(key, true);
+  setToolCardExpanded(key, !expandedToolCardIds.has(key));
 }
 
 export function renderToolCardCall(

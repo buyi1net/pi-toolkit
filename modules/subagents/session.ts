@@ -48,6 +48,46 @@ export const FORK_IDENTITY_RESET = [
 const FORK_KEPT_ENTRY_TYPES = new Set(["model_change", "thinking_level_change"]);
 const FORK_KEPT_MESSAGE_ROLES = new Set(["user", "assistant"]);
 
+export interface DelegationSelfFacts {
+  depth: number;
+  parentCanonical?: string;
+  grantsSpawning: boolean;
+}
+
+/**
+ * One factual line about where the child sits in the tree, sourced from the launch
+ * whitelist rather than guessed. Both surfaces (fork seed and NEW_TASK envelope) use it,
+ * and it says which level holds spawn_agent so a depth-1 child does not talk itself out
+ * of a capability it actually has.
+ */
+export function delegationFactsLine(facts: DelegationSelfFacts): string {
+  const parent = facts.parentCanonical ? ` (parent ${facts.parentCanonical})` : "";
+  const zh = facts.grantsSpawning
+    ? `你的层级是 depth ${facts.depth}${parent}；你当前持有 spawn_agent，最多还能再派生一层。以实际工具表为准。`
+    : `你的层级是 depth ${facts.depth}${parent}；你当前没有 spawn_agent 工具，不要再派生，请自己完成任务。以实际工具表为准。`;
+  const en = facts.grantsSpawning
+    ? `Your depth is ${facts.depth}${parent}; you currently hold spawn_agent and may delegate one more level. The tool list is authoritative.`
+    : `Your depth is ${facts.depth}${parent}; you do not hold spawn_agent, so complete the task yourself. The tool list is authoritative.`;
+  return `${zh}\n${en}`;
+}
+
+export function forkBootstrapText(facts: DelegationSelfFacts): string {
+  return `${FORK_IDENTITY_RESET}\n\n${delegationFactsLine(facts)}`;
+}
+
+/**
+ * Upper bound for inherited conversation text. Roughly 20k-28k tokens for mixed
+ * Chinese/English text: enough for the recent turns, small enough that the parent's
+ * history never eats the child's budget. Trimming drops whole messages only.
+ */
+export const MAX_FORK_INHERITED_CHARS = 40_000;
+
+export interface ForkInheritanceStats {
+  inherited_turns: number;
+  inherited_chars: number;
+  inherited_truncated: boolean;
+}
+
 function forkKeptTextBlocks(message: unknown): Array<{ type: "text"; text: string }> {
   const content = (message as { content?: unknown } | null)?.content;
   if (typeof content === "string") {
@@ -105,21 +145,12 @@ function forkContextEditEntry(entry: Record<string, any>): Record<string, any> |
   return { type: "context_edit", id: entry.id, timestamp: entry.timestamp, targetId: entry.targetId, replacement: entry.replacement };
 }
 
-function getForkContentLines(parentSessionFile: string): string[] {
+function getForkContentLines(parentSessionFile: string, bootstrap: string): { lines: string[]; stats: ForkInheritanceStats } {
   const parsed = readSessionEntries(parentSessionFile);
-  const visible = parsed.filter((entry, index) => index >= 0 && entry.type !== "session");
-
-  let truncateAt = visible.length;
-  for (let i = visible.length - 1; i >= 0; i -= 1) {
-    const entry = visible[i]!;
-    if (entry.type === "message" && entry.message?.role === "user") {
-      truncateAt = i;
-      break;
-    }
-  }
+  const visible = parsed.filter((entry) => entry.type !== "session");
 
   const kept: Array<{ entry: Record<string, any>; originalIndex: number }> = [];
-  for (let index = 0; index < truncateAt; index += 1) {
+  for (let index = 0; index < visible.length; index += 1) {
     const entry = visible[index]!;
     if (typeof entry.id !== "string" || entry.id === "") continue;
     if (FORK_KEPT_ENTRY_TYPES.has(entry.type)) {
@@ -149,8 +180,10 @@ function getForkContentLines(parentSessionFile: string): string[] {
     kept.push({ originalIndex: index, entry: { type: "message", id: entry.id, timestamp: entry.timestamp, message } });
   }
 
-  const keptIds = new Set(kept.map((item) => item.entry.id as string));
-  const survivors = kept.filter((item) => item.entry.type !== "context_edit" || keptIds.has(item.entry.targetId as string));
+  const trimmed = trimInheritedMessages(kept, MAX_FORK_INHERITED_CHARS);
+
+  const keptIds = new Set(trimmed.kept.map((item) => item.entry.id as string));
+  const survivors = trimmed.kept.filter((item) => item.entry.type !== "context_edit" || keptIds.has(item.entry.targetId as string));
   const survivorIds = new Set(survivors.map((item) => item.entry.id as string));
   for (const item of survivors) {
     if (item.entry.type !== "compaction") continue;
@@ -167,15 +200,69 @@ function getForkContentLines(parentSessionFile: string): string[] {
     type: "message",
     id: randomUUID(),
     timestamp: now,
-    message: { role: "user", content: [{ type: "text", text: FORK_IDENTITY_RESET }], timestamp: now },
+    message: { role: "user", content: [{ type: "text", text: bootstrap }], timestamp: now },
   });
 
-  return lines.map((entry, index) => {
-    const linked: Record<string, any> = { ...entry };
-    if (index === 0) delete linked.parentId;
-    else linked.parentId = (lines[index - 1] as Record<string, any>).id;
-    return JSON.stringify(linked);
-  });
+  return {
+    lines: lines.map((entry, index) => {
+      const linked: Record<string, any> = { ...entry };
+      if (index === 0) delete linked.parentId;
+      else linked.parentId = (lines[index - 1] as Record<string, any>).id;
+      return JSON.stringify(linked);
+    }),
+    stats: trimmed.stats,
+  };
+}
+
+export interface SeededForkStats extends ForkInheritanceStats {}
+
+function messageTextLength(entry: Record<string, any>): number {
+  const content = entry.message?.content;
+  if (!Array.isArray(content)) return 0;
+  let total = 0;
+  for (const block of content) {
+    if (block && typeof block === "object" && block.type === "text" && typeof block.text === "string") total += block.text.length;
+  }
+  return total;
+}
+
+/**
+ * Keep the newest inherited text within the cap: oldest messages are dropped whole, the
+ * order never changes, and the parent's current-turn user message always survives (even
+ * when it alone exceeds the cap). Returns the survivors plus the receipt facts.
+ */
+function trimInheritedMessages(
+  kept: Array<{ entry: Record<string, any>; originalIndex: number }>,
+  maxChars: number,
+): { kept: Array<{ entry: Record<string, any>; originalIndex: number }>; stats: ForkInheritanceStats } {
+  const isMessage = (item: { entry: Record<string, any> }) => item.entry.type === "message";
+  const messages = kept.filter(isMessage);
+  const lengths = new Map(messages.map((item) => [item, messageTextLength(item.entry)]));
+  let total = [...lengths.values()].reduce((sum, value) => sum + value, 0);
+  const turns = messages.length;
+  if (total <= maxChars) {
+    return { kept, stats: { inherited_turns: turns, inherited_chars: total, inherited_truncated: false } };
+  }
+  let currentRoundUser: (typeof messages)[number] | null = null;
+  for (const item of messages) {
+    if (item.entry.message?.role === "user") currentRoundUser = item;
+  }
+  const dropped = new Set<(typeof messages)[number]>();
+  for (const item of messages) {
+    if (total <= maxChars) break;
+    if (item === currentRoundUser) continue;
+    dropped.add(item);
+    total -= lengths.get(item) ?? 0;
+  }
+  const survivors = kept.filter((item) => !dropped.has(item));
+  return {
+    kept: survivors,
+    stats: {
+      inherited_turns: survivors.filter(isMessage).length,
+      inherited_chars: total,
+      inherited_truncated: dropped.size > 0,
+    },
+  };
 }
 
 export function seedSubagentSessionFile(params: {
@@ -183,7 +270,9 @@ export function seedSubagentSessionFile(params: {
   parentSessionFile: string;
   childSessionFile: string;
   childCwd: string;
-}): void {
+  /** Startup facts for the delegation line; omitted callers get the plain identity reset. */
+  delegation?: DelegationSelfFacts;
+}): ForkInheritanceStats | null {
   const header = {
     type: "session",
     version: 3,
@@ -192,12 +281,13 @@ export function seedSubagentSessionFile(params: {
     cwd: params.childCwd,
     parentSession: params.parentSessionFile,
   };
-  const contentLines =
-    params.mode === "fork" ? getForkContentLines(params.parentSessionFile) : [];
-  const lines = [JSON.stringify(header), ...contentLines];
+  const bootstrap = params.delegation ? forkBootstrapText(params.delegation) : FORK_IDENTITY_RESET;
+  const seeded = params.mode === "fork" ? getForkContentLines(params.parentSessionFile, bootstrap) : { lines: [], stats: null };
+  const lines = [JSON.stringify(header), ...seeded.lines];
 
   mkdirSync(dirname(params.childSessionFile), { recursive: true });
   writeFileSync(params.childSessionFile, lines.join("\n") + "\n", "utf8");
+  return seeded.stats;
 }
 
 export interface SubagentLoadout {

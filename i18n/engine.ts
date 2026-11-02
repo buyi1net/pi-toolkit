@@ -30,9 +30,31 @@ export function registerMessages(tables: MessageTables): void {
 	}
 }
 
-function format(template: string | undefined, key: string, vars?: MessageVars): string {
+const MISSING_TEXT: Record<ResolvedLanguage, string> = {
+	en: "[missing text]",
+	"zh-CN": "（文案缺失）",
+	"zh-TW": "（文案缺失）",
+};
 
-	if (template === undefined) return key;
+const warnedMissingKeys = new Set<string>();
+
+function warnMissingMessage(key: string): void {
+	if (warnedMissingKeys.has(key)) return;
+	warnedMissingKeys.add(key);
+	console.warn(`[pi-toolkit i18n] missing message key: ${key}`);
+}
+
+function translate(
+	table: MessageTable,
+	language: ResolvedLanguage,
+	key: string,
+	vars?: MessageVars,
+): string {
+	const template = table[key] ?? TABLES[language][key] ?? TABLES.en[key];
+	if (template === undefined) {
+		warnMissingMessage(key);
+		return MISSING_TEXT[language];
+	}
 	if (!vars) return template;
 	return template.replace(/\{(\w+)\}/g, (whole, name: string) =>
 		Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : whole,
@@ -88,6 +110,7 @@ export const __test__ = {
 		resolvedAutoLanguage = undefined;
 	},
 	systemLocaleCandidates,
+	tables: TABLES,
 };
 
 export function isLanguageSetting(value: unknown): value is LanguageSetting {
@@ -96,10 +119,6 @@ export function isLanguageSetting(value: unknown): value is LanguageSetting {
 
 export function hasMessage(key: string): boolean {
 	return Object.prototype.hasOwnProperty.call(TABLES.en, key);
-}
-
-export function formatMessage(template: string | undefined, key: string, vars?: MessageVars): string {
-	return format(template, key, vars);
 }
 
 export function languageLabelKey(setting: LanguageSetting): FrameworkMessageKey {
@@ -116,5 +135,12 @@ export function languageLabelKey(setting: LanguageSetting): FrameworkMessageKey 
 }
 
 export function createTranslator(getLanguage: () => ResolvedLanguage): Translator {
-	return (key, vars) => format(TABLES[getLanguage()][key], key, vars);
+	return (key, vars) => {
+		const language = getLanguage();
+		return translate(TABLES[language], language, key, vars);
+	};
+}
+
+export function createTableTranslator(table: MessageTable, language: ResolvedLanguage): Translator {
+	return (key, vars) => translate(table, language, key, vars);
 }

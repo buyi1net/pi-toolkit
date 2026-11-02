@@ -14,6 +14,19 @@ export interface SkillRegistry {
 
 const MAX_LISTED_NAMES = 40;
 
+export type SkillToolErrorCode = "not_indexed" | "no_skills" | "unknown" | "ambiguous" | "load_failed";
+
+export class SkillToolError extends Error {
+  readonly code: SkillToolErrorCode;
+  readonly detail?: string;
+
+  constructor(code: SkillToolErrorCode, message: string, detail?: string) {
+    super(message);
+    this.code = code;
+    this.detail = detail;
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -131,22 +144,28 @@ export function unknownSkillError(registry: SkillRegistry, query: string): Error
   const suggestion = suggestSkillName(registry.skills, query);
   const hint = suggestion ? ` Did you mean "${suggestion}"?` : "";
 
-  return new Error(
+  return new SkillToolError(
+    "unknown",
     `Unknown skill "${label}". Available skills: ${listed}${more} (${registry.skills.length} total).${hint}`,
+    suggestion,
   );
 }
 
 export function ambiguousSkillError(skills: readonly SkillRecord[], query: string): Error {
   const candidates = skills.map((skill) => `${skill.name} at ${skill.filePath}`).join("; ");
-  return new Error(`Skill "${query.trim()}" is ambiguous; multiple paths match: ${candidates}`);
+  return new SkillToolError(
+    "ambiguous",
+    `Skill "${query.trim()}" is ambiguous; multiple paths match: ${candidates}`,
+    candidates,
+  );
 }
 
 export function noSkillsError(): Error {
-  return new Error("No skills are available in this session.");
+  return new SkillToolError("no_skills", "No skills are available in this session.");
 }
 
 export function notIndexedError(): Error {
-  return new Error("Skills are not indexed yet; retry the skill tool on the next turn.");
+  return new SkillToolError("not_indexed", "Skills are not indexed yet; retry the skill tool on the next turn.");
 }
 
 export function suggestSkillName(skills: readonly SkillRecord[], query: string): string | undefined {

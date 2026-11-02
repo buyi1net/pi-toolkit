@@ -1,6 +1,6 @@
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { Box, Text, stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Box, Text, stripTerminalSequences, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { compactRenderText, renderToolCardCall, renderToolCardResult, formatToolCardLine, cardBackground } from "../../kit/tool-card.ts";
 import type { PublicAgentRecord, RuntimeRegistry } from "./registry.ts";
 import {
@@ -11,7 +11,7 @@ import {
   type AgentTreeRecord,
 } from "./agent-tree.ts";
 import { subagentTaskDepth } from "./launch-config.ts";
-import { subagentStatusWord, type SubagentsTranslate } from "./messages/index.ts";
+import { subagentStatusWord, summaryDisplayText, type SubagentsTranslate } from "./messages/index.ts";
 
 export interface ListAgentsToolDeps {
   registry: RuntimeRegistry;
@@ -115,13 +115,7 @@ function renderAgentTreeLines(
     const status = subagentStatusWord(agent.status, t);
     lines.push(theme.fg("toolOutput", `${prefix}${agent.task_name}`) + theme.fg("muted", ` · ${status}`));
     const indent = "  ".repeat(depth + 1);
-    const meta: string[] = [];
-    const canonical = compactRenderText(agent.canonical_task_name);
-    if (canonical) meta.push(t?.("module.subagents.tool.meta.canonical", { name: canonical }) ?? `canonical ${canonical}`);
-    const agentId = compactRenderText(agent.agent_id);
-    if (agentId) meta.push(t?.("module.subagents.tool.meta.agentId", { id: agentId }) ?? `agent id ${agentId}`);
-    if (meta.length > 0) lines.push(theme.fg("dim", truncateToWidth(`${indent}${meta.join(" · ")}`, lineWidth)));
-    const summary = stripTerminalSequences(typeof agent.summary === "string" ? agent.summary : "").trim();
+    const summary = stripTerminalSequences(summaryDisplayText(typeof agent.summary === "string" ? agent.summary : "", t)).trim();
     if (summary) {
       const wrapWidth = Math.max(1, lineWidth - indent.length);
       for (const line of wrapTextWithAnsi(summary, wrapWidth)) lines.push(theme.fg("muted", `${indent}${line}`));

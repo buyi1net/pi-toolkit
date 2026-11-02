@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, MouseRegion, Text, truncateToWidth, stripTerminalSequences, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
-import { expandedToolCardIds as expandedCardIds, formatToolCardLine, cardBackground } from "../../kit/tool-card.ts";
+import { isToolCardExpanded, toggleToolCardExpanded, formatToolCardLine, cardBackground } from "../../kit/tool-card.ts";
 import type { SessionStats } from "./session.ts";
 import { contextWindowFor, formatContextUsage, formatElapsed, formatUsageSegments } from "./display.ts";
 import { subagentsTableTranslator, type SubagentsTranslate } from "./messages/index.ts";
@@ -27,8 +27,7 @@ function finalAnswerPayload(content: string): string | null {
 function cardWithClick(key: string | null, component: Component): MouseRegion {
   return new MouseRegion(component, (event) => {
     if (key === null || event.type !== "click" || event.button !== "left") return undefined;
-    if (expandedCardIds.has(key)) expandedCardIds.delete(key);
-    else expandedCardIds.set(key, true);
+    toggleToolCardExpanded(key);
     return { handled: true };
   });
 }
@@ -64,11 +63,11 @@ export function registerSubagentRenderers(
         const lateTag = late ? ` ${t("module.subagents.widget.result.late")}` : "";
         const object = [name, stats?.model].filter(Boolean).join(" · ") || undefined;
 
-        const expanded = options.expanded || (key !== null && expandedCardIds.has(key));
+        const expanded = isToolCardExpanded(key, options.expanded);
         const contentLines = [formatToolCardLine({ title: t("module.subagents.widget.result.title"), object, status: `${status}${lateTag}` }, theme, failed)];
         const sessionFile = typeof details.sessionFile === "string" ? details.sessionFile : "";
         if (expanded && sessionFile !== "") {
-          contentLines.push(theme.fg("muted", truncateToWidth(`${t("module.subagents.widget.result.sessionFile")}: ${sessionFile}`, Math.max(1, width - 2))));
+          contentLines.push(theme.fg("muted", t("module.subagents.widget.result.sessionArchived")));
         }
 
         if (expanded) {
@@ -138,7 +137,7 @@ export function registerSubagentRenderers(
           status: headerStatus,
         }, theme, anyFailed)];
 
-        const expanded = options.expanded || expandedCardIds.has(key);
+        const expanded = isToolCardExpanded(key, options.expanded);
         if (expanded) {
           for (const entry of results) {
             const userClosed = entry.userClosed === true;
@@ -160,7 +159,7 @@ export function registerSubagentRenderers(
                 theme.fg("dim", ` · ${elapsed}`),
             );
             if (entry.sessionFile) {
-              contentLines.push(theme.fg("muted", truncateToWidth(`${t("module.subagents.widget.result.sessionFile")}: ${entry.sessionFile}`, Math.max(1, width - 2))));
+              contentLines.push(theme.fg("muted", t("module.subagents.widget.result.sessionArchived")));
             }
             const summary = typeof entry.summary === "string" ? entry.summary : "";
             if (summary) {
@@ -198,7 +197,7 @@ export function registerSubagentRenderers(
           status: stalled ? t("module.subagents.widget.status.stalled") : undefined,
         }, theme, stalled)];
 
-        const expanded = options.expanded || expandedCardIds.has(key);
+        const expanded = isToolCardExpanded(key, options.expanded);
         if (expanded) {
           contentLines.push(...lines.map((line: string) => theme.fg("dim", truncateToWidth(line, lineWidth))));
           if (overflow > 0) {
@@ -229,13 +228,13 @@ export function registerSubagentRenderers(
           status: t("module.subagents.widget.question.asks"),
         }, theme)];
 
-        const expanded = options.expanded || expandedCardIds.has(key);
+        const expanded = isToolCardExpanded(key, options.expanded);
         if (expanded) {
           const question = typeof details.question === "string" ? details.question : "";
           const questionLines = question
             .split("\n")
             .flatMap((line: string) => wrapTextWithAnsi(stripTerminalSequences(line), Math.max(1, width - 2)));
-          contentLines.push("", ...questionLines, "", theme.fg("dim", `Reply: send_message({ target: "${name}", message: "…" })`));
+          contentLines.push("", ...questionLines);
         }
 
         const box = new Box(1, 1, cardBackground(theme, "toolPendingBg"));

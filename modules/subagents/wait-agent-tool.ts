@@ -5,6 +5,7 @@ import { createParentUpdateQueue, type ParentSessionUpdate } from "./parent-upda
 import { agentTreeRootDir, readBubbledUpdateFrom } from "./agent-tree.ts";
 import type { RuntimeRegistry } from "./registry.ts";
 import type { SubagentsTranslate } from "./messages/index.ts";
+import { summaryDisplayText } from "./messages/index.ts";
 import { compactRenderText, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 
 export const WAIT_AGENT_DEFAULT_TIMEOUT_MS = 30_000;
@@ -23,6 +24,8 @@ interface WaitAgentResult {
   message: string;
   timed_out: boolean;
   reason?: "no_running_agents";
+  timeout_ms?: number;
+  requested_timeout_ms?: number;
   update: {
     update_id: string;
     update_seq: number;
@@ -35,8 +38,8 @@ interface WaitAgentResult {
   } | null;
 }
 
-function result(value: WaitAgentResult, details: Record<string, unknown> = {}) {
-  const isError = typeof details.code === "string";
+function result(value: WaitAgentResult, details: Record<string, unknown> = {}, failure?: boolean) {
+  const isError = failure ?? typeof details.code === "string";
   return {
     content: [{ type: "text" as const, text: JSON.stringify(value) }],
     details: { ...value, ...details },
@@ -68,7 +71,7 @@ function waitStatusText(status: string, t?: SubagentsTranslate): string {
     case "waiting": return t?.("module.subagents.widget.status.waiting") ?? "waiting";
     case "completed": return t?.("module.subagents.widget.result.completed") ?? "completed";
     case "failed": return t?.("module.subagents.widget.result.failed") ?? "failed";
-    case "interrupted": return t?.("module.subagents.widget.result.cancelled") ?? "cancelled";
+    case "interrupted": return t?.("module.subagents.widget.result.interrupted") ?? "interrupted";
     case "handed_off": return t?.("module.subagents.tool.wait_agent.result.status.handedOff") ?? "handed off";
     default: return status;
   }
@@ -162,7 +165,7 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
       "Wait for the next update in the current parent session queue. " +
       "This does not take a target list and a timeout never cancels a sub-agent. " +
       "Each update carries kind: message (a sub-agent sent content), status (progress such as starting or running), or terminal (final state of a run). " +
-      "timeout_ms defaults to 30000 and must be an integer from 1000 to 120000. " +
+      "timeout_ms defaults to 30000. Values outside 1000..120000 are clamped to that range and the receipt reports the value actually used. " +
       "Read the returned update to identify its agent and event kind. " +
       "update_seq is strictly increasing inside this queue but is not contiguous: a skipped number means the event was dropped by design or belongs to another queue (descendant bubbles reuse the descendant sequence), so never infer lost updates from gaps; correlate and deduplicate by agent_id plus update_id. " +
       "When no sub-agent can be waited for, the call returns immediately with update=null, timed_out=false and reason=\"no_running_agents\". " +
@@ -171,8 +174,6 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
     parameters: Type.Object({
       timeout_ms: Type.Optional(Type.Integer({
         default: WAIT_AGENT_DEFAULT_TIMEOUT_MS,
-        minimum: WAIT_AGENT_MIN_TIMEOUT_MS,
-        maximum: WAIT_AGENT_MAX_TIMEOUT_MS,
       })),
     }),
     renderCall(_args, theme, context) {
@@ -200,18 +201,13 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
       const taskName = options.expanded ? fullTaskName : collapsedRenderText(fullTaskName, 20);
       const statusCode = compactRenderText(update.status) || "unknown";
       const status = waitStatusText(statusCode, deps.t);
-      const summary = options.expanded ? compactRenderText(update.summary) : collapsedRenderText(update.summary, 28);
-      const metadata = [
-        `kind: ${compactRenderText(update.kind)}`,
-        `agent: ${compactRenderText(update.agent_id)}`,
-        `update: ${compactRenderText(update.update_id)}`,
-      ];
+      const rawSummary = summaryDisplayText(update.summary, deps.t);
+      const summary = options.expanded ? compactRenderText(rawSummary) : collapsedRenderText(rawSummary, 28);
       return renderToolCardResult(
         {
           title: deps.t?.("module.subagents.tool.wait_agent.display") ?? "Wait for subagent",
           object: taskName,
           status: `${status}${summary ? `: ${summary}` : ""}`,
-          details: metadata,
         },
         theme,
         options,
@@ -220,28 +216,19 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
     },
     async execute(_toolCallId, raw, signal, _onUpdate, ctx: ExtensionContext) {
       const requested = (raw as { timeout_ms?: unknown } | undefined)?.timeout_ms;
-      const timeoutMs = requested === undefined ? WAIT_AGENT_DEFAULT_TIMEOUT_MS : requested;
-      if (
-        typeof timeoutMs !== "number" ||
-        !Number.isInteger(timeoutMs) ||
-        timeoutMs < WAIT_AGENT_MIN_TIMEOUT_MS ||
-        timeoutMs > WAIT_AGENT_MAX_TIMEOUT_MS
-      ) {
-        return result(
-          { message: "Invalid timeout_ms.", timed_out: false, update: null },
-          {
-            code: "invalid_params",
-            details: { timeout_ms: `must be an integer from ${WAIT_AGENT_MIN_TIMEOUT_MS} to ${WAIT_AGENT_MAX_TIMEOUT_MS}` },
-          },
-        );
-      }
+      const requestedNumber = typeof requested === "number" && Number.isFinite(requested) ? Math.round(requested) : undefined;
+      const timeoutMs = requestedNumber === undefined
+        ? WAIT_AGENT_DEFAULT_TIMEOUT_MS
+        : Math.min(WAIT_AGENT_MAX_TIMEOUT_MS, Math.max(WAIT_AGENT_MIN_TIMEOUT_MS, requestedNumber));
+      const clampNote = requested !== undefined && requestedNumber !== timeoutMs ? { requested_timeout_ms: requested as number } : {};
+      const respond = (value: Omit<WaitAgentResult, "timeout_ms">, details: Record<string, unknown> = {}, failure?: boolean) =>
+        result({ ...value, timeout_ms: timeoutMs, ...clampNote }, details, failure);
 
       const sessionFile = ctx.sessionManager.getSessionFile();
       if (!sessionFile) {
-        return result(
-          { message: "A persistent parent session is required.", timed_out: false, update: null },
-          { code: "context_unavailable" },
-        );
+        return respond({
+          message: "A persistent parent session is required.", timed_out: false, update: null,
+        }, { code: "context_unavailable" });
       }
       const artifactDir = deps.getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId());
       const queue = createParentUpdateQueue(artifactDir);
@@ -249,7 +236,7 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
       const consumesBubbled = !process.env.PI_SUBAGENT_ID?.trim();
       const hasNoRunningAgents = deps.registry.list().length === 0;
       if (hasNoRunningAgents && queue.peek() === null && (!consumesBubbled || peekBubbledUpdate(queue, rootDir) === null)) {
-        return result(
+        return respond(
           {
             message: "wait_agent only waits for subagents dispatched by this session; peers messages arrive automatically, so end this turn instead of waiting.",
             timed_out: false,
@@ -257,6 +244,7 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
             update: null,
           },
           { code: "no_running_agents" },
+          false,
         );
       }
       let waitToken: string;
@@ -264,7 +252,7 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
         waitToken = queue.beginWait();
       } catch (error) {
         if ((error as { code?: string }).code === "wait_in_progress") {
-          return result(
+          return respond(
             { message: "Another wait_agent call is already in progress.", timed_out: false, update: null },
             { code: "wait_in_progress" },
           );
@@ -282,20 +270,20 @@ export function registerWaitAgentTool(pi: ExtensionAPI, deps: WaitAgentToolDeps)
         );
         if (outcome.kind === "bubbled") {
           queue.advanceBubbledOffset(outcome.nextOffset);
-          return result({
+          return respond({
             message: `Received descendant terminal update from ${outcome.update.task_name}.`,
             timed_out: false,
             update: { ...projectUpdate(outcome.update), origin: "descendant" as const },
           });
         }
         if (outcome.kind === "aborted") {
-          return result({ message: "wait_agent was cancelled by the host.", timed_out: false, update: null }, { code: "cancelled", status: "aborted" });
+          return respond({ message: "wait_agent was cancelled by the host.", timed_out: false, update: null }, { code: "cancelled", status: "aborted" });
         }
         if (outcome.kind === "timeout") {
-          return result({ message: "No parent-session update arrived before the timeout.", timed_out: true, update: null });
+          return respond({ message: "No parent-session update arrived before the timeout.", timed_out: true, update: null });
         }
         queue.acknowledge(outcome.update.agent_id, outcome.update.update_id);
-        return result({
+        return respond({
           message: `Received ${outcome.update.kind} update from ${outcome.update.task_name}.`,
           timed_out: false,
           update: projectUpdate(outcome.update),

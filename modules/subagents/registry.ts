@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { debugLog } from "./diagnostics.ts";
-import { normalizeSubagentName } from "./names.ts";
+import { normalizeSubagentName, normalizeTaskName } from "./names.ts";
 import {
   createRuntimeRecord,
   markRuntimeWaitReleased,
@@ -239,10 +239,12 @@ export function createRuntimeRegistry(): RuntimeRegistry {
       const taken = new Set(Array.from(running.values()).map((candidate) => candidate.name));
       for (const reservedName of reserved) taken.add(reservedName);
       if (extraTaken) for (const name of extraTaken) taken.add(name);
-      if (!taken.has(base)) return base;
+      // The suffix stays inside the task-name charset so the generated name is a valid handle.
+      const normalized = normalizeTaskName(base) || "task";
+      if (!taken.has(normalized)) return normalized;
       let n = 2;
-      while (taken.has(`${base}-${n}`)) n++;
-      return `${base}-${n}`;
+      while (taken.has(`${normalized}_${n}`)) n++;
+      return `${normalized}_${n}`;
     },
 
     pathFor(artifactDir) {

@@ -3,16 +3,18 @@ import {
   type ExtensionAPI,
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
-import { languageLabelKey } from "./i18n/index.ts";
+import { languageLabelKey, type Translator } from "./i18n/index.ts";
 import { ID_LANGUAGE } from "./kit/menu/items.ts";
 import { createMenuTheme } from "./kit/menu/theme.ts";
 import { applyMenuChange, ToolkitMenu } from "./kit/menu/toolkit-menu.ts";
 import { ENABLED_FIELD } from "./kit/module.ts";
 import { BUILT_IN_MODULES } from "./modules/index.ts";
-import { createToolkit, type Toolkit } from "./kit/toolkit.ts";
+import { createToolkit, ToolkitConfigError, type Toolkit, type ToolkitProblem } from "./kit/toolkit.ts";
 
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+export function formatProblemMessage(t: Translator, problem: ToolkitProblem): string {
+  const label = t(problem.kind === "config" ? "problem.config" : "problem.module");
+  const detail = problem.kind === "config" ? t(problem.messageKey, problem.vars) : problem.detail;
+  return t("problem.summary", { label, detail });
 }
 
 export default async function piToolkit(pi: ExtensionAPI): Promise<void> {
@@ -32,11 +34,7 @@ function reportProblems(pi: ExtensionAPI, toolkit: Toolkit): void {
     if (!ctx.hasUI) return;
     const t = toolkit.getTranslator();
     for (const problem of toolkit.problems) {
-      const label = t(problem.kind === "config" ? "problem.config" : "problem.module");
-      ctx.ui.notify(
-        t("problem.summary", { label, source: problem.source, detail: problem.detail }),
-        "warning",
-      );
+      ctx.ui.notify(formatProblemMessage(t, problem), "warning");
     }
   });
 }
@@ -85,7 +83,11 @@ export function registerControlCommand(pi: ExtensionAPI, toolkit: Toolkit): void
         } catch (error) {
 
           menu?.restoreValue(id);
-          ctx.ui.notify(t()("notify.saveFailed", { reason: describeError(error) }), "error");
+          if (error instanceof ToolkitConfigError) {
+            ctx.ui.notify(t()(error.messageKey, error.vars), "error");
+          } else {
+            ctx.ui.notify(t()("notify.saveFailedGeneric"), "error");
+          }
         }
       };
 

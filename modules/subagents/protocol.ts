@@ -34,14 +34,34 @@ export function createCodexV2LaunchPlanMetadata(launchPlanId: string): SubagentL
   };
 }
 
+export type ForkTurns = "all" | "none";
+
+export const DEFAULT_FORK_TURNS: ForkTurns = "all";
+
+/**
+ * fork_turns is a preference, not a constraint: unknown forms fall back to the default
+ * (all) instead of failing the spawn. Case and surrounding whitespace are tolerated, and
+ * the caller reports the final value plus whether the request had to be replaced.
+ */
+export function normalizeForkTurns(raw: unknown): { fork_turns: ForkTurns; requested: string | null; unknown: boolean } {
+  if (typeof raw !== "string") {
+    const requested = raw === undefined || raw === null ? null : String(raw);
+    return { fork_turns: DEFAULT_FORK_TURNS, requested, unknown: requested !== null };
+  }
+  const folded = raw.trim().toLowerCase();
+  if (folded === "none") return { fork_turns: "none", requested: raw, unknown: false };
+  if (folded === "all") return { fork_turns: "all", requested: raw, unknown: false };
+  return { fork_turns: DEFAULT_FORK_TURNS, requested: raw, unknown: true };
+}
+
 export interface CodexV2SpawnParams {
-  task_name: string;
+  task_name?: string;
   message: string;
   model: string;
-  reasoning_effort: string;
+  reasoning_effort?: string;
   agent_type?: string;
-  fork_turns: "all" | "none";
-  display_mode?: "auto" | "herdr" | "tmux";
+  fork_turns?: string;
+  display_mode?: string;
 }
 
 export interface ProtocolValidationError {
@@ -58,19 +78,19 @@ export function validateCodexV2SpawnParams(
     return { ok: false, errors: [{ code: "invalid_params", field: "params", message: "parameters must be an object" }] };
   }
   const input = value as Record<string, unknown>;
-  for (const field of ["message", "model", "reasoning_effort"] as const) {
+  for (const field of ["message", "model"] as const) {
     if (typeof input[field] !== "string" || input[field].trim() === "") {
       errors.push({ code: "invalid_params", field, message: `${field} is required` });
     }
   }
-  if (typeof input.task_name !== "string") {
-    errors.push({ code: "invalid_params", field: "task_name", message: "task_name is required" });
+  if (input.reasoning_effort !== undefined && typeof input.reasoning_effort !== "string") {
+    errors.push({ code: "invalid_params", field: "reasoning_effort", message: "reasoning_effort must be a string when provided" });
   }
-  if (input.fork_turns !== "all" && input.fork_turns !== "none") {
-    errors.push({ code: "invalid_params", field: "fork_turns", message: "fork_turns is required; choose none or all" });
+  if (typeof input.task_name !== "string" && input.task_name !== undefined) {
+    errors.push({ code: "invalid_params", field: "task_name", message: "task_name must be a string when provided" });
   }
-  if (input.display_mode !== undefined && !["auto", "herdr", "tmux"].includes(String(input.display_mode))) {
-    errors.push({ code: "invalid_params", field: "display_mode", message: "display_mode must be auto, herdr, or tmux" });
+  if (input.display_mode !== undefined && typeof input.display_mode !== "string") {
+    errors.push({ code: "invalid_params", field: "display_mode", message: "display_mode must be a string when provided" });
   }
   for (const field of [
     "provider", "model_name", "model_id", "tier", "thinking", "surface", "member",
@@ -80,13 +100,13 @@ export function validateCodexV2SpawnParams(
   }
   if (errors.length > 0) return { ok: false, errors };
   return { ok: true, value: {
-    task_name: input.task_name as string,
+    ...(typeof input.task_name === "string" ? { task_name: input.task_name } : {}),
     message: input.message as string,
     model: input.model as string,
-    reasoning_effort: input.reasoning_effort as string,
+    reasoning_effort: typeof input.reasoning_effort === "string" ? input.reasoning_effort : undefined,
     ...(typeof input.agent_type === "string" ? { agent_type: input.agent_type } : {}),
-    fork_turns: input.fork_turns as "all" | "none",
-    ...(input.display_mode ? { display_mode: input.display_mode as "auto" | "herdr" | "tmux" } : {}),
+    ...(typeof input.fork_turns === "string" ? { fork_turns: input.fork_turns } : {}),
+    ...(typeof input.display_mode === "string" ? { display_mode: input.display_mode } : {}),
   } };
 }
 
@@ -97,25 +117,54 @@ export interface CodexV2ModelSelectionDetails {
   supported_reasoning_effort: readonly string[];
 }
 
+export const REASONING_EFFORT_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+/**
+ * Nearest supported level, preferring the lower one on a tie (a silent upgrade costs money).
+ * Mirrors the host's clampThinkingLevel but differs on ties by design; the resulting level is
+ * passed through as the final value, so no second clamp happens downstream.
+ */
+export function clampReasoningEffort(supported: readonly string[], requested: string): string {
+  if (supported.length === 0) return requested;
+  const value = requested.trim().toLowerCase();
+  if (supported.includes(value)) return value;
+  const index = (REASONING_EFFORT_LEVELS as readonly string[]).indexOf(value);
+  if (index === -1) return supported[0]!;
+  const indexOf = (level: string) => (REASONING_EFFORT_LEVELS as readonly string[]).indexOf(level);
+  let best = supported[0]!;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const level of supported) {
+    const levelIndex = indexOf(level);
+    if (levelIndex === -1) continue;
+    const distance = Math.abs(levelIndex - index);
+    if (distance < bestDistance || (distance === bestDistance && levelIndex < indexOf(best))) {
+      best = level;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
 export function validateCodexV2ModelSelection(
   directory: ModelDirectory,
   modelReference: string,
-  reasoning_effort: string,
+  reasoning_effort?: string,
 ):
-  | { ok: true; modelReference: string; reasoning_effort: string; model: ModelDirectoryEntry }
+  | { ok: true; modelReference: string; reasoning_effort: string; model: ModelDirectoryEntry; match_note?: "folded" | "near_match"; effort_note?: string }
   | {
       ok: false;
-      code: "model_ambiguous" | "model_not_found" | "model_key_deprecated" | "reasoning_effort_unsupported";
+      code: "model_ambiguous" | "model_not_found" | "model_key_deprecated";
       message: string;
       details: CodexV2ModelSelectionDetails;
     } {
+  const requested_effort = (reasoning_effort ?? "").trim();
   const selected_model = modelReference.trim();
   if (/^mk_[a-f0-9]{32}$/i.test(selected_model)) {
     return {
       ok: false,
       code: "model_key_deprecated",
       message: "modelKey is deprecated. Use a unique model name or an exact provider/model route.",
-      details: { selected_model, candidates: [], reasoning_effort, supported_reasoning_effort: [] },
+      details: { selected_model, candidates: [], reasoning_effort: requested_effort, supported_reasoning_effort: [] },
     };
   }
   const resolved = resolveDirectoryModelReference(directory, selected_model);
@@ -127,28 +176,22 @@ export function validateCodexV2ModelSelection(
       details: {
         selected_model: resolved.problem.selected_model,
         candidates: resolved.problem.candidates,
-        reasoning_effort,
+        reasoning_effort: requested_effort,
         supported_reasoning_effort: [],
       },
     };
   }
   const model = resolved.resolution.model;
-  if (!model.reasoning_effort.includes(reasoning_effort)) {
-    return {
-      ok: false,
-      code: "reasoning_effort_unsupported",
-      message:
-        `Model "${model.provider}/${model.id}" does not support reasoning_effort "${reasoning_effort}" ` +
-        `(supported: ${model.reasoning_effort.join(", ")}).`,
-      details: {
-        selected_model,
-        candidates: [],
-        reasoning_effort,
-        supported_reasoning_effort: [...model.reasoning_effort],
-      },
-    };
-  }
-  return { ok: true, modelReference: selected_model, reasoning_effort, model };
+  // An unsupported level is clamped to the nearest supported one instead of failing the spawn.
+  const final_effort = clampReasoningEffort(model.reasoning_effort, requested_effort || "off");
+  return {
+    ok: true,
+    modelReference: selected_model,
+    reasoning_effort: final_effort,
+    model,
+    ...(resolved.resolution.match_note ? { match_note: resolved.resolution.match_note } : {}),
+    ...(requested_effort !== "" && final_effort !== requested_effort ? { effort_note: `${requested_effort} -> ${final_effort}` } : {}),
+  };
 }
 
 export function createCodexV2LaunchError(params: {
@@ -157,7 +200,7 @@ export function createCodexV2LaunchError(params: {
   selectedModel: string | null;
   reasoning_effort: string | null;
   display_mode?: "auto" | "herdr" | "tmux" | null;
-  resolved_display_mode?: "auto" | "herdr" | "tmux" | null;
+  resolved_display_mode?: "background" | "herdr" | "tmux" | null;
   underlying_error?: unknown;
 }): Record<string, unknown> {
   return {

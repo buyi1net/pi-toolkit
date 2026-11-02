@@ -1,4 +1,6 @@
+import type { Translator } from "../../../i18n/index.ts";
 import type { MessageTables } from "../../../i18n/index.ts";
+import type { TuiWarning } from "../plugin/settings-config.ts";
 
 const EN = {
   "module.tui.label": "Appearance",
@@ -7,6 +9,8 @@ const EN = {
   "module.tui.enabled.description": "When off, the editor, header, footer, working indicator and all 11 event hooks are not installed (reload to apply)",
   "module.tui.menu.label": "Appearance",
   "module.tui.menu.description": "Editor border, header, footer, spinner and status bar display",
+  "module.tui.section.appearance": "Appearance settings",
+  "module.tui.section.advanced": "Advanced settings",
   "module.tui.editor.label": "Editor border status",
   "module.tui.editor.description": "Show status segments on the editor frame",
   "module.tui.header.label": "Header",
@@ -18,6 +22,9 @@ const EN = {
   "module.tui.spinner.default": "Default animation",
   "module.tui.spinner.static": "Static dot",
   "module.tui.spinner.hidden": "Hidden",
+  "module.tui.working": "Working",
+  "module.tui.warning.notObject": "The {setting} must be an object and were ignored",
+  "module.tui.warning.badValue": "The value of {setting} is invalid; the default is used",
   "module.tui.packageOrder.notice": "pi-toolkit was moved to the front of the startup package list; restart Pi to apply",
 } satisfies Record<string, string>;
 
@@ -28,6 +35,8 @@ const ZH_CN: typeof EN = {
   "module.tui.enabled.description": "关闭后不安装编辑器、顶部信息栏、底部状态栏、工作指示动画与全部 11 个事件钩子（重载 pi 后生效）",
   "module.tui.menu.label": "外观配置",
   "module.tui.menu.description": "编辑器边框、顶部信息栏、底部状态栏与工作指示动画",
+  "module.tui.section.appearance": "外观设置节",
+  "module.tui.section.advanced": "高级设置节",
   "module.tui.editor.label": "编辑器边框状态",
   "module.tui.editor.description": "在编辑器边框上显示状态分段",
   "module.tui.header.label": "顶部信息栏",
@@ -39,6 +48,9 @@ const ZH_CN: typeof EN = {
   "module.tui.spinner.default": "默认动画",
   "module.tui.spinner.static": "静态圆点",
   "module.tui.spinner.hidden": "隐藏",
+  "module.tui.working": "工作中",
+  "module.tui.warning.notObject": "{setting}必须是对象，已忽略",
+  "module.tui.warning.badValue": "{setting}取值无效，已使用默认值",
   "module.tui.packageOrder.notice": "已将 pi-toolkit 调整到启动首位，重启 Pi 后生效",
 };
 
@@ -49,6 +61,8 @@ const ZH_TW: typeof EN = {
   "module.tui.enabled.description": "關閉後不安裝編輯器、頂部資訊列、底部狀態列、工作指示動畫與全部 11 個事件鉤子（重新載入 pi 後生效）",
   "module.tui.menu.label": "外觀配置",
   "module.tui.menu.description": "編輯器邊框、頂部資訊列、底部狀態列與工作指示動畫",
+  "module.tui.section.appearance": "外觀設定節",
+  "module.tui.section.advanced": "進階設定節",
   "module.tui.editor.label": "編輯器邊框狀態",
   "module.tui.editor.description": "在編輯器邊框上顯示狀態分段",
   "module.tui.header.label": "頂部資訊列",
@@ -60,9 +74,21 @@ const ZH_TW: typeof EN = {
   "module.tui.spinner.default": "預設動畫",
   "module.tui.spinner.static": "靜態圓點",
   "module.tui.spinner.hidden": "隱藏",
+  "module.tui.working": "工作中",
+  "module.tui.warning.notObject": "{setting}必須是物件，已忽略",
+  "module.tui.warning.badValue": "{setting}取值無效，已使用預設值",
   "module.tui.packageOrder.notice": "已將 pi-toolkit 調整到啟動首位，重新載入 Pi 後生效",
 };
 
 export const TUI_MESSAGES = { en: EN, "zh-CN": ZH_CN, "zh-TW": ZH_TW } satisfies MessageTables;
 
 export type TuiMessageKey = keyof typeof EN;
+
+const WARNING_KEYS = {
+  notObject: "module.tui.warning.notObject",
+  badValue: "module.tui.warning.badValue",
+} as const;
+
+export function formatTuiWarning(warning: TuiWarning, t: Translator): string {
+  return t(WARNING_KEYS[warning.kind], { setting: t(warning.setting) });
+}

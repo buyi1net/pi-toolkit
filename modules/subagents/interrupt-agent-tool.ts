@@ -1,14 +1,15 @@
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { compactRenderText, toolCardFailureReason, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
+import { renderToolCardCall, renderToolCardResult, toolCardFailureReason, compactRenderText } from "../../kit/tool-card.ts";
 import type { RuntimeRegistry } from "./registry.ts";
 import type { RunningSubagent } from "./types.ts";
-import { subagentStatusWord } from "./messages/index.ts";
+import { subagentFailureLabels, subagentStatusWord } from "./messages/index.ts";
 import { agentTreeRootDir, appendAgentTreeRecord, appendRunningAgentTreeRecord, readAgentTreeRecord } from "./agent-tree.ts";
 import { terminateHeadlessProcess } from "./headless.ts";
 import { sendCommandFor } from "./surface.ts";
 import {
+  lifecycleFailureFactLines,
   lifecycleQueue,
   lifecycleUpdateDetails,
   resolveLifecycleTarget,
@@ -27,6 +28,18 @@ function errorResult(code: string, message: string, details: Record<string, unkn
   const error = { code, message, ...details };
   return { content: [{ type: "text" as const, text: JSON.stringify(error) }], details: error, isError: true };
 }
+
+function processOutcomeLine(action: string, ok: unknown, t: SubagentsTranslate | undefined): string {
+  if (ok === true) {
+    return action === "close_pane"
+      ? t?.("module.subagents.tool.interrupt_agent.result.paneClosed") ?? "pane closed"
+      : t?.("module.subagents.tool.interrupt_agent.result.processTerminated") ?? "process terminated";
+  }
+  if (ok === false) return t?.("module.subagents.tool.interrupt_agent.result.processFailed") ?? "process action failed";
+  return t?.("module.subagents.tool.interrupt_agent.result.processSkipped") ?? "no process action needed";
+}
+
+import type { SubagentsTranslate } from "./messages/index.ts";
 
 function historicalStatus(deps: SendMessageToolDeps, ctx: ToolContext, agentId: string): string | null {
   const artifactDir = deps.getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId());
@@ -51,21 +64,16 @@ export function registerInterruptAgentTool(pi: ExtensionAPI, deps: InterruptAgen
     renderResult(result, options, theme, context) {
       const details = result.details as any;
       const success = details?.status === "waiting";
-      const text = result.content[0]?.type === "text" ? result.content[0].text : "";
       const t = deps.t;
       if (success) {
         const lines: string[] = [];
-        const agentId = compactRenderText(details.agent_id);
-        if (agentId) lines.push(t?.("module.subagents.tool.meta.agentId", { id: agentId }) ?? `agent id ${agentId}`);
         const from = subagentStatusWord(details.previous_status, t);
         const to = subagentStatusWord("waiting", t);
         lines.push(t?.("module.subagents.tool.interrupt_agent.result.statusLine", { from, to }) ?? `status ${from} → ${to}`);
         const control = details.process_control;
         if (control && typeof control === "object") {
           const action = compactRenderText((control as Record<string, unknown>).action) || "process";
-          const ok = (control as Record<string, unknown>).ok;
-          const outcome = ok === true ? "ok" : ok === false ? "failed" : "skipped";
-          lines.push(t?.("module.subagents.tool.interrupt_agent.result.processLine", { action, outcome }) ?? `process ${action} ${outcome}`);
+          lines.push(processOutcomeLine(action, (control as Record<string, unknown>).ok, t));
         }
         return renderToolCardResult(
           {
@@ -79,13 +87,15 @@ export function registerInterruptAgentTool(pi: ExtensionAPI, deps: InterruptAgen
           context,
         );
       }
-      const humanReason = compactRenderText(details?.message);
       return renderToolCardResult(
         {
           title: t?.("module.subagents.tool.interrupt_agent.display") ?? "Interrupt subagent",
           object: typeof details?.task_name === "string" ? details.task_name : undefined,
-          status: toolCardFailureReason(text || "Interrupt failed", details),
-          details: options.expanded && humanReason ? [humanReason] : [],
+          status: toolCardFailureReason(
+            details,
+            subagentFailureLabels(t?.("module.subagents.tool.failure.interrupt") ?? "Interrupt failed", t),
+          ),
+          details: lifecycleFailureFactLines(details, t),
         },
         theme,
         options,
@@ -107,7 +117,8 @@ export function registerInterruptAgentTool(pi: ExtensionAPI, deps: InterruptAgen
         if (record.status === "handed_off") return errorResult("agent_handed_off", `Subagent "${record.task_name}" was handed off and cannot be interrupted in this process.`, { target: params.target, agent_id: record.agent_id, task_name: record.task_name, status: "handed_off" });
         if (record.status === "completed" || record.status === "failed" || record.status === "interrupted") return errorResult("agent_already_finished", `Subagent "${record.task_name}" has already finished (${record.status}) and cannot be interrupted.`, { target: params.target, agent_id: record.agent_id, task_name: record.task_name, status: record.status });
         const previousStatus = record.status;
-        appendAgentTreeRecord(rootDir, { ...record, status: "waiting", summary: "Current round interrupted; context is preserved for follow-up." });
+        const interruptedSummary = deps.t?.("module.subagents.updates.roundInterrupted") ?? "Current round interrupted.";
+        appendAgentTreeRecord(rootDir, { ...record, status: "waiting", summary: interruptedSummary });
         const terminateProcess = deps.terminateProcess ?? terminateHeadlessProcess;
         const interruptRemoteSurface = deps.interruptRemoteSurface ?? ((kind, surface) => sendCommandFor(kind, surface, "\u0003"));
         let action: "terminate" | "interrupt_pane" | "none" = "none";
@@ -157,19 +168,20 @@ export function registerInterruptAgentTool(pi: ExtensionAPI, deps: InterruptAgen
       running.publicStatus = "waiting";
       deps.registry.markInterrupted(running.runtimeFile, running.id);
       deps.interruptCurrentRound(running);
+      const interruptedSummary = deps.t?.("module.subagents.updates.roundInterrupted") ?? "Current round interrupted.";
       deps.registry.updatePublicStatus(
         deps.registry.publicPathFor(artifactDir),
         running.id,
         "waiting",
-        "Current round interrupted; context is preserved for follow-up.",
+        interruptedSummary,
       );
-      appendRunningAgentTreeRecord({ rootDir, running, status: "waiting", summary: "Current round interrupted; context is preserved for follow-up.", artifactDir, ownerSessionId: ctx.sessionManager.getSessionId() });
+      appendRunningAgentTreeRecord({ rootDir, running, status: "waiting", summary: interruptedSummary, artifactDir, ownerSessionId: ctx.sessionManager.getSessionId() });
       const submissionId = `interrupt-${randomUUID()}`;
       const update = lifecycleQueue(deps, ctx).interruptStatus({
         agent_id: running.id,
         task_name: running.name,
         status: "waiting",
-        summary: `Current round interrupted (${submissionId}).`,
+        summary: interruptedSummary,
         update_id: submissionId,
       });
       const details = lifecycleUpdateDetails(update, target, submissionId);

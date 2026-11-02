@@ -1,8 +1,9 @@
 import type { AgentToolResult, ExtensionContext, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { cloneWithDescriptions, LEAN_HOW_TO_COMPRESS, leanPack, type Pack } from "acp-kernel";
 import { Type } from "typebox";
-import { compactSegment, renderToolCardCall, renderToolCardResult, toolCardText } from "../../../kit/tool-card.ts";
+import { compactSegment, renderToolCardCall, renderToolCardResult } from "../../../kit/tool-card.ts";
 import type { Translator } from "../../../i18n/index.ts";
+import { compressCardDetails } from "../messages/index.ts";
 import {
   EMPTY_ACP_ADVANCED_SETTINGS,
   type AcpAdvancedSettings,
@@ -105,36 +106,34 @@ export function acpCompressToolSurfaceFor(acp: AcpAdvancedSettings | undefined):
   };
 }
 
-const TOOL_LABEL = "Compress";
 const OBJECT_WIDTH = 40;
-const STATUS_WIDTH = 64;
 
 export interface AcpCompressToolDetails {
   readonly toolUnavailable?: typeof TOOL_UNAVAILABLE_REASON;
   readonly blocksCreated?: number;
   readonly tokensCompressed?: number;
+  readonly topics?: readonly string[];
 }
 
-function failureStatus(result: AgentToolResult<unknown> | undefined): string {
-  if (result && isAcpToolUnavailableDetails(result.details)) return "unavailable";
-  const firstLine = toolCardText(result ?? {}).split("\n").find((line) => line.trim()) ?? "";
-  return compactSegment(firstLine, STATUS_WIDTH) ?? "failed";
+function failureStatus(t: Translator, result: AgentToolResult<unknown> | undefined): string {
+  return result && isAcpToolUnavailableDetails(result.details)
+    ? t("module.compression.card.status.unavailable")
+    : t("module.compression.card.status.failed");
 }
 
-function compressStatusText(details: AcpCompressToolDetails | undefined): string | undefined {
+function compressStatusText(t: Translator, details: AcpCompressToolDetails | undefined): string | undefined {
   const blocks = details?.blocksCreated;
   if (typeof blocks !== "number") return undefined;
-  if (blocks <= 0) return "no blocks created";
+  if (blocks <= 0) return t("module.compression.card.compress.none");
   const tokens = details?.tokensCompressed;
-  const tokensText = typeof tokens === "number" && tokens > 0 ? `, ${tokens} tokens` : "";
-  return `${blocks} block${blocks === 1 ? "" : "s"} compressed${tokensText}`;
+  return t("module.compression.card.compress.done", { blocks, tokens: typeof tokens === "number" && tokens > 0 ? tokens : 0 });
 }
 
-function compressObject(args: { topic?: unknown; content?: unknown } | undefined): string | undefined {
+function compressObject(t: Translator, args: { topic?: unknown; content?: unknown } | undefined): string | undefined {
   const topic = compactSegment(typeof args?.topic === "string" ? args.topic : undefined, OBJECT_WIDTH);
   if (topic) return topic;
   return Array.isArray(args?.content)
-    ? (args.content.length === 1 ? "1 range" : `${args.content.length} ranges`)
+    ? t("module.compression.card.range", { count: args.content.length })
     : undefined;
 }
 
@@ -182,18 +181,22 @@ export function makeAcpCompressTool(deps: AcpCompressToolDeps): ToolDefinition<t
     parameters: CompressParams,
     renderShell: "self",
     renderCall(args, theme: Theme, context) {
-      return renderToolCardCall({ title: TOOL_LABEL, object: compressObject(args) }, theme, context);
+      return renderToolCardCall({ title: t("module.compression.tool.compress.display"), object: compressObject(t, args) }, theme, context);
     },
     renderResult(result, options, theme: Theme, context) {
-      const status = context?.isError
-        ? failureStatus(result)
-        : compressStatusText(result.details as AcpCompressToolDetails | undefined);
+      const isError = context?.isError === true;
+      const status = isError
+        ? failureStatus(t, result)
+        : compressStatusText(t, result.details as AcpCompressToolDetails | undefined);
+      const details = options.expanded && !isError
+        ? compressCardDetails(result.details as AcpCompressToolDetails | undefined, t)
+        : [];
       return renderToolCardResult(
         {
-          title: TOOL_LABEL,
-          object: compressObject(context?.args),
+          title: t("module.compression.tool.compress.display"),
+          object: compressObject(t, context?.args),
           status,
-          details: options.expanded ? toolCardText(result).split("\n") : [],
+          details,
         },
         theme,
         options,
@@ -217,7 +220,11 @@ export function makeAcpCompressTool(deps: AcpCompressToolDeps): ToolDefinition<t
           toolCallId,
         );
         text = outcome.text;
-        details = { blocksCreated: outcome.blocksCreated, tokensCompressed: outcome.tokensCompressed };
+        details = {
+          blocksCreated: outcome.blocksCreated,
+          tokensCompressed: outcome.tokensCompressed,
+          topics: outcome.topics,
+        };
 
         if (outcome.persisted) deps.clearFallback?.();
 

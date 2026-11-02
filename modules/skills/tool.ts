@@ -12,10 +12,12 @@ import {
   findSkill,
   noSkillsError,
   notIndexedError,
+  SkillToolError,
+  type SkillToolErrorCode,
   unknownSkillError,
   type SkillRegistry,
 } from "./registry.ts";
-import { formatSkillResult, listBundledFiles, readSkillFile } from "./content.ts";
+import { formatSkillResult, listBundledFiles, readSkillFile, skillCardBodyLines } from "./content.ts";
 
 export const skillParameters = Type.Object({
   skill: Type.String({
@@ -38,6 +40,8 @@ export interface SkillToolDetails {
   readonly bundledFiles: readonly string[];
   readonly truncated: boolean;
   readonly error?: string;
+  readonly errorCode?: SkillToolErrorCode;
+  readonly errorDetail?: string;
 }
 
 const DESCRIPTION = [
@@ -105,9 +109,21 @@ export function createSkillTool(
         };
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
+        const errorCode = error instanceof SkillToolError ? error.code : "load_failed";
+        const errorDetail = error instanceof SkillToolError ? error.detail : text;
         return {
           content: [{ type: "text", text }],
-          details: { name: params.skill, filePath: "", baseDir: "", lines: 0, bundledFiles: [], truncated: false, error: text },
+          details: {
+            name: params.skill,
+            filePath: "",
+            baseDir: "",
+            lines: 0,
+            bundledFiles: [],
+            truncated: false,
+            error: text,
+            errorCode,
+            errorDetail,
+          },
           isError: true,
         };
       }
@@ -125,18 +141,62 @@ export function createSkillTool(
     ) {
       const textPart = result.content.find((part) => part.type === "text");
       const fullText = textPart && textPart.type === "text" ? textPart.text : "";
-      const status = result.details.error
-        ? result.details.error
-        : t?.("module.skills.tool.skill.result.loaded", {
-            name: result.details.name,
-            lines: result.details.lines,
-          }) ?? `Skill loaded: ${result.details.name} (${result.details.lines} lines)`;
+      const status = skillCardStatus(t, result.details);
       return renderToolCardResult(
-        { title: t?.("module.skills.tool.skill.display") ?? "skill", object: result.details.name, status, details: options.expanded ? fullText.split("\n") : [] },
+        {
+          title: t?.("module.skills.tool.skill.display") ?? "skill",
+          object: result.details.name,
+          status,
+          details: options.expanded ? skillCardDetailLines(t, result.details, fullText) : [],
+        },
         theme,
         options,
         context,
       );
     },
   };
+}
+
+function skillCardStatus(t: Translator | undefined, details: SkillToolDetails): string | undefined {
+  if (details.error === undefined) {
+    return t?.("module.skills.tool.skill.result.loaded", {
+      name: details.name,
+      lines: details.lines,
+    }) ?? `Skill loaded: ${details.name} (${details.lines} lines)`;
+  }
+  if (t === undefined) return details.error;
+  switch (details.errorCode) {
+    case "not_indexed":
+      return t("module.skills.tool.skill.result.notIndexed");
+    case "no_skills":
+      return t("module.skills.tool.skill.result.noSkills");
+    case "unknown":
+      return t("module.skills.tool.skill.result.unknown", { name: details.name });
+    case "ambiguous":
+      return t("module.skills.tool.skill.result.ambiguous", { name: details.name });
+    default:
+      return t("module.skills.tool.skill.result.loadFailed");
+  }
+}
+
+function skillCardDetailLines(t: Translator | undefined, details: SkillToolDetails, fullText: string): string[] {
+  if (details.error !== undefined) {
+    switch (details.errorCode) {
+      case "unknown":
+        return details.errorDetail && t !== undefined
+          ? [t("module.skills.tool.skill.result.suggestion", { suggestion: details.errorDetail })]
+          : [];
+      case "ambiguous":
+        return (details.errorDetail ?? "").split("; ").filter((line) => line !== "");
+      case "load_failed":
+        return details.errorDetail ? [details.errorDetail] : [];
+      default:
+        return [];
+    }
+  }
+  const lines = skillCardBodyLines(fullText);
+  if (details.truncated && t !== undefined) {
+    lines.push(t("module.skills.tool.skill.result.truncatedBody", { path: details.filePath }));
+  }
+  return lines;
 }

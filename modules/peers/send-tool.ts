@@ -11,7 +11,7 @@ import {
   type PeersTargetStatusSnapshot,
 } from "./messaging.ts";
 import { PEERS_IDLE_SUBSCRIPTION_DEFAULT_TTL_MS } from "./subscriptions.ts";
-import { PEERS_SEND_REPLY_HINT, type PeersTranslate } from "./messages/index.ts";
+import { PEERS_SEND_REPLY_HINT, peersReasonLabel, type PeersTranslate } from "./messages/index.ts";
 
 export interface PeersSendToolDeps extends PeersSendDeps {
 
@@ -72,15 +72,32 @@ function sendRenderStatus(
   const base = details?.result === "accepted"
     ? (t?.("module.peers.tool.send.result.submitted", { target }) ?? "Peer endpoint accepted")
     : (() => {
-        const reason = typeof details?.reason === "string"
-          ? describePeersReason(details.reason as Parameters<typeof describePeersReason>[0])
-          : compactRenderText(details?.detail) || compactRenderText(details?.result) || "delivery failed";
-        return t?.("module.peers.tool.send.result.failed", { reason }) ?? `Delivery failed: ${reason}`;
+        const reason = peersReasonLabel(details?.reason, t);
+        return reason === null
+          ? (t?.("module.peers.tool.send.result.failedUnknown") ?? "Delivery failed")
+          : (t?.("module.peers.tool.send.result.failed", { reason }) ?? `Delivery failed: ${reason}`);
       })();
+  const duplicate = details?.result === "accepted" && details.reason === "duplicate-message"
+    ? ` · ${t?.("module.peers.tool.send.result.duplicateTag") ?? "Duplicate message, not delivered again"}`
+    : "";
   const subscribed = details?.subscription?.result === "accepted"
     ? ` · ${t?.("module.peers.tool.send.result.subscribed") ?? "idle notice subscribed"}`
     : "";
-  return `${base}${subscribed}`;
+  return `${base}${duplicate}${subscribed}`;
+}
+
+function subscriptionCardLine(report: Partial<PeersIdleSubscribeReport>, t?: PeersTranslate): string {
+  if (report.result === "accepted") {
+    if (report.state === "fired") {
+      return t?.("module.peers.tool.send.result.subscribedFired") ?? "Target already idle; notice delivered to this session";
+    }
+    const time = typeof report.expiresAt === "number" ? new Date(report.expiresAt).toLocaleString() : "";
+    return time !== ""
+      ? (t?.("module.peers.tool.send.result.subscribedUntil", { time }) ?? `Idle notice subscribed; expires ${time}`)
+      : (t?.("module.peers.tool.send.result.subscribed") ?? "idle notice subscribed");
+  }
+  const reason = peersReasonLabel(report.reason, t) ?? (t?.("module.peers.tool.notify.result.failedUnknown") ?? "Subscription failed");
+  return t?.("module.peers.tool.send.result.subscribeFailed", { reason }) ?? `Idle notice could not be set up: ${reason}`;
 }
 
 async function subscribeAfterSend(
@@ -188,15 +205,10 @@ export function registerPeersSendTool(pi: ExtensionAPI, deps: PeersSendToolDeps)
       const target = compactRenderText(details?.target) || compactRenderText(context?.args?.target) || "(target)";
       const title = deps.t?.("module.peers.tool.send.display", { target }) ?? "Message";
       const body = sendBodyLines(context?.args?.body);
+      const subscription = (details as { subscription?: Partial<PeersIdleSubscribeReport> } | undefined)?.subscription;
       const expandedDetails = options.expanded
         ? [
-            ...(details?.result ? [`result: ${details.result}`] : []),
-            ...(details?.reason ? [`reason: ${details.reason}`] : []),
-            ...(details?.stage ? [`stage: ${details.stage}`] : []),
-            ...(details?.result === "accepted" ? [deps.t?.("module.peers.tool.send.result.replyHint") ?? PEERS_SEND_REPLY_HINT] : []),
-            ...(typeof (details as { subscription?: { detail?: unknown } } | undefined)?.subscription?.detail === "string"
-              ? [(details as { subscription: { detail: string } }).subscription.detail]
-              : []),
+            ...(subscription !== undefined ? [subscriptionCardLine(subscription, deps.t)] : []),
             ...body,
           ]
         : [];

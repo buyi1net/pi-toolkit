@@ -7,14 +7,13 @@ import {
 import { PEERS_MODULE_ID } from "./api.ts";
 import { registerPeers, type PeersModuleOptions } from "./mod.ts";
 
-export { PEERS_DISCOVERY_SERVICE_NAME, PEERS_MODULE_ID } from "./api.ts";
+export { PEERS_MODULE_ID } from "./api.ts";
 export type {
   PeerActivity,
   PeerLiveEntry,
   PeerLiveness,
   PeerOfflineEntry,
   PeersDiagnostic,
-  PeersDiscoveryService,
   PeersDiscoverySnapshot,
   PeersScanFn,
   PeersScanResult,

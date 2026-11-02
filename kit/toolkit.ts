@@ -1,12 +1,18 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { assembleModules, resolveModuleConfig, type ActiveModule } from "./assembler.ts";
-import { getToolkitConfigPath, loadToolkitConfig, type ToolkitConfig } from "./config.ts";
+import {
+  getToolkitConfigPath,
+  loadToolkitConfig,
+  type ToolkitConfig,
+  type ToolkitConfigProblem,
+} from "./config.ts";
 import { createConfigTransaction, type ConfigWriteHooks } from "./config-transaction.ts";
 import {
   createTranslator,
   isLanguageSetting,
   resolveLanguage,
   type LanguageSetting,
+  type MessageVars,
   type ResolvedLanguage,
   type Translator,
 } from "../i18n/index.ts";
@@ -18,12 +24,29 @@ import {
 } from "./module.ts";
 import { createServiceRegistry, type ServiceRegistry } from "./services.ts";
 
-export interface ToolkitProblem {
-  readonly kind: "config" | "module";
+export type ToolkitProblem =
+  | {
+    readonly kind: "config";
+    readonly source: string;
+    readonly messageKey: string;
+    readonly vars?: MessageVars;
+  }
+  | {
+    readonly kind: "module";
+    readonly source: string;
+    readonly detail: string;
+  };
 
-  readonly source: string;
+export class ToolkitConfigError extends Error {
+  readonly messageKey: string;
+  readonly vars?: MessageVars;
 
-  readonly detail: string;
+  constructor(messageKey: string, vars?: MessageVars) {
+    super(messageKey);
+    this.name = "ToolkitConfigError";
+    this.messageKey = messageKey;
+    this.vars = vars;
+  }
 }
 
 export interface Toolkit {
@@ -62,10 +85,11 @@ export async function createToolkit(options: CreateToolkitOptions): Promise<Tool
   const loaded = await loadToolkitConfig(configPath);
   let config = loaded.config;
 
-  const problems: ToolkitProblem[] = loaded.problems.map((detail) => ({
+  const problems: ToolkitProblem[] = loaded.problems.map((problem: ToolkitConfigProblem) => ({
     kind: "config" as const,
     source: configPath,
-    detail,
+    messageKey: problem.messageKey,
+    ...(problem.vars ? { vars: problem.vars } : {}),
   }));
 
   const services = createServiceRegistry();
@@ -100,12 +124,16 @@ export async function createToolkit(options: CreateToolkitOptions): Promise<Tool
     value: ModuleConfigScalar,
   ): Promise<ModuleConfigScalar> => {
     const definition = getModuleDefinition(moduleId);
-    if (!definition) throw new Error(`未知模块：${moduleId}`);
+    if (!definition) throw new Error(`unknown module: ${moduleId}`);
     const schemaField = definition.configSchema[field];
-    if (!schemaField) throw new Error(`未知配置字段：${moduleId}.${field}`);
+    if (!schemaField) throw new Error(`unknown config field: ${moduleId}.${field}`);
     const normalized = normalizeConfigValue(schemaField, value);
     if (normalized === undefined) {
-      throw new Error(`配置字段 ${moduleId}.${field} 不接受取值 ${JSON.stringify(value)}`);
+      throw new ToolkitConfigError("error.fieldValueRejected", {
+        module: moduleId,
+        field,
+        value: JSON.stringify(value),
+      });
     }
     const section = { ...(config.modules[moduleId] ?? {}), [field]: normalized };
     await saveModuleSection(moduleId, section);
@@ -113,7 +141,7 @@ export async function createToolkit(options: CreateToolkitOptions): Promise<Tool
   };
 
   const setLanguage = async (value: string): Promise<LanguageSetting> => {
-    if (!isLanguageSetting(value)) throw new Error(`未知语言设置：${value}`);
+    if (!isLanguageSetting(value)) throw new Error(`unknown language setting: ${value}`);
     await configTransaction.write({ language: value });
     return config.language;
   };

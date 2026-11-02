@@ -1,4 +1,6 @@
+import type { Translator } from "../../../i18n/index.ts";
 import type { MessageTables } from "../../../i18n/index.ts";
+import type { ProviderWarning } from "../credentials.ts";
 
 const EN = {
   "module.providers.label": "Provider usage",
@@ -17,6 +19,16 @@ const EN = {
   "module.providers.providerAccess.description": "Read-only: kept in the standalone file",
   "module.providers.providerAccess.configured": "Configured",
   "module.providers.providerAccess.missing": "Not configured",
+  "module.providers.warning.readFailed":
+    "The provider usage settings could not be read (check the file's read permission); provider queries run unconfigured this session",
+  "module.providers.warning.parseFailed":
+    "The provider usage settings could not be parsed; provider queries run unconfigured this session",
+  "module.providers.warning.notObject":
+    "The provider usage settings are malformed; provider queries run unconfigured this session",
+  "module.providers.warning.badGithubDomain":
+    "The GitHub domain in the provider usage settings is not a valid hostname and was ignored",
+  "module.providers.warning.invalid":
+    "Part of the provider usage settings is invalid and was ignored; check the credentials and query entries",
 } satisfies Record<string, string>;
 
 const ZH_CN: typeof EN = {
@@ -36,6 +48,16 @@ const ZH_CN: typeof EN = {
   "module.providers.providerAccess.description": "只读：保存在独立文件",
   "module.providers.providerAccess.configured": "已配置",
   "module.providers.providerAccess.missing": "未配置",
+  "module.providers.warning.readFailed":
+    "供应商用量配置读取失败（请检查文件读取权限），本次供应商查询按未配置处理",
+  "module.providers.warning.parseFailed":
+    "供应商用量配置无法解析，本次供应商查询按未配置处理",
+  "module.providers.warning.notObject":
+    "供应商用量配置格式不正确，本次供应商查询按未配置处理",
+  "module.providers.warning.badGithubDomain":
+    "供应商用量配置中的 GitHub 域名不是有效主机名，已忽略",
+  "module.providers.warning.invalid":
+    "供应商用量配置中有内容无效，已忽略该部分；请检查其中的凭据与查询条目",
 };
 
 const ZH_TW: typeof EN = {
@@ -55,8 +77,30 @@ const ZH_TW: typeof EN = {
   "module.providers.providerAccess.description": "唯讀：保存在獨立檔案",
   "module.providers.providerAccess.configured": "已設定",
   "module.providers.providerAccess.missing": "未設定",
+  "module.providers.warning.readFailed":
+    "供應商用量配置讀取失敗（請檢查檔案讀取權限），本次供應商查詢按未配置處理",
+  "module.providers.warning.parseFailed":
+    "供應商用量配置無法解析，本次供應商查詢按未配置處理",
+  "module.providers.warning.notObject":
+    "供應商用量配置格式不正確，本次供應商查詢按未配置處理",
+  "module.providers.warning.badGithubDomain":
+    "供應商用量配置中的 GitHub 網域不是有效主機名稱，已忽略",
+  "module.providers.warning.invalid":
+    "供應商用量配置中有內容無效，已忽略該部分；請檢查其中的憑證與查詢條目",
 };
 
 export const PROVIDERS_MESSAGES = { en: EN, "zh-CN": ZH_CN, "zh-TW": ZH_TW } satisfies MessageTables;
 
 export type ProvidersMessageKey = keyof typeof EN;
+
+const WARNING_KEYS: Record<ProviderWarning["kind"], ProvidersMessageKey> = {
+  readFailed: "module.providers.warning.readFailed",
+  parseFailed: "module.providers.warning.parseFailed",
+  notObject: "module.providers.warning.notObject",
+  badGithubDomain: "module.providers.warning.badGithubDomain",
+  invalid: "module.providers.warning.invalid",
+};
+
+export function formatProviderWarning(warning: ProviderWarning, t: Translator): string {
+  return t(WARNING_KEYS[warning.kind]);
+}

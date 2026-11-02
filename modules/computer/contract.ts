@@ -222,7 +222,7 @@ export interface ComputerError {
 }
 
 export type ComputerResult<T> =
-  | { readonly ok: true; readonly data: T }
+  | { readonly ok: true; readonly data: T; readonly logWriteError?: string }
   | { readonly ok: false; readonly error: ComputerError };
 
 export const COMPUTER_ACTIONS = [

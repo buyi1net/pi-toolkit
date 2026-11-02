@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { isLanguageSetting, type LanguageSetting } from "../i18n/index.ts";
+import { isLanguageSetting, type LanguageSetting, type MessageVars } from "../i18n/index.ts";
 import type { ModuleConfigRecord, ModuleConfigValue } from "./module.ts";
 
 export const TOOLKIT_CONFIG_FILENAME = "pi-toolkit.json";
@@ -23,9 +23,14 @@ export interface ToolkitConfigUpdate {
 export interface LoadedToolkitConfig {
   readonly config: ToolkitConfig;
 
-  readonly problems: readonly string[];
+  readonly problems: readonly ToolkitConfigProblem[];
 
   readonly migrated: boolean;
+}
+
+export interface ToolkitConfigProblem {
+  readonly messageKey: string;
+  readonly vars?: MessageVars;
 }
 
 export interface ParsedToolkitConfig {
@@ -57,18 +62,16 @@ function isConfigValue(value: unknown): value is ModuleConfigValue {
   return false;
 }
 
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export function parseToolkitConfig(
   raw: Record<string, unknown>,
-  source: string,
-  problems: string[],
+  problems: ToolkitConfigProblem[],
 ): ParsedToolkitConfig {
   const version = typeof raw.schemaVersion === "number" ? raw.schemaVersion : TOOLKIT_SCHEMA_VERSION;
   if (version > TOOLKIT_SCHEMA_VERSION) {
-    problems.push(`${source}: schemaVersion ${version} 高于当前支持的 ${TOOLKIT_SCHEMA_VERSION}，未识别的内容会原样保留`);
+    problems.push({
+      messageKey: "problem.schemaTooNew",
+      vars: { version, supported: TOOLKIT_SCHEMA_VERSION },
+    });
   }
 
   let language: LanguageSetting = "auto";
@@ -76,17 +79,17 @@ export function parseToolkitConfig(
     if (isLanguageSetting(raw.language)) {
       language = raw.language;
     } else {
-      problems.push(`${source}: language 取值无效，已回退为 auto`);
+      problems.push({ messageKey: "problem.languageInvalid" });
     }
   }
 
   const modules: Record<string, ModuleConfigRecord> = {};
   if (raw.modules !== undefined && !isRecord(raw.modules)) {
-    problems.push(`${source}: modules 不是对象，已忽略`);
+    problems.push({ messageKey: "problem.modulesNotObject" });
   } else if (isRecord(raw.modules)) {
     for (const [moduleId, section] of Object.entries(raw.modules)) {
       if (!isRecord(section)) {
-        problems.push(`${source}: 模块 ${moduleId} 的配置节不是对象，已忽略`);
+        problems.push({ messageKey: "problem.sectionNotObject", vars: { module: moduleId } });
         continue;
       }
       const record: ModuleConfigRecord = {};
@@ -94,7 +97,7 @@ export function parseToolkitConfig(
         if (isConfigValue(value)) {
           record[key] = value;
         } else {
-          problems.push(`${source}: 模块 ${moduleId} 的字段 ${key} 取值类型不受支持，已忽略`);
+          problems.push({ messageKey: "problem.fieldUnsupported", vars: { module: moduleId, field: key } });
         }
       }
       modules[moduleId] = record;
@@ -115,13 +118,13 @@ export async function loadToolkitConfig(
   path: string,
   options: LoadToolkitConfigOptions = {},
 ): Promise<LoadedToolkitConfig> {
-  const problems: string[] = [];
+  const problems: ToolkitConfigProblem[] = [];
   let text: string;
   try {
     text = await readFile(path, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      problems.push(`${path}: 读取失败（${describeError(error)}），本次使用默认配置`);
+      problems.push({ messageKey: "problem.readFailed" });
     }
     return { config: DEFAULT_TOOLKIT_CONFIG, problems, migrated: false };
   }
@@ -129,21 +132,21 @@ export async function loadToolkitConfig(
   try {
     const parsed: unknown = JSON.parse(text);
     if (!isRecord(parsed)) {
-      problems.push(`${path}: 顶层不是对象，本次使用默认配置`);
+      problems.push({ messageKey: "problem.topLevelNotObject" });
       return { config: DEFAULT_TOOLKIT_CONFIG, problems, migrated: false };
     }
-    const result = parseToolkitConfig(parsed, path, problems);
+    const result = parseToolkitConfig(parsed, problems);
     if (result.migrated && options.writeBackLegacyMigration !== false) {
 
       try {
         await saveToolkitConfig(path, { language: result.config.language, modules: result.config.modules });
-      } catch (error) {
-        problems.push(`${path}: 旧配置迁移写回失败（${describeError(error)}），本次仍按迁移后的取值工作`);
+      } catch {
+        problems.push({ messageKey: "problem.migrationWriteBackFailed" });
       }
     }
     return { config: result.config, problems, migrated: result.migrated };
-  } catch (error) {
-    problems.push(`${path}: 解析失败（${describeError(error)}），本次使用默认配置`);
+  } catch {
+    problems.push({ messageKey: "problem.parseFailed" });
     return { config: DEFAULT_TOOLKIT_CONFIG, problems, migrated: false };
   }
 }
@@ -270,7 +273,7 @@ export async function saveToolkitConfig(path: string, update: ToolkitConfigUpdat
   if (isRecord(mergedModules)) migrateLegacySections(mergedModules);
   merged.schemaVersion = TOOLKIT_SCHEMA_VERSION;
 
-  const { config } = parseToolkitConfig(merged, path, []);
+  const { config } = parseToolkitConfig(merged, []);
   if (existing) {
     await atomicWrite(`${path}.bak`, `${JSON.stringify(cleanExisting, null, 2)}\n`);
   }

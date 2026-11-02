@@ -16,7 +16,7 @@ import {
 import { subagentTaskDepth } from "./launch-config.ts";
 import { terminateHeadlessProcess } from "./headless.ts";
 import { adoptSurfaceFor, closeSurfaceFor } from "./surface.ts";
-import { subagentStatusWord } from "./messages/index.ts";
+import { subagentFailureLabels, subagentStatusWord } from "./messages/index.ts";
 import { compactRenderText, renderToolCardCall, renderToolCardResult, toolCardFailureReason } from "../../kit/tool-card.ts";
 import {
   lifecycleQueue,
@@ -79,7 +79,6 @@ export function registerCloseAgentTool(pi: ExtensionAPI, deps: CloseAgentToolDep
         closed_descendants?: unknown;
         process_control?: unknown;
       };
-      const text = result.content[0]?.type === "text" ? result.content[0].text : "Close failed";
       const success = details.status === "closed";
       const descendants = Array.isArray(details.closed_descendants) ? details.closed_descendants as Array<Record<string, unknown>> : [];
       const names = descendants.map((entry) => compactRenderText(entry.task_name)).filter(Boolean);
@@ -106,14 +105,13 @@ export function registerCloseAgentTool(pi: ExtensionAPI, deps: CloseAgentToolDep
             ?? `${name} — previous status: ${subagentStatusWord(status, deps.t)}`
           : name);
       }
-      if (Array.isArray(details.process_control)) {
-        for (const control of details.process_control as Array<Record<string, unknown>>) {
-          const agentId = compactRenderText(control.agent_id);
-          const action = compactRenderText(control.action) || "process";
-          const outcome = control.ok === true ? "ok" : control.ok === false ? "failed" : "skipped";
-          lines.push(`process ${agentId}: ${action} ${outcome}`);
-        }
-      }
+      const controls = Array.isArray(details.process_control) ? details.process_control as Array<Record<string, unknown>> : [];
+      const terminated = controls.filter((control) => control.action === "terminate" && control.ok === true).length;
+      const panesClosed = controls.filter((control) => control.action !== "terminate" && control.ok === true).length;
+      const failed = controls.filter((control) => control.ok === false).length;
+      if (terminated > 0) lines.push(deps.t?.("module.subagents.tool.close_agent.result.processTerminated", { count: String(terminated) }) ?? `terminated ${terminated} process(es)`);
+      if (panesClosed > 0) lines.push(deps.t?.("module.subagents.tool.close_agent.result.paneClosed", { count: String(panesClosed) }) ?? `closed ${panesClosed} pane(s)`);
+      if (failed > 0) lines.push(deps.t?.("module.subagents.tool.close_agent.result.closeFailed", { count: String(failed) }) ?? `${failed} failed to close`);
       return renderToolCardResult(
         {
           title: deps.t?.("module.subagents.tool.close_agent.display") ?? "Close subagent",
@@ -122,7 +120,10 @@ export function registerCloseAgentTool(pi: ExtensionAPI, deps: CloseAgentToolDep
             ? details.already_closed === true
               ? deps.t?.("module.subagents.tool.close_agent.result.alreadyClosed") ?? "Already closed"
               : deps.t?.("module.subagents.tool.close_agent.result.closed") ?? "Closed"
-            : toolCardFailureReason(text, details),
+            : toolCardFailureReason(
+                details,
+                subagentFailureLabels(deps.t?.("module.subagents.tool.failure.close") ?? "Close failed", deps.t),
+              ),
           details: options.expanded ? lines : [],
         },
         theme,

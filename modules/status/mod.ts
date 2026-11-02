@@ -25,6 +25,7 @@ import {
 	statusSettingsFromSection,
 	type ResolvedStatusSettings,
 } from "./status-config.ts";
+import { formatStatusWarning } from "./messages/index.ts";
 import { TurnTelemetryController, readLatestTurnDuration } from "./turn-telemetry.ts";
 import { TurnTimerController } from "./turn-timer.ts";
 
@@ -81,6 +82,7 @@ export function registerStatus(
 	let runtimeStatus: RuntimeStatusController | undefined;
 	let timer: TurnTimerController | undefined;
 	let compaction: AutoCompactionStatusController | undefined;
+	let reportedWarningSignature: string | undefined;
 
 	const currentConfig = () => context.getConfig();
 	const currentSettings = (): ResolvedStatusSettings => statusSettingsFromSection(currentConfig(), env);
@@ -196,6 +198,18 @@ export function registerStatus(
 	context.pi.on("session_start", (_event, ctx) => {
 		sessionContext = ctx;
 		startControllers(ctx);
+		if (!ctx.hasUI) return;
+		const { warnings } = readStatusSection(currentConfig());
+		if (warnings.length === 0) {
+			reportedWarningSignature = undefined;
+			return;
+		}
+		const signature = JSON.stringify(warnings);
+		if (signature === reportedWarningSignature) return;
+		reportedWarningSignature = signature;
+		for (const warning of warnings) {
+			ctx.ui.notify(formatStatusWarning(warning, context.t), "warning");
+		}
 	});
 
 	context.pi.on("session_shutdown", () => {

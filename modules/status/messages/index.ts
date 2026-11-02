@@ -1,4 +1,6 @@
+import type { Translator } from "../../../i18n/index.ts";
 import type { MessageTables } from "../../../i18n/index.ts";
+import type { StatusWarning } from "../status-config.ts";
 
 const EN = {
   "module.status.label": "Workspace & session status",
@@ -12,6 +14,9 @@ const EN = {
   "module.status.preset.full": "Full",
   "module.status.telemetry.label": "Reply telemetry",
   "module.status.telemetry.description": "Record per-reply timing and token usage entries",
+  "module.status.segments.label": "Status segments",
+  "module.status.warning.badValue": "The value of {setting} is invalid; the default is used",
+  "module.status.warning.badSegmentValue": "Status segments contain an invalid value \"{value}\"; it was ignored",
 } satisfies Record<string, string>;
 
 const ZH_CN: typeof EN = {
@@ -26,6 +31,9 @@ const ZH_CN: typeof EN = {
   "module.status.preset.full": "完整",
   "module.status.telemetry.label": "回复遥测",
   "module.status.telemetry.description": "记录每次回复的耗时与 token 用量条目",
+  "module.status.segments.label": "状态分段",
+  "module.status.warning.badValue": "{setting}取值无效，已使用默认值",
+  "module.status.warning.badSegmentValue": "状态分段包含无效值「{value}」，已忽略",
 };
 
 const ZH_TW: typeof EN = {
@@ -40,8 +48,22 @@ const ZH_TW: typeof EN = {
   "module.status.preset.full": "完整",
   "module.status.telemetry.label": "回覆遙測",
   "module.status.telemetry.description": "記錄每次回覆的耗時與 token 用量條目",
+  "module.status.segments.label": "狀態分段",
+  "module.status.warning.badValue": "{setting}取值無效，已使用預設值",
+  "module.status.warning.badSegmentValue": "狀態分段包含無效值「{value}」，已忽略",
 };
 
 export const STATUS_MESSAGES = { en: EN, "zh-CN": ZH_CN, "zh-TW": ZH_TW } satisfies MessageTables;
 
 export type StatusMessageKey = keyof typeof EN;
+
+const WARNING_KEYS = {
+  badValue: "module.status.warning.badValue",
+  badSegmentValue: "module.status.warning.badSegmentValue",
+} as const;
+
+export function formatStatusWarning(warning: StatusWarning, t: Translator): string {
+  return warning.kind === "badSegmentValue"
+    ? t(WARNING_KEYS[warning.kind], { value: warning.value })
+    : t(WARNING_KEYS[warning.kind], { setting: t(warning.setting) });
+}

@@ -39,6 +39,7 @@ import type {
 	StatusAppearance,
 } from "./status-sources.ts";
 import type { Translator } from "../../../i18n/index.ts";
+import { formatTuiWarning } from "../messages/index.ts";
 import type { ServiceRegistry } from "../../../kit/services.ts";
 import { PROVIDERS_USAGE_SERVICE_NAME, type ProvidersUsageService } from "../../providers/api.ts";
 import {
@@ -60,6 +61,7 @@ import {
 } from "../../status/api.ts";
 
 export function formatWorkingMessage(
+	t: Translator | undefined,
 	tokensPerSecond: number | null | undefined,
 	elapsedMs?: number,
 ): string {
@@ -69,7 +71,8 @@ export function formatWorkingMessage(
 	const elapsed = elapsedMs !== undefined && Number.isFinite(elapsedMs) && elapsedMs >= 0
 		? ` · ${formatElapsed(elapsedMs)}`
 		: "";
-	return `Working${elapsed} · ${speed.toString()} tok/s`;
+	const label = t?.("module.tui.working") ?? "Working";
+	return `${label}${elapsed} · ${speed.toString()} tok/s`;
 }
 
 export interface PiTuiPluginDependencies {
@@ -159,7 +162,7 @@ export function registerPiTuiLifecycle(
 	): void => {
 		if (!ctx) return;
 		const elapsedMs = timerSnapshot?.state === "working" ? timerSnapshot.elapsedMs : undefined;
-		ctx.ui.setWorkingMessage?.(formatWorkingMessage(statusTelemetry?.liveSnapshot()?.tokensPerSecond, elapsedMs));
+		ctx.ui.setWorkingMessage?.(formatWorkingMessage(t, statusTelemetry?.liveSnapshot()?.tokensPerSecond, elapsedMs));
 	};
 	const requestStatusRender = () => {
 		if (transitionGate?.isHolding()) return;
@@ -529,9 +532,12 @@ export function registerPiTuiLifecycle(
 			installedTui?.requestRender(true);
 			return;
 		}
-		if (!configWarningsShown && loadedConfig.warnings.length > 0) {
+		if (!configWarningsShown && t && loadedConfig.warnings.length > 0) {
 			configWarningsShown = true;
-			ctx.ui.notify(loadedConfig.warnings.join("\n"), "warning");
+			ctx.ui.notify(
+				loadedConfig.warnings.map((warning) => formatTuiWarning(warning, t)).join("\n"),
+				"warning",
+			);
 		}
 		installUi(ctx);
 	});

@@ -33,10 +33,12 @@ import {
   readSubagentLoadout,
   resolveNameInRegistry,
   seedSubagentSessionFile,
+  delegationFactsLine,
   writeAnchoredLoadout,
   writeSubagentLoadout,
   SUBAGENT_LOADOUT_VERSION,
   type AnchoredSubagentLoadout,
+  type ForkInheritanceStats,
   type SubagentLoadout,
 } from "./session.ts";
 import {
@@ -51,6 +53,7 @@ import {
   resolveSubagentPaths,
   resolveSurfaceChoice,
   canGrantSpawningToChild,
+  subagentTaskDepth,
   validateAgentLifecycleConfig,
 } from "./launch-config.ts";
 import { loadTierRouteConfig, normalizeTier, resolveTierPoolForParams, isThinkingLevel, modelOwnThinkingSuffix, THINKING_LEVELS, type ModelTier, type ThinkingLevel, type TierRouteInjectedSource, type TierConfigLoadResult } from "./routing.ts";
@@ -124,6 +127,9 @@ export interface StartedRun {
   signal: AbortSignal;
 
   watch: Promise<SubagentResult | void>;
+
+  /** Present for a forked run: what the seed actually inherited. */
+  inherited?: ForkInheritanceStats;
 }
 
 export interface ResumeStartedRun extends StartedRun {
@@ -931,12 +937,16 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
     splitEnv.PI_SUBAGENT_SESSION = subagentSessionFile;
     splitEnv.PI_SUBAGENT_ID = id;
     splitEnv.PI_SUBAGENT_ACTIVITY_FILE = activityFile;
+    const parentCanonical = process.env.PI_SUBAGENT_TASK_PATH?.trim() || "/root";
+    const delegation = { depth: subagentTaskDepth() + 1, parentCanonical, grantsSpawning: grantSpawning };
+    let inherited: ForkInheritanceStats | null = null;
     if (launchBehavior.seededSessionMode) {
-      seedSubagentSessionFile({
+      inherited = seedSubagentSessionFile({
         mode: launchBehavior.seededSessionMode,
         parentSessionFile: sessionFile,
         childSessionFile: subagentSessionFile,
         childCwd: targetCwdForSession,
+        delegation,
       });
     }
 
@@ -964,6 +974,8 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
           taskName: splitEnv.PI_SUBAGENT_TASK_PATH ?? `/${surfaceName}`,
           sender: process.env.PI_SUBAGENT_TASK_PATH ?? "/root",
           task: fullTask,
+          // Without a seed the child only ever sees this envelope, so the facts live here.
+          ...(launchBehavior.seededSessionMode ? {} : { note: delegationFactsLine(delegation) }),
         })
       : fullTask;
 
@@ -1182,7 +1194,9 @@ export function createSubagentStartup(deps: SubagentStartupDeps): SubagentStartu
           debugLog(`Could not register team member ${running.name} in roster`, error);
         }
       }
-      return startWatcher(running, pi);
+      const started = startWatcher(running, pi);
+      if (inherited) started.inherited = inherited;
+      return started;
     } catch (error) {
       if (deps.registry.get(id)?.surface === surface) {
         deps.registry.remove(id);

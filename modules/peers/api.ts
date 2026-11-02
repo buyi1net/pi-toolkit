@@ -2,8 +2,6 @@ import { join } from "node:path";
 
 export const PEERS_MODULE_ID = "peers";
 
-export const PEERS_DISCOVERY_SERVICE_NAME = "peers.discovery";
-
 export type PeerLiveness = "online" | "stale" | "offline";
 
 export type PeerActivity = "working" | "idle";
@@ -64,13 +62,6 @@ export interface PeersDiagnostic {
   readonly kind: "init" | "runtime";
   readonly detail: string;
   readonly at: number;
-}
-
-export interface PeersDiscoveryService {
-  readonly id: "peers";
-  snapshot(): PeersDiscoverySnapshot;
-
-  refresh(): Promise<void>;
 }
 
 export interface PeersSettings {

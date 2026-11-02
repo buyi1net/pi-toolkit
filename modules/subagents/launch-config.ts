@@ -40,17 +40,6 @@ export function declaredMcpTools(toolAllowlist: string | null | undefined): stri
   return declared;
 }
 
-export function describeMcpIsolation(toolAllowlist: string | null | undefined): string {
-  if (toolAllowlist == null) {
-    return "MCP: inherited from the parent session (no agent-profile MCP restriction)";
-  }
-  const declared = declaredMcpTools(toolAllowlist);
-  if (declared.length === 0) {
-    return "MCP: isolated (launched with --no-mcp; no MCP servers connect and no MCP tools are reachable)";
-  }
-  return `MCP: ${declared.join(", ")} (declared patterns only; undeclared MCP servers are unreachable)`;
-}
-
 export type SubagentSessionMode = AgentSessionMode;
 
 export function resolveSubagentPaths(
@@ -205,8 +194,8 @@ export function needsEnvProxyForTools(toolAllowlist: string | null | undefined):
   return /(^|,)\s*web_(search|fetch)\s*(,|$)/.test(toolAllowlist);
 }
 
-export function buildNewTaskEnvelope(params: { taskName: string; sender: string; task: string }): string {
-  return buildAgentEnvelope({ kind: "NEW_TASK", taskName: params.taskName, sender: params.sender, payload: params.task });
+export function buildNewTaskEnvelope(params: { taskName: string; sender: string; task: string; note?: string }): string {
+  return buildAgentEnvelope({ kind: "NEW_TASK", taskName: params.taskName, sender: params.sender, payload: params.task, ...(params.note ? { note: params.note } : {}) });
 }
 
 export function buildPiPromptArgs(params: {

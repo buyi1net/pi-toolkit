@@ -412,8 +412,9 @@ export function handleSubagentSteer(
     content: [{
       type: "text" as const,
       text:
-        `Message delivered to running subagent "${running.name}". It picks this up at its next ` +
-        `turn boundary. If it exits, its result still arrives as a steer message.`,
+        `Message submitted to running subagent "${running.name}". It picks this up at its next ` +
+        `turn boundary. This is a submission, not an acknowledgement: if it exits first, the message may never be processed. ` +
+        `Its result still arrives as a steer message.`,
     }],
     details: {
       id: running.id,

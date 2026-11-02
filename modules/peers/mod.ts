@@ -2,7 +2,6 @@ import { statSync } from "node:fs";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ModuleContext } from "../../kit/module.ts";
 import {
-  PEERS_DISCOVERY_SERVICE_NAME,
   type PeersDiagnostic,
   type PeersDiscoverySnapshot,
   type PeersScanFn,
@@ -247,6 +246,16 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
 
   const currentSettings = (): PeersSettings => readPeersSettings(context.getConfig()).settings;
 
+  let activeUi: { notify: (message: string, type?: "error" | "warning" | "info") => void } | null = null;
+  let runtimeProblemSurfaced = false;
+  const reportRuntimeToUi = (detail: string): void => {
+    runtime.reportRuntime(detail);
+    if (activeUi !== null && !runtimeProblemSurfaced) {
+      runtimeProblemSurfaced = true;
+      activeUi.notify(context.t("module.peers.problem.runtime"), "warning");
+    }
+  };
+
   const now = moduleOptions.now ?? Date.now;
   const idleSubscriptions = createPeersIdleSubscriptionTable({ now });
 
@@ -254,7 +263,7 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
     agentDir,
     getSettings: () => readPeersSettings(context.getConfig()).settings,
     now: moduleOptions.now,
-    onError: (detail) => runtime.reportRuntime(detail),
+    onError: (detail) => reportRuntimeToUi(detail),
     onTick: () => {
       cleanupPeersExpiredFiles(agentDir, currentSettings().fileTtlMs, (moduleOptions.now ?? Date.now)());
       idleSubscriptions.maintain(now());
@@ -296,7 +305,7 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
     getSettings: () => readPeersSettings(context.getConfig()).settings,
     agentDir,
     rateGuard,
-    reportDiagnostic: (detail: string) => runtime.reportRuntime(detail),
+    reportDiagnostic: (detail: string) => reportRuntimeToUi(detail),
     now,
   };
 
@@ -324,7 +333,7 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
         instanceId,
         now,
         settings: currentSettings(),
-        onDiagnostic: (detail) => runtime.reportRuntime(detail),
+        onDiagnostic: (detail) => reportRuntimeToUi(detail),
       }),
     dedupe: createPeersDedupeWindow({ getWindowMs: () => currentSettings().dedupeWindowMs, now: moduleOptions.now ?? Date.now }),
     inject: (message, deliverOptions) => {
@@ -340,7 +349,7 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
     getThrottle: () => currentSettings(),
     rateGuard,
     agentDir,
-    reportDiagnostic: (detail) => runtime.reportRuntime(detail),
+    reportDiagnostic: (detail) => reportRuntimeToUi(detail),
   });
 
   let endpointServer: PeersEndpointServer | undefined;
@@ -363,7 +372,7 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
           instanceId: frame.instanceId,
           now: at,
           settings,
-          onDiagnostic: (detail) => runtime.reportRuntime(detail),
+          onDiagnostic: (detail) => reportRuntimeToUi(detail),
         });
         const judgment = judgePeersInboundRequest({
           request: frame,
@@ -413,7 +422,7 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
 
       onError: (detail) => {
         if (endpointServer === next) heartbeat.setEndpoint(null);
-        runtime.reportRuntime(detail);
+        reportRuntimeToUi(detail);
       },
       now: moduleOptions.now,
     });
@@ -425,18 +434,27 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
           heartbeat.setEndpoint(address);
         }
       },
-      (error) => runtime.reportRuntime(describeError(error)),
+      (error) => reportRuntimeToUi(describeError(error)),
     );
   };
 
   context.pi.on("session_start", (_event, ctx) => {
     runtime.activate();
+    activeUi = ctx.hasUI ? ctx.ui : null;
+    runtimeProblemSurfaced = false;
     if (ctx.hasUI) {
       const t = context.t;
+      let surfaced = 0;
       for (const diagnostic of runtime.takeUnreportedDiagnostics()) {
-        const key = diagnostic.kind === "init" ? "module.peers.problem.init" : "module.peers.problem.runtime";
-        ctx.ui.notify(t(key, { detail: diagnostic.detail }), "warning");
+        ctx.ui.notify(
+          diagnostic.kind === "init"
+            ? t("module.peers.problem.init", { detail: diagnostic.detail })
+            : t("module.peers.problem.runtime"),
+          "warning",
+        );
+        surfaced += 1;
       }
+      if (surfaced > 0) runtimeProblemSurfaced = true;
     }
 
     if (runtime.snapshot().error?.kind !== "init-failed") {
@@ -473,6 +491,7 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
       endpointServer = undefined;
       heartbeat.stop();
       runtime.dispose();
+      activeUi = null;
     };
     const flushing = flushIdleNotices("exit");
     if (flushing === undefined) {
@@ -480,12 +499,6 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
       return;
     }
     return flushing.then(finish, finish);
-  });
-
-  context.services.register(PEERS_DISCOVERY_SERVICE_NAME, {
-    id: "peers",
-    snapshot: () => runtime.snapshot(),
-    refresh: () => runtime.refresh(),
   });
 
   registerPeersListTool(context.pi, {
@@ -502,7 +515,7 @@ export function registerPeers(context: ModuleContext, moduleOptions: PeersModule
     getOwnIdentity: () => heartbeat.identity(),
     loadRegistryCandidates,
     loadCandidates: loadAllCandidates,
-    reportDiagnostic: (detail) => runtime.reportRuntime(detail),
+    reportDiagnostic: (detail) => reportRuntimeToUi(detail),
     transport,
     getSettings: () => currentSettings(),
     agentDir,

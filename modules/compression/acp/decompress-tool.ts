@@ -5,8 +5,9 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { compactSegment, renderToolCardCall, renderToolCardResult, toolCardText } from "../../../kit/tool-card.ts";
+import { compactSegment, renderToolCardCall, renderToolCardResult } from "../../../kit/tool-card.ts";
 import type { Translator } from "../../../i18n/index.ts";
+import { decompressCardDetails } from "../messages/index.ts";
 import type { AcpCompressionEngine, AcpDecompressOutcome } from "./engine.ts";
 import {
   acpToolUnavailable,
@@ -39,39 +40,35 @@ const DecompressParams = Type.Object({
   ),
 });
 
-const TOOL_LABEL = "Decompress";
 const OBJECT_WIDTH = 40;
-const STATUS_WIDTH = 64;
 
 export interface AcpDecompressToolDetails {
   readonly toolUnavailable?: typeof TOOL_UNAVAILABLE_REASON;
   readonly mode?: AcpDecompressOutcome["mode"];
   readonly blockId?: string;
+  readonly restored?: AcpDecompressOutcome["restored"];
 }
 
-function failureStatus(result: AgentToolResult<unknown> | undefined): string {
-  if (result && isAcpToolUnavailableDetails(result.details)) return "unavailable";
-  const firstLine = toolCardText(result ?? {}).split("\n").find((line) => line.trim()) ?? "";
-  return compactSegment(firstLine, STATUS_WIDTH) ?? "failed";
+function failureStatus(t: Translator, result: AgentToolResult<unknown> | undefined): string {
+  return result && isAcpToolUnavailableDetails(result.details)
+    ? t("module.compression.card.status.unavailable")
+    : t("module.compression.card.status.failed");
 }
 
-const MODE_STATUS: Record<AcpDecompressOutcome["mode"], string> = {
-  "block-inline": "restored inline",
-  "block-file": "written to file",
-  "message-inline": "message restored inline",
-  "message-file": "message written to file",
-  notice: "notice",
+const MODE_STATUS_KEYS: Record<AcpDecompressOutcome["mode"], string> = {
+  "block-inline": "module.compression.card.decompress.mode.inline",
+  "block-file": "module.compression.card.decompress.mode.file",
+  "message-inline": "module.compression.card.decompress.mode.messageInline",
+  "message-file": "module.compression.card.decompress.mode.messageFile",
+  notice: "module.compression.card.decompress.mode.notice",
 };
 
 function decompressStatusText(
+  t: Translator,
   details: AcpDecompressToolDetails | undefined,
-  result: AgentToolResult<unknown> | undefined,
 ): string | undefined {
   const mode = details?.mode;
-  if (mode === undefined) return undefined;
-  if (mode !== "notice") return MODE_STATUS[mode];
-  const firstLine = toolCardText(result ?? {}).split("\n").find((line) => line.trim()) ?? "";
-  return compactSegment(firstLine, STATUS_WIDTH) ?? MODE_STATUS.notice;
+  return mode === undefined ? undefined : t(MODE_STATUS_KEYS[mode]);
 }
 
 function decompressObject(args: { blockId?: unknown } | undefined): string | undefined {
@@ -106,18 +103,22 @@ export function makeAcpDecompressTool(deps: AcpDecompressToolDeps): ToolDefiniti
     parameters: DecompressParams,
     renderShell: "self",
     renderCall(args, theme: Theme, context) {
-      return renderToolCardCall({ title: TOOL_LABEL, object: decompressObject(args) }, theme, context);
+      return renderToolCardCall({ title: t("module.compression.tool.decompress.display"), object: decompressObject(args) }, theme, context);
     },
     renderResult(result, options, theme: Theme, context) {
-      const status = context?.isError
-        ? failureStatus(result)
-        : decompressStatusText(result.details as AcpDecompressToolDetails | undefined, result);
+      const isError = context?.isError === true;
+      const status = isError
+        ? failureStatus(t, result)
+        : decompressStatusText(t, result.details as AcpDecompressToolDetails | undefined);
+      const details = options.expanded && !isError
+        ? decompressCardDetails(result.details as AcpDecompressToolDetails | undefined, t)
+        : [];
       return renderToolCardResult(
         {
-          title: TOOL_LABEL,
+          title: t("module.compression.tool.decompress.display"),
           object: decompressObject(context?.args),
           status,
-          details: options.expanded ? toolCardText(result).split("\n") : [],
+          details,
         },
         theme,
         options,
@@ -144,6 +145,7 @@ export function makeAcpDecompressTool(deps: AcpDecompressToolDeps): ToolDefiniti
           details: {
             mode: outcome.mode,
             ...(outcome.blockId === undefined ? {} : { blockId: outcome.blockId }),
+            ...(outcome.restored === undefined ? {} : { restored: outcome.restored }),
           } satisfies AcpDecompressToolDetails,
           content: [{ type: "text", text: outcome.text }],
           isError: outcome.failed === true,

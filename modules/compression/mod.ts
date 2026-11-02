@@ -57,6 +57,7 @@ export function registerCompression(context: ModuleContext): void {
   const fallbackLedger = createCompressionFallbackLedger();
 
   const statusService = createCompressionStatusService({
+    t: context.t,
     isEnabled: compressionEnabled,
     readSettings: () => readCompressionSettings(context.getConfig()).settings,
     readModel: () => sessionModel,
@@ -117,7 +118,7 @@ export function registerCompression(context: ModuleContext): void {
         if (!display) return;
         if (event.kind === "recovering") display.recovering("acp");
         else if (event.kind === "recovered") display.recoverSucceed("acp");
-        else display.recoverFail("acp", event.reason);
+        else display.recoverFail("acp", event.reason, event.message);
       },
 
       readAcpSettings: () => readCompressionSettings(context.getConfig()).settings.acp,

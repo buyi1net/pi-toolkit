@@ -1,6 +1,11 @@
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
-import { getToolkitConfigPath, loadToolkitConfig, TOOLKIT_CONFIG_FILENAME } from "../../kit/config.ts";
+import {
+  getToolkitConfigPath,
+  loadToolkitConfig,
+  TOOLKIT_CONFIG_FILENAME,
+  type ToolkitConfigProblem,
+} from "../../kit/config.ts";
 import type { Translator } from "../../i18n/index.ts";
 import type { ModuleConfigRecord, ModuleConfigValue } from "../../kit/module.ts";
 import type { VisionRoutingConfig } from "./chain.ts";
@@ -48,7 +53,7 @@ export interface VisionConfigProblem {
 
 export type VisionConfigWarning =
   | { readonly kind: "problem"; readonly source: string; readonly problem: VisionConfigProblem }
-  | { readonly kind: "detail"; readonly detail: string };
+  | { readonly kind: "detail"; readonly problem: ToolkitConfigProblem };
 
 const PROBLEM_KEYS: Record<VisionConfigProblemCode, VisionMessageKey> = {
   notObject: "module.vision.configError.notObject",
@@ -63,7 +68,7 @@ export function formatVisionProblem(problem: VisionConfigProblem, t: Translator)
 }
 
 export function formatVisionConfigWarning(warning: VisionConfigWarning, t: Translator): string {
-  if (warning.kind === "detail") return warning.detail;
+  if (warning.kind === "detail") return t(warning.problem.messageKey, warning.problem.vars);
   return t("problem.summary", {
     label: t("problem.config"),
     source: warning.source,
@@ -226,7 +231,7 @@ export async function loadVisionConfig(options: LoadVisionConfigOptions): Promis
     const projectPath = join(options.cwd, CONFIG_DIR_NAME, TOOLKIT_CONFIG_FILENAME);
 
     const loadedProject = await loadToolkitConfig(projectPath, { writeBackLegacyMigration: false });
-    for (const detail of loadedProject.problems) warnings.push({ kind: "detail", detail });
+    for (const problem of loadedProject.problems) warnings.push({ kind: "detail", problem });
     const project = routeFromSection(loadedProject.config.modules[VISION_MODULE_ID], projectPath);
     warnings.push(...project.warnings);
     if (project.layer) {

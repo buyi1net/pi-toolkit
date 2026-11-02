@@ -161,7 +161,6 @@ export class HeadlessChild {
 
   readonly exitPromise: Promise<HeadlessExitInfo>;
 
-  private droppedWrites = 0;
   private stderrBytes = 0;
   private readonly onEvent: ((event: Record<string, unknown>) => void) | undefined;
   private static readonly STDERR_LOG_LIMIT = 8 * 1024;
@@ -214,16 +213,13 @@ export class HeadlessChild {
       });
 
       this.child.stdin?.on("error", () => {
-        this.droppedWrites += 1;
+        debugLog(`headless pid=${this.pid}: stdin write failed`);
       });
     });
   }
 
   send(command: Record<string, unknown>): boolean {
-    if (this.exited || !this.child.stdin?.writable) {
-      this.droppedWrites += 1;
-      return false;
-    }
+    if (this.exited || !this.child.stdin?.writable) return false;
     this.child.stdin.write(serializeJsonLine(command));
     return true;
   }
@@ -245,9 +241,6 @@ export class HeadlessChild {
     killHeadlessProcessTree(this.child, pid);
   }
 
-  get droppedWriteCount(): number {
-    return this.droppedWrites;
-  }
 }
 
 export function spawnHeadlessPi(

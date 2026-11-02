@@ -64,9 +64,16 @@ const EN = {
   "module.vision.injectPreprocessFailed": "Vision assistance could not process this image: {reason}",
   "module.vision.injectUnavailable": "Vision assistance could not read the image reliably; do not guess image content.",
   "module.vision.queryEmpty": "The vision question must not be empty.",
-  "module.vision.queryNoImage": "This session has no recent screenshot to ask about; call computer_screenshot first.",
+  "module.vision.queryNoImage": "No recent image is available in this session; capture one first with computer_observe (capture: true).",
   "module.vision.queryFailed": "The auxiliary vision model could not answer this targeted question reliably; do not guess image content.",
   "module.vision.queryModelSupportsImages": "The active model already accepts images; vision_query is only for text-only models.",
+  "module.vision.internalError": "Vision routing hit an internal error: {reason}",
+  "module.vision.tool.vision_query.answered": "answered",
+  "module.vision.tool.vision_query.statusFailed": "query failed",
+  "module.vision.tool.vision_query.details.question": "Question: {question}",
+  "module.vision.tool.vision_query.details.answer": "Answer: {answer}",
+  "module.vision.tool.vision_query.details.backend": "answered by {backend}",
+  "module.vision.tool.vision_query.details.error": "Failed: {reason}",
 } satisfies Record<string, string>;
 
 const ZH_CN: typeof EN = {
@@ -133,9 +140,16 @@ const ZH_CN: typeof EN = {
   "module.vision.injectPreprocessFailed": "视觉辅助无法处理本次图片：{reason}",
   "module.vision.injectUnavailable": "视觉辅助未能可靠读取图片，禁止根据图片内容猜测。",
   "module.vision.queryEmpty": "视觉询问不能为空。",
-  "module.vision.queryNoImage": "当前会话没有可供视觉询问的最近截图，请先调用 computer_screenshot。",
+  "module.vision.queryNoImage": "当前会话没有可询问的最近图片，请先用 computer_observe（capture: true）截一张图。",
   "module.vision.queryFailed": "辅助视觉模型未能可靠回答本次定向问题，禁止根据图片内容猜测。",
   "module.vision.queryModelSupportsImages": "当前模型已经支持图片输入，vision_query 仅供纯文本模型使用。",
+  "module.vision.internalError": "视觉路由发生内部错误：{reason}",
+  "module.vision.tool.vision_query.answered": "已回答",
+  "module.vision.tool.vision_query.statusFailed": "询问失败",
+  "module.vision.tool.vision_query.details.question": "问题：{question}",
+  "module.vision.tool.vision_query.details.answer": "回答：{answer}",
+  "module.vision.tool.vision_query.details.backend": "由 {backend} 回答",
+  "module.vision.tool.vision_query.details.error": "失败原因：{reason}",
 
 };
 
@@ -203,9 +217,16 @@ const ZH_TW: typeof EN = {
   "module.vision.injectPreprocessFailed": "視覺輔助無法處理本次圖片：{reason}",
   "module.vision.injectUnavailable": "視覺輔助無法可靠讀取圖片，禁止依圖片內容猜測。",
   "module.vision.queryEmpty": "視覺詢問不能為空。",
-  "module.vision.queryNoImage": "目前工作階段沒有可供視覺詢問的最近截圖，請先呼叫 computer_screenshot。",
+  "module.vision.queryNoImage": "目前工作階段沒有可詢問的最近圖片，請先用 computer_observe（capture: true）截一張圖。",
   "module.vision.queryFailed": "輔助視覺模型未能可靠回答本次指定問題，禁止依圖片內容猜測。",
   "module.vision.queryModelSupportsImages": "目前模型已支援圖片輸入，vision_query 僅供純文字模型使用。",
+  "module.vision.internalError": "視覺路由發生內部錯誤：{reason}",
+  "module.vision.tool.vision_query.answered": "已回答",
+  "module.vision.tool.vision_query.statusFailed": "詢問失敗",
+  "module.vision.tool.vision_query.details.question": "問題：{question}",
+  "module.vision.tool.vision_query.details.answer": "回答：{answer}",
+  "module.vision.tool.vision_query.details.backend": "由 {backend} 回答",
+  "module.vision.tool.vision_query.details.error": "失敗原因：{reason}",
 
 };
 

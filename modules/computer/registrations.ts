@@ -27,11 +27,14 @@ import type { ComputerActionLogSink } from "./log.ts";
 import {
   actCallObject,
   actCardLine,
+  actDetailsLines,
   cardCall,
   cardResult,
   inspectCardLine,
+  inspectDetailsLines,
   observeCallObject,
   observeCardLine,
+  observeDetailsLines,
   readCardLine,
   refCallObject,
   rootsCardLine,
@@ -131,9 +134,10 @@ export function registerComputerTools(
     },
     renderResult(result, options, theme, context) {
       return cardResult(
+        t,
         t("module.computer.tool.computer_status.display"),
         undefined,
-        statusCardLine,
+        (data: ComputerStatusData) => statusCardLine(t, data),
         result,
         options,
         theme,
@@ -161,9 +165,10 @@ export function registerComputerTools(
     },
     renderResult(result, options, theme, context) {
       return cardResult(
+        t,
         t("module.computer.tool.computer_roots.display"),
         undefined,
-        rootsCardLine,
+        (data: ComputerRootsData) => rootsCardLine(t, data),
         result,
         options,
         theme,
@@ -192,13 +197,15 @@ export function registerComputerTools(
     },
     renderResult(result, options, theme, context) {
       return cardResult(
+        t,
         t("module.computer.tool.computer_observe.display"),
         observeCallObject(context?.args),
-        observeCardLine,
+        (data: ComputerObserveData) => observeCardLine(t, data),
         result,
         options,
         theme,
         context,
+        (data: ComputerObserveData) => observeDetailsLines(t, data),
       );
     },
     executionMode: "sequential",
@@ -287,9 +294,10 @@ export function registerComputerTools(
     },
     renderResult(result, options, theme, context) {
       return cardResult(
+        t,
         t("module.computer.tool.computer_search.display"),
         searchCallObject(context?.args),
-        searchCardLine,
+        (data: ComputerSearchData) => searchCardLine(t, data),
         result,
         options,
         theme,
@@ -332,13 +340,15 @@ export function registerComputerTools(
     },
     renderResult(result, options, theme, context) {
       return cardResult(
+        t,
         t("module.computer.tool.computer_inspect.display"),
         refCallObject(context?.args),
-        inspectCardLine,
+        (data: ComputerInspectData) => inspectCardLine(t, data),
         result,
         options,
         theme,
         context,
+        (data: ComputerInspectData) => inspectDetailsLines(t, data),
       );
     },
     executionMode: "sequential",
@@ -366,13 +376,18 @@ export function registerComputerTools(
     },
     renderResult(result, options, theme, context) {
       return cardResult(
+        t,
         t("module.computer.tool.computer_act.display"),
         actCallObject(context?.args),
-        actCardLine,
+        (data: ComputerActData) => actCardLine(t, data),
         result,
         options,
         theme,
         context,
+        (data: ComputerActData) => {
+          const details = result.details as ToolDetails<ComputerActData> | undefined;
+          return actDetailsLines(t, data, details?.ok === true ? details.logWriteError : undefined);
+        },
       );
     },
     executionMode: "sequential",
@@ -403,17 +418,20 @@ export function registerComputerTools(
       });
 
       let logNote = "";
+      let logWriteError: string | undefined;
       try {
         await actionLog(logEntries(params.stateId, snapshot.data.root, root.key, prepared.data, receipt));
       } catch (error) {
-        logNote = `\n[action log write failed: ${describeError(error)}]`;
+        logWriteError = describeError(error);
+        logNote = `\n[action log write failed: ${logWriteError}]`;
       }
       if (!receipt.ok) return failure(t, "computer_act", receipt.error, logNote);
       const next = state.observe({ root: snapshot.data.root, tree: receipt.data.tree });
       const data: ComputerActData = { stateId: next.stateId, changes: next.changes };
 
       const text = cap(`${renderAct(data, receipt.data.truncated)}${logNote}`);
-      return success(data, text.text);
+      const ok = success(data, text.text);
+      return logWriteError === undefined ? ok : { ...ok, details: { ok: true, data, logWriteError } };
     },
   });
 
@@ -429,9 +447,10 @@ export function registerComputerTools(
     },
     renderResult(result, options, theme, context) {
       return cardResult(
+        t,
         t("module.computer.tool.computer_read.display"),
         refCallObject(context?.args),
-        readCardLine,
+        (data: ComputerReadData) => readCardLine(t, data),
         result,
         options,
         theme,
@@ -477,9 +496,10 @@ export function registerComputerTools(
     },
     renderResult(result, options, theme, context) {
       return cardResult(
+        t,
         t("module.computer.tool.computer_wait.display"),
         waitCallObject(context?.args),
-        waitCardLine,
+        (data: ComputerWaitData) => waitCardLine(t, data),
         result,
         options,
         theme,
@@ -510,9 +530,10 @@ export function registerComputerTools(
     },
     renderResult(result, options, theme, context) {
       return cardResult(
+        t,
         t("module.computer.tool.computer_run.display"),
         runCallObject(context?.args),
-        runCardLine,
+        (data: ComputerRunData) => runCardLine(t, data),
         result,
         options,
         theme,

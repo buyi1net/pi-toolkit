@@ -15,7 +15,7 @@ import type { CompressionFallbackLedger } from "../fallback.ts";
 import { codexProtocolLabel } from "../messages/index.ts";
 import { modelIdentityFromModel } from "../rules-editor.ts";
 import type { CompactHandlerResult, CompactOwnerModule } from "../scheduler.ts";
-import type { CompressionDisplayReporter } from "../display.ts";
+import type { CompressionDisplayReporter, DisplayMessage } from "../display.ts";
 import { type CompressionStrategyResolution, resolveCompressionStrategy } from "../strategy.ts";
 import {
   ContextManagementProtocolError,
@@ -182,45 +182,51 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
     ctx: ExtensionContext,
     stage: CodexOwnerStage,
     reason: string,
-    headline: string,
+    headline: DisplayMessage,
     claim: boolean,
     policy: CodexUnsupportedPolicy,
     display: CompressionDisplayReporter | undefined,
   ): CompactHandlerResult {
+    const headlineText = t(headline.key, headline.vars);
     if (claim) {
       record(stage, "cancelled", reason);
       notify(
         ctx,
-        `${headline} ${t("module.compression.codex.checkpoint.claimProtected")}`,
+        `${headlineText} ${t("module.compression.codex.checkpoint.claimProtected")}`,
         policy === "error" ? "error" : "warning",
       );
 
-      display?.protect("codex", reason);
+      display?.protect("codex", reason, headline);
       return { cancel: true };
     }
     if (policy === "error") {
       record(stage, "cancelled", reason);
-      notify(ctx, `${headline} ${t("module.compression.codex.outcome.cancelledError")}`, "error");
-      display?.fail("codex", reason);
+      notify(ctx, `${headlineText} ${t("module.compression.codex.outcome.cancelledError")}`, "error");
+      display?.fail("codex", reason, headline);
       return { cancel: true };
     }
     record(stage, "fell-back-native", reason);
-    notify(ctx, `${headline} ${t("module.compression.codex.outcome.fellBackNative")}`, "warning");
+    notify(ctx, `${headlineText} ${t("module.compression.codex.outcome.fellBackNative")}`, "warning");
 
     display?.conclude("codex");
     return {};
   }
 
-  function unsupportedHeadline(reason: CodexPreflightReason, api: string | undefined, protocol?: CodexProtocol): string {
+  function unsupportedHeadline(
+    reason: CodexPreflightReason,
+    api: string | undefined,
+    protocol?: CodexProtocol,
+  ): DisplayMessage {
     if (reason === "api-not-responses") {
-      return t("module.compression.codex.unsupported.apiNotResponses", { api: api ?? "" });
+      return { key: "module.compression.codex.unsupported.apiNotResponses", vars: { api: api ?? "" } };
     }
     if (reason === "profile-conflict") {
-      return t("module.compression.codex.unsupported.profileConflict", { api: api ?? "" });
+      return { key: "module.compression.codex.unsupported.profileConflict", vars: { api: api ?? "" } };
     }
-    return t("module.compression.codex.unsupported.protocolUnavailable", {
-      protocol: codexProtocolLabel(protocol, t),
-    });
+    return {
+      key: "module.compression.codex.unsupported.protocolUnavailable",
+      vars: { protocol: codexProtocolLabel(protocol, t) },
+    };
   }
 
   function activeTools(): CodexRemoteTool[] {
@@ -259,7 +265,7 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
         ctx,
         "resolve",
         "no-model",
-        t("module.compression.codex.resolve.noModel"),
+        { key: "module.compression.codex.resolve.noModel" },
         claim,
         policy,
         display,
@@ -279,7 +285,7 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
         ctx,
         "preflight",
         "host-projection-unsupported",
-        t("module.compression.codex.hostProjectionUnsupported"),
+        { key: "module.compression.codex.hostProjectionUnsupported" },
         claim,
         policy,
         display,
@@ -297,9 +303,10 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
           ctx,
           "preflight",
           capability.reason,
-          t("module.compression.codex.capabilityRecheck", {
-            detail: t(`module.compression.codex.capability.${capability.reason}`),
-          }),
+          {
+            key: "module.compression.codex.capabilityRecheck",
+            vars: { detail: t(`module.compression.codex.capability.${capability.reason}`) },
+          },
           claim,
           policy,
           display,
@@ -342,7 +349,9 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
           policy === "error" ? "error" : "warning",
         );
 
-        display?.protect("codex", "checkpoint-invalid");
+        display?.protect("codex", "checkpoint-invalid", {
+          key: "module.compression.codex.checkpoint.invalid",
+        });
         return { cancel: true };
       }
       if (prior) {
@@ -364,7 +373,10 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
             policy === "error" ? "error" : "warning",
           );
 
-          display?.protect("codex", "identity-mismatch");
+          display?.protect("codex", "identity-mismatch", {
+            key: "module.compression.codex.checkpoint.incompatible",
+            vars: { fields: mismatched.join(", ") },
+          });
           return { cancel: true };
         }
       }
@@ -383,7 +395,9 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
             policy === "error" ? "error" : "warning",
           );
 
-          display?.protect("codex", "projection-unverifiable");
+          display?.protect("codex", "projection-unverifiable", {
+            key: "module.compression.codex.checkpoint.unverifiable",
+          });
           return { cancel: true };
         }
         messages = projected;
@@ -507,7 +521,10 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
           "error",
         );
 
-        display?.fail("codex", "commit-validation");
+        display?.fail("codex", "commit-validation", {
+          key: "module.compression.codex.commit.failed",
+          vars: { error: describeError(error) },
+        });
         return { cancel: true };
       }
 
@@ -520,7 +537,7 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
       if (protocol === "context-management" && (event.signal.aborted || (error instanceof DOMException && error.name === "AbortError"))) {
         record("prepare", "cancelled", "aborted");
         notify(ctx, t("module.compression.codex.contextManagement.cancelled"), "warning");
-        display?.fail("codex", "aborted");
+        display?.fail("codex", "aborted", { key: "module.compression.codex.contextManagement.cancelled" });
         return { cancel: true };
       }
       if (protocol === "context-management" && error instanceof ContextManagementProtocolError) {
@@ -530,7 +547,10 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
           t("module.compression.codex.contextManagement.invalid", { error: describeError(error) }),
           "warning",
         );
-        display?.fail("codex", "context-management-invalid-response");
+        display?.fail("codex", "context-management-invalid-response", {
+          key: "module.compression.codex.contextManagement.invalid",
+          vars: { error: describeError(error) },
+        });
         return { cancel: true };
       }
 
@@ -564,7 +584,10 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
             "warning",
           );
 
-          display?.fail("codex", "recovery-failed");
+          display?.fail("codex", "recovery-failed", {
+            key: "module.compression.codex.recovery.failed",
+            vars: { error: describeError(recoveryError) },
+          });
           return { cancel: true };
         }
       }
@@ -574,7 +597,7 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
           ctx,
           "prepare",
           "route-paused",
-          t("module.compression.codex.routePaused"),
+          { key: "module.compression.codex.routePaused" },
           claim,
           policy,
           display,
@@ -585,7 +608,10 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
           ctx,
           "prepare",
           "oauth-rejected",
-          t("module.compression.codex.oauthRejected", { error: describeError(error) }),
+          {
+            key: "module.compression.codex.oauthRejected",
+            vars: { error: describeError(error) },
+          },
           claim,
           policy,
           display,
@@ -595,7 +621,10 @@ export function createCodexOwnerModule(options: CodexOwnerOptions): CodexOwnerMo
         ctx,
         "prepare",
         "adapter-error",
-        t("module.compression.codex.prepare.failed", { error: describeError(error) }),
+        {
+          key: "module.compression.codex.prepare.failed",
+          vars: { error: describeError(error) },
+        },
         claim,
         policy,
         display,

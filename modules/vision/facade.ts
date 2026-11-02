@@ -51,6 +51,9 @@ export interface VisionRouteFacadeOptions {
   readonly agentDir?: string;
 }
 
+/** 门面内部不变量错误：不是用户可修正的配置问题，展示时不得伪装成配置异常。 */
+export class VisionFacadeError extends Error {}
+
 export class VisionRouteFacade {
   private context: ModuleContext | undefined;
   private applyRouting: ((routing: VisionRoutingConfig) => void) | undefined;
@@ -71,7 +74,7 @@ export class VisionRouteFacade {
 
   async refresh(ctx: ExtensionContext, notifyWarnings: boolean): Promise<void> {
     const context = this.context;
-    if (!context) throw new Error("视觉路由门面尚未装配，无法刷新路由");
+    if (!context) throw new VisionFacadeError("视觉路由门面尚未装配，无法刷新路由");
 
     await context.reloadConfig();
     await this.applyLayers(ctx, notifyWarnings);
@@ -79,7 +82,7 @@ export class VisionRouteFacade {
 
   private async applyLayers(ctx: ExtensionContext, notifyWarnings: boolean): Promise<void> {
     const context = this.context;
-    if (!context) throw new Error("视觉路由门面尚未装配，无法刷新路由");
+    if (!context) throw new VisionFacadeError("视觉路由门面尚未装配，无法刷新路由");
     const section = context.getConfig();
     const loaded = await loadVisionConfig({
       section,
@@ -109,9 +112,9 @@ export class VisionRouteFacade {
   async save(patch: VisionFacadePatch, options: VisionSaveOptions = {}): Promise<VisionRouteSnapshot> {
     if (patch.route) {
       const ctx = options.context;
-      if (!ctx) throw new Error("保存视觉路由需要会话上下文");
+      if (!ctx) throw new VisionFacadeError("保存视觉路由需要会话上下文");
       const context = this.context;
-      if (!context) throw new Error("视觉路由门面尚未装配，无法保存路由");
+      if (!context) throw new VisionFacadeError("视觉路由门面尚未装配，无法保存路由");
 
       await context.saveConfig(visionRoutePatch(patch.route), {
         reapply: () => this.applyLayers(ctx, false),

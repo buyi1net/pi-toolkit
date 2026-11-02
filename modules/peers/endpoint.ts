@@ -217,7 +217,7 @@ export function createPeersEndpointServer(options: PeersEndpointServerOptions): 
           const subscribe = event.frame;
           const subscribeHandler = options.onSubscribe;
           if (subscribeHandler === undefined) {
-            errorReply(subscribe.subscriptionId, "rejected");
+            errorReply(subscribe.subscriptionId, "invalid-frame");
             return;
           }
           void Promise.resolve().then(() => subscribeHandler(subscribe)).then(

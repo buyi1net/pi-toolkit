@@ -28,8 +28,22 @@ export function activeScopeLabel(
   return snapshot.activityLabel ?? snapshot.activeScope ?? null;
 }
 
-function formatActiveDetail(t: SubagentsTranslate, snapshot: StatusSnapshot): string {
+/** 活跃范围词的展示文本：provider/streaming 走三语键，工具名带三语前缀，其它值（如 interrupted）原样。 */
+export function activeScopeDisplay(
+  snapshot: Pick<StatusSnapshot, "activityLabel" | "activeScope">,
+  t: SubagentsTranslate,
+): string | null {
   const label = activeScopeLabel(snapshot);
+  if (label === null) return null;
+  if (snapshot.activeScope === "provider") return t("module.subagents.widget.scope.provider");
+  if (snapshot.activeScope === "streaming") return t("module.subagents.widget.scope.streaming");
+  if (label === "interrupted") return t("module.subagents.widget.result.interrupted");
+  if (snapshot.activeScope === "tool") return t("module.subagents.widget.scope.tool", { name: label });
+  return label;
+}
+
+function formatActiveDetail(t: SubagentsTranslate, snapshot: StatusSnapshot): string {
+  const label = activeScopeDisplay(snapshot, t);
   if (!label) return t("module.subagents.widget.status.active");
   const duration = snapshot.activeDurationText ? ` ${snapshot.activeDurationText}` : "";
   return t("module.subagents.widget.detail.active", { label, duration });
@@ -54,7 +68,7 @@ function formatStalledDetail(t: SubagentsTranslate, snapshot: StatusSnapshot): s
 }
 
 function staleLastLabel(t: SubagentsTranslate, snapshot: Pick<StatusSnapshot, "activityLabel" | "activeScope" | "latestEvent">): string {
-  return activeScopeLabel(snapshot) ?? snapshot.latestEvent ?? "—";
+  return activeScopeDisplay(snapshot, t) ?? snapshot.latestEvent ?? "—";
 }
 
 function formatStaleDetail(t: SubagentsTranslate, snapshot: StatusSnapshot): string {

@@ -68,8 +68,6 @@ export interface ParentUpdateQueue {
 
   snapshot(): ParentUpdateQueueState;
 
-  stats(): ParentUpdateQueueStats;
-
   deliveryId(agent_id: string, update_id?: string): string | null;
 
   beginWait(owner?: string, leaseMs?: number): string;
@@ -77,16 +75,6 @@ export interface ParentUpdateQueue {
   endWait(token: string): boolean;
 
   isWaiting(): boolean;
-}
-
-export interface ParentUpdateQueueStats {
-  pending: number;
-  retained: number;
-  cursor: number;
-  next_update_seq: number;
-  closed_agents: number;
-  bubbled_offset: number;
-  waiting: boolean;
 }
 
 export interface ParentUpdateQueuePaths {
@@ -260,18 +248,6 @@ export function createParentUpdateQueue(paths: ParentUpdateQueuePaths | string):
     },
     reload() { refresh(); },
     snapshot() { refresh(); return JSON.parse(JSON.stringify(state)) as ParentUpdateQueueState; },
-    stats() {
-      refresh();
-      return {
-        pending: state.updates.filter((item) => item.update_seq > state.cursor && !discardedAfterClose(state, item)).length,
-        retained: state.updates.length,
-        cursor: state.cursor,
-        next_update_seq: state.next_update_seq,
-        closed_agents: (state.closed_agents ?? []).length,
-        bubbled_offset: state.bubbled_offset ?? 0,
-        waiting: state.wait_owner !== null && (state.wait_owner_expires_at == null || state.wait_owner_expires_at > Date.now()),
-      };
-    },
     deliveryId(agent_id, requestedUpdateId) {
       refresh();
       const legacyCall = requestedUpdateId === undefined;

@@ -4,7 +4,7 @@ import { Type } from "typebox";
 import { deriveSessionShortId } from "../../shared/short-id.ts";
 import type { PeerBlockedState, PeersDiscoverySnapshot, PeersSnapshotError } from "./api.ts";
 import { peerDisplayStatus, type PeerDisplayStatus } from "./discovery.ts";
-import type { PeersTranslate } from "./messages/index.ts";
+import { peersStatusLabel, type PeersTranslate } from "./messages/index.ts";
 
 export interface PeersListToolDeps {
 
@@ -136,6 +136,61 @@ function formatEntryLine(entry: PeersListEntryView, truncated: boolean): string 
   return `• ${segments.join(" | ")}`;
 }
 
+function entrySegments(entry: PeersListEntryView, t?: PeersTranslate): (string | null)[] {
+  return [
+    entry.shortId !== null ? `#${entry.shortId}` : null,
+    entry.name !== null && entry.name !== "" ? entry.name : (t?.("module.peers.list.unnamed") ?? "unnamed"),
+    peersStatusLabel(entry.status, t),
+  ];
+}
+
+function entryLine(entry: PeersListEntryView, t?: PeersTranslate): string {
+  const segments = entrySegments(entry, t);
+  if (entry.ownInstance) segments.push(t?.("module.peers.list.self") ?? "this session");
+  else if (entry.self) segments.push(t?.("module.peers.list.selfOtherInstance") ?? "another instance of this session");
+  if (entry.duplicateShortId) segments.push(t?.("module.peers.list.duplicateShortId") ?? "duplicate short id");
+  if (entry.multipleInstances) segments.push(t?.("module.peers.list.multipleInstances") ?? "multiple instances");
+  return segments.filter((segment): segment is string => segment !== null).join(" · ");
+}
+
+function entrySupplementLine(entry: PeersListEntryView, t?: PeersTranslate): string | null {
+  if (!entry.duplicateShortId && !entry.multipleInstances) return null;
+  const parts: string[] = [];
+  if (entry.duplicateShortId) {
+    parts.push(t?.("module.peers.list.detailSession", { id: entry.sessionId }) ?? `session ${entry.sessionId}`);
+  }
+  if (entry.multipleInstances && entry.instanceId !== null) {
+    parts.push(t?.("module.peers.list.detailInstance", { id: entry.instanceId }) ?? `instance ${entry.instanceId}`);
+  }
+  if (entry.cwd !== null && entry.cwd !== "") parts.push(entry.cwd);
+  return parts.length > 0 ? `  ${parts.join(" · ")}` : null;
+}
+
+export function peersListDetailLines(output: PeersListOutput | undefined, t?: PeersTranslate): string[] {
+  if (output === undefined) return [];
+  const lines: string[] = [];
+  if (output.error !== null) {
+    lines.push(t?.("module.peers.tool.list.result.stale") ?? "Snapshot problem; showing the last successful scan");
+  }
+  const { online, offline } = output.entries;
+  if (online.length === 0 && offline.length === 0) {
+    if (output.error === null) lines.push(t?.("module.peers.list.empty") ?? "No peer sessions found");
+    return lines;
+  }
+  const section = (label: string, entries: readonly PeersListEntryView[]): void => {
+    lines.push(label);
+    for (const entry of entries) {
+      lines.push(entryLine(entry, t));
+      const supplement = entrySupplementLine(entry, t);
+      if (supplement !== null) lines.push(supplement);
+    }
+  };
+  section(t?.("module.peers.list.onlineSection", { count: online.length }) ?? `Online (${online.length})`, online);
+  section(t?.("module.peers.list.offlineSection", { count: offline.length }) ?? `Offline (${offline.length})`, offline);
+  if (output.truncated) lines.push(t?.("module.peers.list.truncated") ?? "List truncated; older entries hidden");
+  return lines;
+}
+
 export function buildPeersListOutput(snapshot: PeersDiscoverySnapshot, identity: PeersSelfIdentity): PeersListOutput {
   const { online, offline } = buildEntryViews(snapshot, identity);
   const lines: string[] = [];
@@ -193,13 +248,21 @@ export function registerPeersListTool(pi: ExtensionAPI, deps: PeersListToolDeps)
       const details = result.details as PeersListOutput | undefined;
       const online = details?.entries.online.length ?? 0;
       const offline = details?.entries.offline.length ?? 0;
+      const stale = details?.error != null;
       const summary = deps.t?.("module.peers.tool.list.result.summary", { online, offline }) ?? `${online} online · ${offline} offline`;
-      const text = result.content.find((part) => part.type === "text")?.text ?? "";
+      const status = stale
+        ? `${summary} · ${deps.t?.("module.peers.tool.list.result.stale") ?? "Snapshot problem; showing the last successful scan"}`
+        : summary;
+      const renderContext = stale && context?.isError !== true ? { ...context, isError: true } : context;
       return renderToolCardResult(
-        { title: deps.t?.("module.peers.tool.list.display") ?? "List local sessions", status: summary, details: options.expanded ? text.split("\n") : [] },
+        {
+          title: deps.t?.("module.peers.tool.list.display") ?? "List local sessions",
+          status,
+          details: options.expanded ? peersListDetailLines(details, deps.t) : [],
+        },
         theme,
         options,
-        context,
+        renderContext,
       );
     },
 

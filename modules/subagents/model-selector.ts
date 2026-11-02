@@ -401,7 +401,16 @@ export interface ModelDirectoryReferenceProblem {
 
 export interface ModelDirectoryReferenceResolution {
   readonly model: ModelDirectoryEntry;
+  /** Set when the reference only matched after case/separator folding or near-name repair. */
+  readonly match_note?: "folded" | "near_match";
 }
+
+/** Case- and separator-insensitive form used for the lenient matching tiers. */
+function foldModelReference(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s._-]+/g, "-");
+}
+
+const NEAR_MATCH_MAX_DISTANCE = 2;
 
 function referenceCandidate(entry: ModelDirectoryEntry): ModelDirectoryReferenceCandidate {
   return {
@@ -465,25 +474,33 @@ export function resolveDirectoryModelReference(
   const raw = modelRef.trim();
   const own = modelOwnThinkingSuffix(raw);
   const base = own ? raw.slice(0, raw.length - own.length - 1) : raw;
-  const exact = base.includes("/")
-    ? directory.models.filter((entry) => `${entry.provider}/${entry.id}` === base)
-    : [];
-  const matches = exact.length > 0
-    ? exact
-    : directory.models.filter((entry) => entry.id === base || entry.name === base);
-  const candidates = matches.map(referenceCandidate);
-  if (matches.length === 1) return { resolution: { model: matches[0]! } };
-  if (matches.length > 1) {
-    const routes = matches.map((entry) => `${entry.provider}/${entry.id}`).join(", ");
-    return {
-      problem: {
-        code: "model_ambiguous",
-        selected_model: raw,
-        candidates,
-        message: `Model reference "${raw}" matches multiple available models. Choose one exact provider/model route: ${routes}.`,
-      },
-    };
-  }
+
+  const resolveExact = (reference: string): ModelDirectoryEntry[] => {
+    const exact = reference.includes("/")
+      ? directory.models.filter((entry) => `${entry.provider}/${entry.id}` === reference)
+      : [];
+    return exact.length > 0
+      ? exact
+      : directory.models.filter((entry) => entry.id === reference || entry.name === reference);
+  };
+
+  const exactMatches = resolveExact(base);
+  if (exactMatches.length === 1) return { resolution: { model: exactMatches[0]! } };
+  if (exactMatches.length > 1) return ambiguous(raw, exactMatches);
+
+  // Errors from a near-miss should never be a hard stop: fold case and separators first,
+  // then accept a unique nearest name, and only report ambiguous/not-found when neither works.
+  const folded = foldModelReference(base);
+  const foldedMatches = directory.models.filter((entry) =>
+    foldModelReference(`${entry.provider}/${entry.id}`) === folded
+    || foldModelReference(entry.id) === folded
+    || foldModelReference(entry.name) === folded);
+  if (foldedMatches.length === 1) return { resolution: { model: foldedMatches[0]!, match_note: "folded" } };
+  if (foldedMatches.length > 1) return ambiguous(raw, foldedMatches);
+
+  const nearMatches = uniqueNearestModel(directory, base);
+  if (nearMatches.length === 1) return { resolution: { model: nearMatches[0]!, match_note: "near_match" } };
+
   const suggestions = suggestModelReferences(directory, raw);
   return {
     problem: {
@@ -495,6 +512,35 @@ export function resolveDirectoryModelReference(
         : " Call subagent_models to view the complete available model list."}`,
     },
   };
+}
+
+function ambiguous(raw: string, matches: ModelDirectoryEntry[]): { problem: ModelDirectoryReferenceProblem } {
+  const routes = matches.map((entry) => `${entry.provider}/${entry.id}`).join(", ");
+  return {
+    problem: {
+      code: "model_ambiguous",
+      selected_model: raw,
+      candidates: matches.map(referenceCandidate),
+      message: `Model reference "${raw}" matches multiple available models. Choose one exact provider/model route: ${routes}.`,
+    },
+  };
+}
+
+/** Entries sharing the smallest edit distance, but only when that distance is small enough. */
+function uniqueNearestModel(directory: ModelDirectory, base: string): ModelDirectoryEntry[] {
+  const query = base.toLowerCase();
+  const scored = directory.models.map((entry) => ({
+    entry,
+    distance: Math.min(
+      modelReferenceDistance(query, `${entry.provider}/${entry.id}`.toLowerCase()),
+      modelReferenceDistance(query, entry.id.toLowerCase()),
+      modelReferenceDistance(query, entry.name.toLowerCase()),
+    ),
+  }));
+  if (scored.length === 0) return [];
+  const best = Math.min(...scored.map((item) => item.distance));
+  if (best > NEAR_MATCH_MAX_DISTANCE) return [];
+  return scored.filter((item) => item.distance === best).map((item) => item.entry);
 }
 
 export const createModelDirectory = buildModelDirectory;

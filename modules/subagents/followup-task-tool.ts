@@ -2,17 +2,17 @@ import { Type } from "typebox";
 import { registerName } from "./session.ts";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { compactRenderText, toolCardFailureReason, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
+import { toolCardFailureReason, renderToolCardCall, renderToolCardResult } from "../../kit/tool-card.ts";
 import type { RuntimeRegistry } from "./registry.ts";
 import type { SubagentStartup } from "./startup.ts";
 import type { RunningSubagent, SubagentResult } from "./types.ts";
 import type { DeliverTerminal } from "./spawn-agent-tool.ts";
-import { subagentStatusWord } from "./messages/index.ts";
+import { subagentFailureLabels, subagentStatusWord } from "./messages/index.ts";
 import { agentTreeRootDir, appendRunningAgentTreeRecord, terminalOutcomeFromTree, writeAgentTerminal } from "./agent-tree.ts";
 import type { PublicAgentStatus } from "./registry.ts";
 import {
+  lifecycleFailureFactLines,
   lifecycleQueue,
-  lifecycleMetaLines,
   lifecycleUpdateDetails,
   resolveLifecycleTarget,
   targetManagedByParentError,
@@ -58,9 +58,8 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
       const title = t?.("module.subagents.tool.followup_task.display") ?? "Follow-up task";
       const target = typeof details?.task_name === "string" ? details.task_name : undefined;
       if (details?.submission_id) {
-        const meta = lifecycleMetaLines(details, t);
         const statusWord = subagentStatusWord(details.status, t);
-        meta.push(t?.("module.subagents.tool.meta.status", { status: statusWord }) ?? `status ${statusWord}`);
+        const meta = [t?.("module.subagents.tool.meta.status", { status: statusWord }) ?? `status ${statusWord}`];
         return renderToolCardResult(
           { title, object: target, status: t?.("module.subagents.tool.followup_task.result.started") ?? "Follow-up started", details: options.expanded ? meta : [] },
           theme,
@@ -68,10 +67,16 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
           context,
         );
       }
-      const text = result.content[0]?.type === "text" ? result.content[0].text : "Follow-up failed";
-      const humanReason = compactRenderText(details?.message);
       return renderToolCardResult(
-        { title, object: target, status: toolCardFailureReason(text, result.details), details: options.expanded && humanReason ? [humanReason] : [] },
+        {
+          title,
+          object: target,
+          status: toolCardFailureReason(
+            result.details,
+            subagentFailureLabels(t?.("module.subagents.tool.failure.followup") ?? "Follow-up failed", t),
+          ),
+          details: lifecycleFailureFactLines(details, t),
+        },
         theme,
         options,
         context,
@@ -123,11 +128,12 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
         });
         const running = started.running;
         running.interruptRequested = false;
+        const followupStartedSummary = deps.t?.("module.subagents.updates.followupStarted") ?? "Follow-up round started.";
         appendRunningAgentTreeRecord({
           rootDir,
           running,
           status: "running",
-          summary: `Follow-up ${submissionId} started.`,
+          summary: followupStartedSummary,
           artifactDir,
           ownerSessionId,
         });
@@ -157,7 +163,7 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
           agent_id: running.id,
           task_name: running.name,
           status: "running",
-          summary: `Follow-up ${submissionId} started.`,
+          summary: followupStartedSummary,
           update_id: submissionId,
         });
         const details = lifecycleUpdateDetails(statusUpdate, { ...target, agentId: running.id }, submissionId);

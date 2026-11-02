@@ -72,6 +72,20 @@ export function explainDisplayFallback(
   return `${requested} unavailable: the current ${detectDisplayContext()} context cannot host it`;
 }
 
+export type DisplayFallbackCause = "env-not-set" | "cli-unavailable" | "no-availability-info" | "context";
+
+export function displayFallbackCause(
+  requested: DisplayMode,
+  availability: readonly DisplayModeAvailability[],
+  resolved: ResolvedDisplaySurface,
+): DisplayFallbackCause | null {
+  if (requested === "auto" || resolved !== "background") return null;
+  const selected = availability.find((entry) => entry.mode === requested);
+  if (!selected) return "no-availability-info";
+  if (!selected.available) return /CLI is unavailable/.test(selected.reason ?? "") ? "cli-unavailable" : "env-not-set";
+  return "context";
+}
+
 export function detectDisplayContext(): DisplayContext {
   if (process.env.HERDR_ENV === "1" && (process.env.TMUX || process.env.TMUX_PANE)) return "nested";
   if (process.env.HERDR_ENV === "1") return "herdr";

@@ -1,7 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { renameSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { compactRenderText, renderToolCardCall, renderToolCardResult, toolCardText, cardBackground } from "../../kit/tool-card.ts";
 
 function writeSidecar(path: string, data: string): void {
@@ -13,6 +15,8 @@ import { createSubagentActivityRecorder } from "./activity.ts";
 import { postTeamMessage, readRoster, rosterPath, writeRoundSignal } from "./team.ts";
 import { normalizeSubagentName } from "./names.ts";
 import { subagentsTableTranslator } from "./messages/index.ts";
+import { getToolkitConfigPath } from "../../kit/config.ts";
+import { isLanguageSetting, resolveLanguage, type ResolvedLanguage } from "../../i18n/index.ts";
 
 export function shouldMarkUserTookOver(agentStarted: boolean): boolean {
   return agentStarted;
@@ -89,8 +93,37 @@ export function shouldWriteRoundSignal(
   return memberMode && !awaitingAnswer && pendingChildren === 0;
 }
 
+/**
+ * The child is a separate pi process with its own TUI, so it resolves the same language the
+ * parent uses: an explicit `language` in the shared <agentDir>/pi-toolkit.json, otherwise the
+ * system locale. No env plumbing, no second source of truth.
+ */
+export function resolveChildLanguage(agentDir = process.env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".pi", "agent")): ResolvedLanguage {
+  try {
+    const raw = JSON.parse(readFileSync(getToolkitConfigPath(agentDir), "utf8")) as { language?: unknown };
+    return resolveLanguage(isLanguageSetting(raw?.language) ? raw.language : "auto");
+  } catch {
+    return resolveLanguage("auto");
+  }
+}
+
+const TEAM_SEND_ERROR_KEYS: Record<string, Parameters<ReturnType<typeof subagentsTableTranslator>>[0]> = {
+  "acl-denied": "module.subagents.tool.team_send.result.aclDenied",
+  "unknown-target": "module.subagents.tool.team_send.result.unknownTarget",
+  "target-offline": "module.subagents.tool.team_send.result.targetOffline",
+  "team-session-unavailable": "module.subagents.tool.team_send.result.sessionUnavailable",
+  "missing-target": "module.subagents.tool.team_send.result.missingTarget",
+  "missing-text": "module.subagents.tool.team_send.result.missingText",
+};
+
+/** Error codes are for logs; the card gets a human word. */
+function teamSendErrorText(code: string, t: ReturnType<typeof subagentsTableTranslator>): string {
+  const key = TEAM_SEND_ERROR_KEYS[code];
+  return key ? t(key) : t("module.subagents.tool.team_send.result.notSent");
+}
+
 export default function (pi: ExtensionAPI) {
-  const toolText = subagentsTableTranslator("en");
+  const toolText = subagentsTableTranslator(resolveChildLanguage());
   let toolNames: string[] = [];
   let denied: string[] = [];
   let expanded = false;
@@ -117,8 +150,8 @@ export default function (pi: ExtensionAPI) {
 
         if (expanded) {
 
-          const countInfo = theme.fg("dim", ` — ${toolNames.length} available`);
-          const hint = theme.fg("muted", "  (Ctrl+Alt+O to collapse)");
+          const countInfo = theme.fg("dim", ` ${toolText("module.subagents.done.widget.available", { count: toolNames.length })}`);
+          const hint = theme.fg("muted", `  ${toolText("module.subagents.done.widget.collapseHint")}`);
 
           const toolList = toolNames
             .map((name: string) => theme.fg("dim", name))
@@ -129,7 +162,7 @@ export default function (pi: ExtensionAPI) {
             const deniedList = denied
               .map((name: string) => theme.fg("error", name))
               .join(theme.fg("muted", ", "));
-            deniedLine = "\n" + theme.fg("muted", "denied: ") + deniedList;
+            deniedLine = "\n" + theme.fg("muted", `${toolText("module.subagents.done.widget.denied")} `) + deniedList;
           }
 
           const content = new Text(
@@ -140,14 +173,10 @@ export default function (pi: ExtensionAPI) {
           box.addChild(content);
         } else {
 
-          const countInfo = theme.fg("dim", ` — ${toolNames.length} tools`);
-          const deniedInfo =
-            denied.length > 0
-              ? theme.fg("dim", " · ") + theme.fg("error", `${denied.length} denied`)
-              : "";
-          const hint = theme.fg("muted", "  (Ctrl+Alt+O to expand)");
+          const countInfo = theme.fg("dim", ` ${toolText("module.subagents.done.widget.tools", { count: toolNames.length })}`);
+          const hint = theme.fg("muted", `  ${toolText("module.subagents.done.widget.expandHint")}`);
 
-          const content = new Text(`${countInfo}${deniedInfo}${hint}`, 0, 0);
+          const content = new Text(`${countInfo}${hint}`, 0, 0);
           box.addChild(content);
         }
 
@@ -365,16 +394,22 @@ export default function (pi: ExtensionAPI) {
       const status = context?.isError
         ? collapsedReason(text)
         : details.deferredExit
-          ? `checkpoint deferred (${details.pendingChildren ?? 0} in flight)`
+          ? toolText("module.subagents.tool.ask_question.result.checkpointDeferred", { count: details.pendingChildren ?? 0 })
           : details.checkpoint
-            ? "checkpoint"
-            : "waiting for reply";
+            ? toolText("module.subagents.tool.ask_question.result.checkpoint")
+            : toolText("module.subagents.tool.ask_question.result.waitingForReply");
       return renderToolCardResult(
         {
           title: toolText("module.subagents.tool.ask_question.display"),
           object: question,
           status,
-          details: options.expanded ? text.split("\n") : [],
+          // 展开区只放用户要回答的问题；execute 返回给模型的指令不进卡片。
+          details: options.expanded
+            ? question
+                .split("\n")
+                .map((line) => line.trimEnd())
+                .filter((line) => line !== "")
+            : [],
         },
         theme,
         options,
@@ -548,16 +583,20 @@ export default function (pi: ExtensionAPI) {
         const status = context?.isError
           ? collapsedReason(text)
           : details.queued
-            ? "queued"
+            ? toolText("module.subagents.tool.team_send.result.queued")
             : details.error
-              ? String(details.error)
+              ? teamSendErrorText(String(details.error), toolText)
               : undefined;
+        const note = typeof (context?.args as { text?: unknown } | undefined)?.text === "string"
+          ? ((context!.args as { text: string }).text)
+          : "";
         return renderToolCardResult(
           {
             title: toolText("module.subagents.tool.team_send.display"),
             object: target,
             status,
-            details: options.expanded ? text.split("\n") : [],
+            // 展开区只放成员写的留言；execute 返回给模型的指令不进卡片。
+            details: options.expanded && note.trim() !== "" ? [note] : [],
           },
           theme,
           options,

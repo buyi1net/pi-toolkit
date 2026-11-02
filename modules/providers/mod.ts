@@ -10,6 +10,7 @@ import {
 	type UsageRuntimeState,
 } from "./api.ts";
 import { loadProviderAccessFile } from "./credentials.ts";
+import { formatProviderWarning } from "./messages/index.ts";
 import { PiProviderUsageController } from "./provider-usage.ts";
 import { PoolUsageTracker } from "./pool-usage.ts";
 
@@ -79,7 +80,9 @@ export function registerProviders(context: ModuleContext, options: ProvidersModu
 
 		const loaded = loadProviderAccessFile(agentDir);
 		if (ctx.hasUI) {
-			for (const warning of loaded.warnings) ctx.ui.notify(warning, "warning");
+			for (const warning of loaded.warnings) {
+				ctx.ui.notify(formatProviderWarning(warning, context.t), "warning");
+			}
 		}
 	});
 

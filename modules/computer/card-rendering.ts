@@ -1,15 +1,24 @@
-import type { Component } from "@earendil-works/pi-tui";
+import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import type { AgentToolResult, Theme, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
-import { renderToolCardCall, renderToolCardResult, toolCardText, type ToolCardRenderContext } from "../../kit/tool-card.ts";
+import {
+  compactRenderText,
+  renderToolCardCall,
+  renderToolCardResult,
+  toolCardText,
+  type ToolCardFailureLabels,
+  type ToolCardRenderContext,
+} from "../../kit/tool-card.ts";
+import type { Translator } from "../../i18n/index.ts";
+import { COMPUTER_ERROR_MESSAGE_KEYS } from "./messages/index.ts";
 import type {
   ComputerActData,
+  ComputerError,
   ComputerInspectData,
   ComputerObserveData,
   ComputerReadData,
-  ComputerResult,
-  ComputerRootSummary,
   ComputerRootsData,
   ComputerRunData,
+  ComputerRunStatus,
   ComputerSearchData,
   ComputerStatusData,
   ComputerWaitData,
@@ -34,6 +43,12 @@ function countCardPart(count: number, unit: string): string {
   return `${count} ${unit}${count === 1 ? "" : "s"}`;
 }
 
+export function computerFailureLabels(t: Translator): ToolCardFailureLabels {
+  const byCode: Record<string, string> = {};
+  for (const [code, key] of Object.entries(COMPUTER_ERROR_MESSAGE_KEYS)) byCode[code] = t(key);
+  return { fallback: t("module.computer.error.failed"), byCode };
+}
+
 export function cardCall(
   title: string,
   object: string | undefined,
@@ -43,12 +58,19 @@ export function cardCall(
   return renderToolCardCall(object === undefined ? { title } : { title, object }, theme, context);
 }
 
-export function cardStatusLine<T>(details: ToolDetails<T> | undefined, summarize: (data: T) => string | undefined): string | undefined {
+export function cardStatusLine<T>(
+  details: ToolDetails<T> | undefined,
+  summarize: (data: T) => string | undefined,
+  labels: ToolCardFailureLabels,
+): string | undefined {
   if (details === undefined) return undefined;
-  return details.ok ? summarize(details.data) : `failed: ${details.error.code}`;
+  if (details.ok) return summarize(details.data);
+  const label = labels.byCode?.[details.error.code] ?? labels.fallback;
+  return truncateToWidth(compactRenderText(label), 60, "…");
 }
 
 export function cardResult<T>(
+  t: Translator,
   title: string,
   object: string | undefined,
   summarize: (data: T) => string | undefined,
@@ -56,15 +78,27 @@ export function cardResult<T>(
   options: ToolRenderResultOptions,
   theme: Theme,
   context: ToolCardRenderContext | undefined,
+  detailsLines?: (data: T) => readonly string[],
 ): Component {
-  const fullText = toolCardText(result);
-  const status = cardStatusLine(result.details as ToolDetails<T> | undefined, summarize);
+  const details = result.details as ToolDetails<T> | undefined;
+  const status = cardStatusLine(details, summarize, computerFailureLabels(t));
+  const expandedLines = options.expanded
+    ? details === undefined
+      ? []
+      : details.ok
+        ? [...(detailsLines?.(details.data) ?? [])]
+        : [failureDetailLine(t, details.error)]
+    : [];
   return renderToolCardResult(
-    { title, object, status, details: options.expanded && fullText !== "" ? fullText.split("\n") : [] },
+    { title, object, status, details: expandedLines },
     theme,
     options,
     context,
   );
+}
+
+function failureDetailLine(t: Translator, error: ComputerError): string {
+  return t(COMPUTER_ERROR_MESSAGE_KEYS[error.code]);
 }
 
 export function observeCallObject(args: unknown): string | undefined {
@@ -90,7 +124,7 @@ export function actCallObject(args: unknown): string | undefined {
 }
 
 export function waitCallObject(args: unknown): string | undefined {
-  const params = args as WaitParams | undefined;
+  const params = (args as WaitParams | undefined);
   if (params?.text !== undefined) return "text";
   if (params?.window !== undefined) return "window";
   if (params?.delayMs !== undefined) return `delay ${params.delayMs}ms`;
@@ -102,56 +136,100 @@ export function runCallObject(args: unknown): string | undefined {
   return steps === undefined ? undefined : countCardPart(steps.length, "step");
 }
 
-export function statusCardLine(data: ComputerStatusData): string {
-  return `helper ${data.bridge.ready ? "ready" : "not ready"} (${data.capabilities.platform})`;
+function runStatusLabel(t: Translator, status: ComputerRunStatus): string {
+  switch (status) {
+    case "completed":
+      return t("module.computer.card.statusCompleted");
+    case "failed":
+      return t("module.computer.card.statusFailed");
+    case "timeout":
+      return t("module.computer.card.statusTimeout");
+  }
 }
 
-export function rootsCardLine(data: ComputerRootsData): string {
-  return countCardPart(data.roots.length, "root");
+function platformLabel(t: Translator, platform: string): string {
+  const key = `module.computer.card.platform.${platform}`;
+  const label = t(key);
+  return label === key ? platform : label;
 }
 
-export function observeCardLine(data: ComputerObserveData): string | undefined {
+export function statusCardLine(t: Translator, data: ComputerStatusData): string {
+  const platform = platformLabel(t, data.capabilities.platform);
+  return data.bridge.ready
+    ? t("module.computer.card.helperReady", { platform })
+    : t("module.computer.card.helperNotReady", { platform });
+}
+
+export function rootsCardLine(t: Translator, data: ComputerRootsData): string {
+  return t("module.computer.card.roots", { count: data.roots.length });
+}
+
+export function observeCardLine(t: Translator, data: ComputerObserveData): string | undefined {
   return joinCardParts([
-    data.stateId,
-    countCardPart(data.nodeCount, "node"),
-    ...(data.truncated ? ["truncated"] : []),
+    t("module.computer.card.nodes", { count: data.nodeCount }),
+    ...(data.truncated ? [t("module.computer.card.truncated")] : []),
   ]);
 }
 
-export function searchCardLine(data: ComputerSearchData): string {
-  if (data.total === 0) return "no match";
-  const shown = data.matches.length < data.total ? ` (${data.matches.length} shown)` : "";
-  return `${countCardPart(data.total, "match")}${shown}`;
+export function observeDetailsLines(t: Translator, data: ComputerObserveData): readonly string[] {
+  return [
+    t("module.computer.card.stateId", { stateId: data.stateId }),
+    ...(data.capture !== undefined ? [t("module.computer.card.captureSaved", { path: data.capture.path })] : []),
+  ];
 }
 
-export function inspectCardLine(data: ComputerInspectData): string | undefined {
-  return joinCardParts([`${data.node.ref} ${data.node.role}`, countCardPart(data.nodeCount, "node")]);
+export function searchCardLine(t: Translator, data: ComputerSearchData): string {
+  if (data.total === 0) return t("module.computer.card.noMatch");
+  const shown = data.matches.length < data.total
+    ? ` (${t("module.computer.card.matchesShown", { count: data.matches.length })})`
+    : "";
+  return `${t("module.computer.card.matches", { count: data.total })}${shown}`;
 }
 
-export function actCardLine(data: ComputerActData): string | undefined {
+export function inspectCardLine(t: Translator, data: ComputerInspectData): string | undefined {
   return joinCardParts([
-    data.stateId,
-    data.changes.length > 0 ? countCardPart(data.changes.length, "change") : "no changes",
+    data.node.role,
+    t("module.computer.card.nodes", { count: data.nodeCount }),
   ]);
 }
 
-export function readCardLine(data: ComputerReadData): string | undefined {
-  if (data.text.length === 0) return data.truncated ? "empty page" : "no text";
+export function inspectDetailsLines(t: Translator, data: ComputerInspectData): readonly string[] {
+  return [`${data.node.ref} ${data.node.role}`];
+}
+
+export function actCardLine(t: Translator, data: ComputerActData): string | undefined {
+  return data.changes.length > 0
+    ? t("module.computer.card.changes", { count: data.changes.length })
+    : t("module.computer.card.noChanges");
+}
+
+export function actDetailsLines(t: Translator, data: ComputerActData, logWriteError?: string): readonly string[] {
+  return [
+    t("module.computer.card.stateId", { stateId: data.stateId }),
+    ...(logWriteError !== undefined ? [t("module.computer.card.logWriteFailed", { reason: logWriteError })] : []),
+  ];
+}
+
+export function readCardLine(t: Translator, data: ComputerReadData): string | undefined {
+  if (data.text.length === 0) return data.truncated ? t("module.computer.card.emptyPage") : t("module.computer.card.noText");
   return joinCardParts([
-    countCardPart(data.text.length, "char"),
-    ...(data.nextOffset !== undefined ? [`more at offset ${data.nextOffset}`] : []),
+    t("module.computer.card.chars", { count: data.text.length }),
+    ...(data.nextOffset !== undefined ? [t("module.computer.card.moreAtOffset", { offset: data.nextOffset })] : []),
   ]);
 }
 
-export function waitCardLine(data: ComputerWaitData): string | undefined {
-  return joinCardParts([data.met ? "met" : "unmet", `${data.elapsedMs}ms`]);
+export function waitCardLine(t: Translator, data: ComputerWaitData): string | undefined {
+  return joinCardParts([
+    data.met ? t("module.computer.card.met") : t("module.computer.card.unmet"),
+    `${data.elapsedMs}ms`,
+  ]);
 }
 
-export function runCardLine(data: ComputerRunData): string | undefined {
+export function runCardLine(t: Translator, data: ComputerRunData): string | undefined {
   return joinCardParts([
-    data.status,
-    `${countCardPart(data.completed, "step")} ok`,
-    ...(data.failedStep !== undefined ? [`step ${data.failedStep} failed`] : []),
-    ...(data.effectsUnknown ? ["effects unknown"] : []),
+    runStatusLabel(t, data.status),
+    t("module.computer.card.stepsOk", { count: data.completed }),
+    ...(data.failedStep !== undefined ? [t("module.computer.card.stepFailed", { step: data.failedStep })] : []),
+    ...(data.effectsUnknown ? [t("module.computer.card.effectsUnknown")] : []),
   ]);
 }

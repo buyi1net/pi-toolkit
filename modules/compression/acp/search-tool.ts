@@ -5,8 +5,9 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { compactSegment, renderToolCardCall, renderToolCardResult, toolCardText } from "../../../kit/tool-card.ts";
+import { compactSegment, renderToolCardCall, renderToolCardResult } from "../../../kit/tool-card.ts";
 import type { Translator } from "../../../i18n/index.ts";
+import { searchCardDetails } from "../messages/index.ts";
 import type { AcpCompressionEngine } from "./engine.ts";
 import {
   acpToolUnavailable,
@@ -21,26 +22,25 @@ const SearchParams = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Max results (default 10)." })),
 });
 
-const TOOL_LABEL = "Search Context";
 const OBJECT_WIDTH = 40;
-const STATUS_WIDTH = 64;
 
 export interface AcpSearchToolDetails {
   readonly toolUnavailable?: typeof TOOL_UNAVAILABLE_REASON;
   readonly matches?: number;
 }
 
-function failureStatus(result: AgentToolResult<unknown> | undefined): string {
-  if (result && isAcpToolUnavailableDetails(result.details)) return "unavailable";
-  const firstLine = toolCardText(result ?? {}).split("\n").find((line) => line.trim()) ?? "";
-  return compactSegment(firstLine, STATUS_WIDTH) ?? "failed";
+function failureStatus(t: Translator, result: AgentToolResult<unknown> | undefined): string {
+  return result && isAcpToolUnavailableDetails(result.details)
+    ? t("module.compression.card.status.unavailable")
+    : t("module.compression.card.status.failed");
 }
 
-function searchStatusText(details: AcpSearchToolDetails | undefined): string | undefined {
+function searchStatusText(t: Translator, details: AcpSearchToolDetails | undefined): string | undefined {
   const matches = details?.matches;
   if (typeof matches !== "number") return undefined;
-  if (matches <= 0) return "no matches";
-  return matches === 1 ? "1 match" : `${matches} matches`;
+  return matches <= 0
+    ? t("module.compression.card.search.none")
+    : t("module.compression.card.search.matches", { matches });
 }
 
 function searchObject(args: { query?: unknown } | undefined): string | undefined {
@@ -71,18 +71,22 @@ export function makeAcpSearchTool(deps: AcpSearchToolDeps): ToolDefinition<typeo
     parameters: SearchParams,
     renderShell: "self",
     renderCall(args, theme: Theme, context) {
-      return renderToolCardCall({ title: TOOL_LABEL, object: searchObject(args) }, theme, context);
+      return renderToolCardCall({ title: t("module.compression.tool.search.display"), object: searchObject(args) }, theme, context);
     },
     renderResult(result, options, theme: Theme, context) {
-      const status = context?.isError
-        ? failureStatus(result)
-        : searchStatusText(result.details as AcpSearchToolDetails | undefined);
+      const isError = context?.isError === true;
+      const status = isError
+        ? failureStatus(t, result)
+        : searchStatusText(t, result.details as AcpSearchToolDetails | undefined);
+      const details = options.expanded && !isError
+        ? searchCardDetails((result.details as AcpSearchToolDetails | undefined)?.matches, t)
+        : [];
       return renderToolCardResult(
         {
-          title: TOOL_LABEL,
+          title: t("module.compression.tool.search.display"),
           object: searchObject(context?.args),
           status,
-          details: options.expanded ? toolCardText(result).split("\n") : [],
+          details,
         },
         theme,
         options,

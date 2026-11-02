@@ -5,7 +5,7 @@ import {
 import { getToolkitConfigPath } from "../../kit/config.ts";
 import type { ModuleContext } from "../../kit/module.ts";
 import { VisionChain } from "./chain.ts";
-import { VisionRouteFacade, type VisionFacadePatch, type VisionSaveOptions } from "./facade.ts";
+import { VisionRouteFacade, VisionFacadeError, type VisionFacadePatch, type VisionSaveOptions } from "./facade.ts";
 import type { VisionMenuRuntime } from "./menu.ts";
 import { registerVisionContext, VisionBridge } from "./vision-bridge.ts";
 import { registerVisionQuery } from "./vision-tool.ts";
@@ -48,6 +48,13 @@ function registerVision(context: ModuleContext, facade: VisionRouteFacade): void
     } catch (error) {
 
       if (ctx.hasUI) {
+        if (error instanceof VisionFacadeError) {
+          ctx.ui.notify(
+            context.t("module.vision.internalError", { reason: describeError(error) }),
+            "warning",
+          );
+          return;
+        }
         ctx.ui.notify(
           context.t("problem.summary", {
             label: context.t("problem.config"),

@@ -173,11 +173,15 @@ export function buildPageItems(
 }
 
 function problemItem(build: MenuBuildContext, problem: ToolkitProblem): SettingItem {
+  const label = build.t(problem.kind === "config" ? "problem.config" : "problem.module");
+  const description = problem.kind === "config"
+    ? build.t(problem.messageKey, problem.vars)
+    : problem.detail;
   return {
     id: `problem.${problem.kind}.${problem.source}`,
-    label: build.t(problem.kind === "config" ? "problem.config" : "problem.module"),
-    description: problem.detail,
-    currentValue: problem.source,
+    label,
+    description,
+    currentValue: "",
   };
 }
 

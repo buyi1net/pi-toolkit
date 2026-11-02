@@ -1,4 +1,4 @@
-import { formatMessage } from "../../../i18n/index.ts";
+import { createTableTranslator } from "../../../i18n/index.ts";
 import type { MessageTables, MessageVars, ResolvedLanguage, Translator } from "../../../i18n/index.ts";
 import type {
   AcpCompressField,
@@ -140,6 +140,33 @@ const EN = {
   "module.compression.display.recovering": "Recovering compression state ({mode})…",
   "module.compression.display.recoverySucceeded": "Compression state recovered ({mode}); continuing",
   "module.compression.display.recoveryFailed": "Compression state recovery failed ({mode}): {reason}",
+  "module.compression.display.reasonFallback": "see the notification or log for details",
+  "module.compression.display.reason.aborted": "compaction was aborted",
+
+  "module.compression.statusLabel.native": "Cmp:native",
+  "module.compression.statusLabel.acp": "Cmp:ACP",
+  "module.compression.statusLabel.codex": "Cmp:Codex",
+
+  "module.compression.tool.compress.display": "Compress",
+  "module.compression.tool.decompress.display": "Decompress",
+  "module.compression.tool.search.display": "Search context",
+  "module.compression.card.status.unavailable": "Unavailable",
+  "module.compression.card.status.failed": "The operation failed",
+  "module.compression.card.range": "{count} range(s)",
+  "module.compression.card.decompress.mode.inline": "Restored inline",
+  "module.compression.card.decompress.mode.file": "Written to a file",
+  "module.compression.card.decompress.mode.messageInline": "Message restored inline",
+  "module.compression.card.decompress.mode.messageFile": "Message written to a file",
+  "module.compression.card.decompress.mode.notice": "Done",
+  "module.compression.card.compress.done": "Compressed {blocks} block(s), freed about {tokens} tokens",
+  "module.compression.card.compress.topics": "Topics: {topics}",
+  "module.compression.card.compress.none": "Nothing was compressed",
+  "module.compression.card.decompress.inline": "Restored {count} item(s) inline into the conversation",
+  "module.compression.card.decompress.file": "Wrote {count} item(s) to {path}; the block stays compressed",
+  "module.compression.card.decompress.alreadyInline": "Restored earlier in this conversation; nothing was re-inserted",
+  "module.compression.card.decompress.failed": "Restore failed",
+  "module.compression.card.search.matches": "Found {matches} result(s)",
+  "module.compression.card.search.none": "No matches found",
 
   "module.compression.codex.unsupported.apiNotResponses":
     "Codex compaction unavailable before any request: model API {api} is not a Responses shape (known non-Responses API)",
@@ -232,6 +259,7 @@ const EN = {
   "module.compression.acpSettings.field.prompts.label": "Prompt overrides",
   "module.compression.acpSettings.field.reasoning.label": "Reasoning handling",
   "module.compression.acpSettings.field.stripImages.label": "Image handling",
+  "module.compression.acpSettings.field.stripImagesKeepRecent.label": "Recent messages kept when stripping images (count)",
   "module.compression.acpSettings.field.models.label": "Model overrides",
   "module.compression.acpSettings.field.models.value": "{count} model(s)",
 
@@ -496,6 +524,33 @@ const ZH_CN: typeof EN = {
   "module.compression.display.recovering": "正在恢复上下文压缩状态（{mode}）…",
   "module.compression.display.recoverySucceeded": "上下文压缩状态已恢复（{mode}），继续工作",
   "module.compression.display.recoveryFailed": "上下文压缩状态恢复失败（{mode}）：{reason}",
+  "module.compression.display.reasonFallback": "详见通知或日志",
+  "module.compression.display.reason.aborted": "压缩已中止",
+
+  "module.compression.statusLabel.native": "压缩:原生",
+  "module.compression.statusLabel.acp": "压缩:ACP",
+  "module.compression.statusLabel.codex": "压缩:Codex",
+
+  "module.compression.tool.compress.display": "压缩上下文",
+  "module.compression.tool.decompress.display": "恢复内容",
+  "module.compression.tool.search.display": "搜索上下文",
+  "module.compression.card.status.unavailable": "当前不可用",
+  "module.compression.card.status.failed": "操作失败",
+  "module.compression.card.range": "{count} 段",
+  "module.compression.card.decompress.mode.inline": "已恢复到对话中",
+  "module.compression.card.decompress.mode.file": "已写入文件",
+  "module.compression.card.decompress.mode.messageInline": "消息已恢复",
+  "module.compression.card.decompress.mode.messageFile": "消息已写入文件",
+  "module.compression.card.decompress.mode.notice": "已处理",
+  "module.compression.card.compress.done": "已压缩 {blocks} 个块，约释放 {tokens} tokens",
+  "module.compression.card.compress.topics": "话题：{topics}",
+  "module.compression.card.compress.none": "没有生成压缩块",
+  "module.compression.card.decompress.inline": "已将 {count} 条内容恢复到对话中",
+  "module.compression.card.decompress.file": "已写入 {count} 条内容到 {path}，压缩块保持不变",
+  "module.compression.card.decompress.alreadyInline": "此前已恢复过，本次未重复插入内容",
+  "module.compression.card.decompress.failed": "恢复失败",
+  "module.compression.card.search.matches": "搜索到 {matches} 条结果",
+  "module.compression.card.search.none": "没有找到匹配结果",
 
   "module.compression.codex.unsupported.apiNotResponses":
     "Codex 压缩不可用（发请求前已判定）：模型 API {api} 不是 Responses 形状（已知非 Responses API）",
@@ -588,6 +643,7 @@ const ZH_CN: typeof EN = {
   "module.compression.acpSettings.field.prompts.label": "提示词覆写",
   "module.compression.acpSettings.field.reasoning.label": "Reasoning 处理",
   "module.compression.acpSettings.field.stripImages.label": "图片处理",
+  "module.compression.acpSettings.field.stripImagesKeepRecent.label": "剥离图片时保留的近期消息（条）",
   "module.compression.acpSettings.field.models.label": "模型覆盖",
   "module.compression.acpSettings.field.models.value": "{count} 个模型",
 
@@ -844,6 +900,33 @@ const ZH_TW: typeof EN = {
   "module.compression.display.recovering": "正在恢復上下文壓縮狀態（{mode}）…",
   "module.compression.display.recoverySucceeded": "上下文壓縮狀態已恢復（{mode}），繼續工作",
   "module.compression.display.recoveryFailed": "上下文壓縮狀態恢復失敗（{mode}）：{reason}",
+  "module.compression.display.reasonFallback": "詳見通知或日誌",
+  "module.compression.display.reason.aborted": "壓縮已中止",
+
+  "module.compression.statusLabel.native": "壓縮:原生",
+  "module.compression.statusLabel.acp": "壓縮:ACP",
+  "module.compression.statusLabel.codex": "壓縮:Codex",
+
+  "module.compression.tool.compress.display": "壓縮上下文",
+  "module.compression.tool.decompress.display": "還原內容",
+  "module.compression.tool.search.display": "搜尋上下文",
+  "module.compression.card.status.unavailable": "目前無法使用",
+  "module.compression.card.status.failed": "操作失敗",
+  "module.compression.card.range": "{count} 段",
+  "module.compression.card.decompress.mode.inline": "已還原到對話中",
+  "module.compression.card.decompress.mode.file": "已寫入檔案",
+  "module.compression.card.decompress.mode.messageInline": "訊息已還原",
+  "module.compression.card.decompress.mode.messageFile": "訊息已寫入檔案",
+  "module.compression.card.decompress.mode.notice": "已處理",
+  "module.compression.card.compress.done": "已壓縮 {blocks} 個塊，約釋放 {tokens} tokens",
+  "module.compression.card.compress.topics": "話題：{topics}",
+  "module.compression.card.compress.none": "沒有產生壓縮塊",
+  "module.compression.card.decompress.inline": "已將 {count} 條內容恢復到對話中",
+  "module.compression.card.decompress.file": "已寫入 {count} 條內容到 {path}，壓縮塊保持不變",
+  "module.compression.card.decompress.alreadyInline": "此前已恢復過，本次未重複插入內容",
+  "module.compression.card.decompress.failed": "恢復失敗",
+  "module.compression.card.search.matches": "搜尋到 {matches} 條結果",
+  "module.compression.card.search.none": "沒有找到符合結果",
 
   "module.compression.codex.unsupported.apiNotResponses":
     "Codex 壓縮不可用（發請求前已判定）：模型 API {api} 不是 Responses 形狀（已知非 Responses API）",
@@ -936,6 +1019,7 @@ const ZH_TW: typeof EN = {
   "module.compression.acpSettings.field.prompts.label": "提示詞覆寫",
   "module.compression.acpSettings.field.reasoning.label": "Reasoning 處理",
   "module.compression.acpSettings.field.stripImages.label": "圖片處理",
+  "module.compression.acpSettings.field.stripImagesKeepRecent.label": "剝離圖片時保留的近期訊息（條）",
   "module.compression.acpSettings.field.models.label": "模型覆寫",
   "module.compression.acpSettings.field.models.value": "{count} 個模型",
 
@@ -1113,8 +1197,7 @@ export function formatCompressionProblem(problem: CompressionConfigProblem, t: T
 export type CompressionTranslate = (key: CompressionMessageKey, vars?: MessageVars) => string;
 
 export function compressionTableTranslator(language: ResolvedLanguage): Translator {
-  const table: Record<string, string> = COMPRESSION_MESSAGES[language];
-  return (key, vars) => formatMessage(table[key], key, vars);
+  return createTableTranslator(COMPRESSION_MESSAGES[language], language);
 }
 
 export function compressionModeLabel(mode: CompressionMode, t: Translator): string {
@@ -1127,6 +1210,85 @@ export function compressionSourceLabel(source: CompressionSource, t: Translator)
 
 export function compressionFallbackLabel(reason: CompressionFallbackReason, t: Translator): string {
   return t(`module.compression.fallback.${reason}`);
+}
+
+export function compressionStatusLabel(mode: "native" | "acp" | "codex", t: Translator): string {
+  return t(`module.compression.statusLabel.${mode}`);
+}
+
+const DISPLAY_REASON_KEYS: Record<string, CompressionMessageKey> = {
+  "engine-missing": "module.compression.acp.toolUnavailable",
+  "state-failed": "module.compression.acp.stateUnavailable",
+  "checkpoint-invalid": "module.compression.codex.checkpoint.invalid",
+  "projection-unverifiable": "module.compression.codex.checkpoint.unverifiable",
+  "no-model": "module.compression.codex.resolve.noModel",
+  "host-projection-unsupported": "module.compression.codex.hostProjectionUnsupported",
+  "route-paused": "module.compression.codex.routePaused",
+  "rebuild-failed": "module.compression.acp.sidecarRebuildFailed",
+  aborted: "module.compression.display.reason.aborted",
+};
+
+export function compressionDisplayReasonLabel(reason: string, t: Translator): string {
+  const key = DISPLAY_REASON_KEYS[reason];
+  return key === undefined ? t("module.compression.display.reasonFallback") : t(key);
+}
+
+export interface CompressCardDetailsInput {
+  readonly blocksCreated?: number;
+  readonly tokensCompressed?: number;
+  readonly topics?: readonly string[];
+}
+
+export function compressCardDetails(input: CompressCardDetailsInput | undefined, t: Translator): string[] {
+  const blocks = input?.blocksCreated;
+  if (typeof blocks !== "number") return [];
+  if (blocks <= 0) return [t("module.compression.card.compress.none")];
+  const lines = [
+    t("module.compression.card.compress.done", {
+      blocks,
+      tokens: input?.tokensCompressed ?? 0,
+    }),
+  ];
+  const topics = (input?.topics ?? []).filter((topic) => topic.trim().length > 0);
+  if (topics.length > 0) {
+    lines.push(t("module.compression.card.compress.topics", { topics: topics.join(", ") }));
+  }
+  return lines;
+}
+
+export interface DecompressCardDetailsInput {
+  readonly mode?: "block-inline" | "block-file" | "message-inline" | "message-file" | "notice";
+  readonly failed?: boolean;
+  readonly restored?: { readonly count: number; readonly inline: boolean; readonly path?: string };
+}
+
+export function decompressCardDetails(input: DecompressCardDetailsInput | undefined, t: Translator): string[] {
+  const restored = input?.restored;
+  if (restored !== undefined) {
+    return [
+      restored.inline
+        ? t("module.compression.card.decompress.inline", { count: restored.count })
+        : t("module.compression.card.decompress.file", {
+            count: restored.count,
+            path: restored.path ?? "",
+          }),
+    ];
+  }
+  if (input?.mode !== "notice") return [];
+  return [
+    t(input.failed === true
+      ? "module.compression.card.decompress.failed"
+      : "module.compression.card.decompress.alreadyInline"),
+  ];
+}
+
+export function searchCardDetails(matches: number | undefined, t: Translator): string[] {
+  if (typeof matches !== "number") return [];
+  return [
+    matches > 0
+      ? t("module.compression.card.search.matches", { matches })
+      : t("module.compression.card.search.none"),
+  ];
 }
 
 export function codexProtocolLabel(protocol: CodexProtocol | undefined, t: Translator): string {

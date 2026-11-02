@@ -17,6 +17,8 @@ export interface VisionAnswerOk {
 export interface VisionAnswerFail {
   ok: false;
   json: string;
+  /** 用户视角的失败原因（三语文案），供卡片展示；json 只给模型。 */
+  reason?: string;
 }
 
 export type VisionAnswer = VisionAnswerOk | VisionAnswerFail;

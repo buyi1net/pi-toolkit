@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, MouseRegion, Text, truncateToWidth, stripTerminalSequences, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { deriveSessionShortId } from "../../shared/short-id.ts";
-import { expandedToolCardIds as expandedPeersMessageIds, formatToolCardLine, cardBackground } from "../../kit/tool-card.ts";
+import { isToolCardExpanded, toggleToolCardExpanded, formatToolCardLine, cardBackground } from "../../kit/tool-card.ts";
 import { PEERS_BODY_BEGIN_MARKER, PEERS_MESSAGE_CUSTOM_TYPE, sanitizePeersEnvelopeField, type PeersMessageDetails } from "./messaging.ts";
 import { peersTableTranslator, type PeersTranslate } from "./messages/index.ts";
 
@@ -132,11 +132,14 @@ export function registerPeersRenderers(
           object: source ?? undefined,
           status: cardStatus(data, t),
         }, theme)];
-        const expanded = options.expanded || (key !== null && expandedPeersMessageIds.has(key));
+        const expanded = isToolCardExpanded(key, options.expanded);
 
         if (expanded) {
           const lineWidth = Math.max(0, width - 6);
-          if (data !== null && data.instanceId !== null) {
+          const hasUsableSource =
+            data !== null &&
+            (data.name !== null || (data.sessionId !== null && deriveSessionShortId(data.sessionId) !== null));
+          if (data !== null && data.instanceId !== null && !hasUsableSource) {
             contentLines.push(theme.fg("dim", truncateToWidth(t("module.peers.renderer.instance", { id: data.instanceId }), lineWidth)));
           }
           if (data !== null && data.sentAt !== null) {
@@ -164,8 +167,7 @@ export function registerPeersRenderers(
     };
     return new MouseRegion(card, (event) => {
       if (key === null || event.type !== "click" || event.button !== "left") return undefined;
-      if (expandedPeersMessageIds.has(key)) expandedPeersMessageIds.delete(key);
-      else expandedPeersMessageIds.set(key, true);
+      toggleToolCardExpanded(key);
       return { handled: true };
     });
   });

@@ -404,7 +404,7 @@ export function deliverRecoveredHeadless(run: StartedRun, pi: ExtensionAPI, arti
     .then((result) => {
       const terminal = result as SubagentResult;
       updateWidget();
-      // 与正常路径（subagent-tool.ts settle）同口径：stop（stopped）与用户关窗（userClosed）都结算为 cancelled，
+      // 与正常路径 settle 同口径：stop（stopped）与用户关窗（userClosed）都结算为 cancelled，
       // 其余按 exitCode/errorMessage 默认归类；handedOff 仍由默认分支归为 handed-off。
       settleCompletionFromResult(running.name, terminal, {
         ...(terminal.userClosed || terminal.stopped ? { status: "cancelled" as const } : {}),

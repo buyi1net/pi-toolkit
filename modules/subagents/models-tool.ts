@@ -12,6 +12,7 @@ import type { ModelTier } from "./routing.ts";
 import type { ListedAgentDefinition } from "./agents.ts";
 import { detectDisplayModeAvailability, type DisplayModeAvailability } from "./surface.ts";
 import type { SubagentsTranslate } from "./messages/index.ts";
+import type { SubagentsMessageKey } from "./messages/index.ts";
 
 export interface AgentTypeSummary {
   readonly name: string;
@@ -62,10 +63,38 @@ function currentModelFromContext(ctx: ExtensionContext): CatalogModel | null {
   return model as unknown as CatalogModel;
 }
 
-function modelRenderLine(model: SubagentModelsResult["models"][number]): string {
+const HEALTH_VERDICT_KEYS: Record<string, SubagentsMessageKey> = {
+  available: "module.subagents.tool.subagent_models.result.health.available",
+  "quota-blocked": "module.subagents.tool.subagent_models.result.health.quotaBlocked",
+  unstable: "module.subagents.tool.subagent_models.result.health.unstable",
+  offline: "module.subagents.tool.subagent_models.result.health.offline",
+  unknown: "module.subagents.tool.subagent_models.result.health.unknown",
+  unconfigured: "module.subagents.tool.subagent_models.result.health.unconfigured",
+};
+
+function healthVerdictWord(status: unknown, t: SubagentsTranslate | undefined): string {
+  const value = compactRenderText(status);
+  const key = value ? HEALTH_VERDICT_KEYS[value] : undefined;
+  if (!key) return value;
+  return t?.(key) ?? value;
+}
+
+function relativeTimeLabel(at: number, t: SubagentsTranslate | undefined, now = Date.now()): string {
+  const seconds = Math.max(0, Math.floor((now - at) / 1000));
+  if (seconds < 60) return t?.("module.subagents.tool.subagent_models.result.justNow") ?? "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return t?.("module.subagents.tool.subagent_models.result.minutesAgo", { count: String(minutes) }) ?? `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return t?.("module.subagents.tool.subagent_models.result.hoursAgo", { count: String(hours) }) ?? `${hours} h ago`;
+  const days = Math.floor(hours / 24);
+  return t?.("module.subagents.tool.subagent_models.result.daysAgo", { count: String(days) }) ?? `${days} d ago`;
+}
+
+function modelRenderLine(model: SubagentModelsResult["models"][number], t: SubagentsTranslate | undefined): string {
   const route = `${model.provider}/${model.id}`.replace(/\s+/g, " ");
-  const reasoning = model.reasoning_effort.length > 0 ? model.reasoning_effort.join(", ") : "none";
-  return `${route} — reasoning: ${reasoning}`;
+  const levels = model.reasoning_effort.length > 0 ? model.reasoning_effort.join(", ") : undefined;
+  const reasoning = levels ?? (t?.("module.subagents.tool.subagent_models.result.reasoningNone") ?? "none");
+  return t?.("module.subagents.tool.subagent_models.result.reasoningLine", { route, levels: reasoning }) ?? `${route} — reasoning: ${reasoning}`;
 }
 
 type ModelHealthView = {
@@ -80,18 +109,24 @@ function modelHealthLines(
   theme: { fg(color: string, text: string): string },
   t: SubagentsTranslate | undefined,
 ): string[] {
-  const statusWord = compactRenderText(health?.status) || "unknown";
+  const statusWord = healthVerdictWord(health?.status, t) || "unknown";
   let healthLine = t?.("module.subagents.tool.subagent_models.result.healthLine", { status: statusWord }) ?? `health: ${statusWord}`;
   if (typeof health?.error_count === "number") {
     healthLine += ` · ${t?.("module.subagents.tool.subagent_models.result.errorCount", { count: String(health.error_count) }) ?? `errors ${health.error_count}`}`;
   }
   const lines = [`  ${theme.fg("muted", healthLine)}`];
   const errorType = compactRenderText(health?.last_error_type);
-  const errorAt = typeof health?.last_error_at === "number" ? new Date(health.last_error_at).toISOString() : "";
+  const errorAt = typeof health?.last_error_at === "number" ? relativeTimeLabel(health.last_error_at, t) : "";
   if (errorType && errorAt) {
     lines.push(`  ${theme.fg("muted", t?.("module.subagents.tool.subagent_models.result.lastError", { type: errorType, at: errorAt }) ?? `last error: ${errorType} (${errorAt})`)}`);
   }
   return lines;
+}
+
+function unavailableModeReasonText(reason: string, t: SubagentsTranslate | undefined): string {
+  if (/CLI is unavailable/.test(reason)) return t?.("module.subagents.display.cause.cliUnavailable") ?? reason;
+  if (/is not set$/.test(reason)) return t?.("module.subagents.display.cause.envNotSet") ?? reason;
+  return reason;
 }
 
 function displayModeLines(
@@ -102,7 +137,7 @@ function displayModeLines(
   const lines = [t?.("module.subagents.tool.subagent_models.result.displayModesLabel") ?? "display modes:"];
   for (const mode of modes) {
     const mark = mode.available ? theme.fg("success", "✓") : theme.fg("error", "✗");
-    const reason = !mode.available && mode.reason ? ` — ${mode.reason}` : "";
+    const reason = !mode.available && mode.reason ? ` — ${unavailableModeReasonText(mode.reason, t)}` : "";
     lines.push(`  ${mode.mode} ${mark}${reason}`);
   }
   return lines;
@@ -178,7 +213,7 @@ export function registerSubagentModelsTool(
       const agentTypesText = agentTypesLine(Array.isArray(details?.agent_types) ? details.agent_types : [], deps.t);
       const rows: string[] = options.expanded
         ? [
-            ...models.flatMap((model) => [modelRenderLine(model), ...modelHealthLines(model.health, theme, deps.t)]),
+            ...models.flatMap((model) => [modelRenderLine(model, deps.t), ...modelHealthLines(model.health, theme, deps.t)]),
             ...(displayModes.length > 0 ? ["", ...displayModeLines(displayModes, theme, deps.t)] : []),
             ...(agentTypesText ? ["", agentTypesText] : []),
           ]

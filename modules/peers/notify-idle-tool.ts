@@ -7,7 +7,7 @@ import {
   PEERS_IDLE_SUBSCRIPTION_MAX_TTL_MS,
   PEERS_IDLE_SUBSCRIPTION_MIN_TTL_MS,
 } from "./subscriptions.ts";
-import type { PeersTranslate } from "./messages/index.ts";
+import { peersReasonLabel, type PeersTranslate } from "./messages/index.ts";
 
 export interface PeersNotifyIdleToolDeps extends PeersSendDeps {
   readonly label: string;
@@ -32,10 +32,23 @@ function formatSubscribeReport(report: PeersIdleSubscribeReport, target: string)
 function renderStatus(details: Partial<PeersIdleSubscribeReport> | undefined, t?: PeersTranslate): string {
   if (details?.result === "accepted") {
     return details.state === "fired"
-      ? (t?.("module.peers.tool.notify.result.fired") ?? "Target already idle; notice accepted")
+      ? (t?.("module.peers.tool.notify.result.fired") ?? "Target already idle; notice delivered to this session")
       : (t?.("module.peers.tool.notify.result.armed") ?? "Idle notice subscribed");
   }
-  return t?.("module.peers.tool.notify.result.failed", { reason: details?.reason ?? "failed" }) ?? "Subscription failed";
+  const reason = peersReasonLabel(details?.reason, t);
+  return reason === null
+    ? (t?.("module.peers.tool.notify.result.failedUnknown") ?? "Subscription failed")
+    : (t?.("module.peers.tool.notify.result.failed", { reason }) ?? `Subscription failed: ${reason}`);
+}
+
+function renderDetailLines(details: Partial<PeersIdleSubscribeReport> | undefined, t?: PeersTranslate): string[] {
+  if (details?.result !== "accepted") return [];
+  if (details.state === "fired") {
+    return [t?.("module.peers.tool.notify.result.firedDetail") ?? "Target already idle; notice delivered to this session"];
+  }
+  if (typeof details.expiresAt !== "number") return [];
+  const time = new Date(details.expiresAt).toLocaleString();
+  return [t?.("module.peers.tool.notify.result.expiresAt", { time }) ?? `One-shot; expires ${time}`];
 }
 
 export function registerPeersNotifyIdleTool(pi: ExtensionAPI, deps: PeersNotifyIdleToolDeps): void {
@@ -79,7 +92,7 @@ export function registerPeersNotifyIdleTool(pi: ExtensionAPI, deps: PeersNotifyI
       const details = result.details as (Partial<PeersIdleSubscribeReport> & { target?: unknown }) | undefined;
       const target = typeof details?.target === "string" ? details.target : "(target)";
       const title = deps.t?.("module.peers.tool.notify.display", { target }) ?? "Notify when idle";
-      const expanded = options.expanded && typeof details?.detail === "string" ? [details.detail] : [];
+      const expanded = options.expanded ? renderDetailLines(details, deps.t) : [];
       return renderToolCardResult(
         { title, object: target, status: renderStatus(details, deps.t), details: expanded },
         theme,

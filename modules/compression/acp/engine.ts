@@ -58,6 +58,7 @@ import {
 import { acpFormatSearchResults, acpRunSearch } from "./search.ts";
 import { AcpSidecarStore, acpSidecarExists } from "./sidecar.ts";
 import { isAcpToolUnavailableDetails } from "./tool-guard.ts";
+import type { DisplayMessage } from "../display.ts";
 
 export type AcpDiagnostics = (
   key: string,
@@ -69,7 +70,11 @@ export type AcpDiagnostics = (
 export type AcpRecoveryEvent =
   | { readonly kind: "recovering" }
   | { readonly kind: "recovered" }
-  | { readonly kind: "failed"; readonly reason: "newer-schema" | "rebuild-failed" };
+  | {
+      readonly kind: "failed";
+      readonly reason: "newer-schema" | "rebuild-failed";
+      readonly message?: DisplayMessage;
+    };
 
 interface AcpSessionSlot {
   state?: CompressionState;
@@ -89,6 +94,7 @@ export interface AcpCompressOutcome {
   readonly text: string;
   readonly blocksCreated: number;
   readonly tokensCompressed: number;
+  readonly topics: readonly string[];
 
   readonly persisted: boolean;
 }
@@ -106,6 +112,8 @@ export interface AcpDecompressOutcome {
   readonly failed?: boolean;
 
   readonly blockId?: string;
+
+  readonly restored?: { readonly count: number; readonly inline: boolean; readonly path?: string };
 }
 
 export interface AcpSearchArgs {
@@ -377,7 +385,17 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
       slot.failure = { kind: "newer-schema", detail: `schema v${loaded.schemaVersion ?? "?"}` };
 
       emitRecovery({ kind: "recovering" }, ctx);
-      emitRecovery({ kind: "failed", reason: "newer-schema" }, ctx);
+      emitRecovery(
+        {
+          kind: "failed",
+          reason: "newer-schema",
+          message: {
+            key: "module.compression.acp.sidecarNewer",
+            vars: { version: String(loaded.schemaVersion ?? "?") },
+          },
+        },
+        ctx,
+      );
       diagnostics(
         "sidecar-newer",
         "error",
@@ -443,7 +461,10 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
             t("module.compression.acp.sidecarRebuildFailed"),
             ctx,
           );
-          emitRecovery({ kind: "failed", reason: "rebuild-failed" }, ctx);
+          emitRecovery(
+            { kind: "failed", reason: "rebuild-failed", message: { key: "module.compression.acp.sidecarRebuildFailed" } },
+            ctx,
+          );
           return slot;
         }
       } catch (error) {
@@ -454,7 +475,17 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
           t("module.compression.acp.sidecarRebuildFailedWith", { error: describeError(error) }),
           ctx,
         );
-        emitRecovery({ kind: "failed", reason: "rebuild-failed" }, ctx);
+        emitRecovery(
+          {
+            kind: "failed",
+            reason: "rebuild-failed",
+            message: {
+              key: "module.compression.acp.sidecarRebuildFailedWith",
+              vars: { error: describeError(error) },
+            },
+          },
+          ctx,
+        );
         return slot;
       }
 
@@ -657,6 +688,9 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
         text,
         blocksCreated: applied.result.blocksCreated,
         tokensCompressed: applied.result.tokensCompressed,
+        topics: [
+          ...new Set(changed.map((block) => block.topic).filter((topic): topic is string => Boolean(topic))),
+        ],
 
         persisted,
       };
@@ -720,6 +754,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
             text: `Message ${arg} (${found.role}, block ${ownerBlock.blockId}, ${found.text.length} chars) restored inline:\n\n${found.text}`,
             mode: "message-inline",
             blockId: ownerBlock.blockId,
+            restored: { count: 1, inline: true },
           };
         }
         const targetPath = toFile ? acpResolveRestoreFilePath(toFile) : acpAutoRestoreFilePath(`msg-${rawId}`);
@@ -735,6 +770,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
           ].join("\n"),
           mode: "message-file",
           blockId: ownerBlock.blockId,
+          restored: { count: 1, inline: false, path: targetPath },
         };
       }
 
@@ -793,6 +829,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
           text: `Restored block ${blockId} (${collected.count} item${collected.count === 1 ? "" : "s"}, ${block.startRef ?? "?"}–${block.endRef ?? "?"}) inline:\n\n${collected.text}\n\n${refoldHint(blockId, marked.result)}`,
           mode: "block-inline",
           blockId,
+          restored: { count: collected.count, inline: true },
         };
       }
 
@@ -810,6 +847,7 @@ export function createAcpEngine(options: AcpEngineOptions): AcpCompressionEngine
         ].join("\n"),
         mode: "block-file",
         blockId,
+        restored: { count: collected.count, inline: false, path: targetPath },
       };
     } finally {
       release();

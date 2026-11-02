@@ -109,9 +109,18 @@ export interface StatusSectionConfig {
 	telemetry: boolean;
 }
 
+export type StatusSettingKey =
+	| "module.status.preset.label"
+	| "module.status.telemetry.label"
+	| "module.status.segments.label";
+
+export type StatusWarning =
+	| { readonly kind: "badValue"; readonly setting: StatusSettingKey }
+	| { readonly kind: "badSegmentValue"; readonly value: string };
+
 export interface LoadedStatusSection {
 	readonly config: StatusSectionConfig;
-	readonly warnings: string[];
+	readonly warnings: readonly StatusWarning[];
 }
 
 export const DEFAULT_STATUS_SECTION: Readonly<StatusSectionConfig> = Object.freeze({
@@ -130,35 +139,35 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function readBoolean(value: unknown, fallback: boolean, field: string, warnings: string[]): boolean {
+function readBoolean(value: unknown, fallback: boolean, setting: StatusSettingKey, warnings: StatusWarning[]): boolean {
 	if (value === undefined) return fallback;
 	if (typeof value !== "boolean") {
-		warnings.push(`${field} 必须是布尔值，已使用默认值`);
+		warnings.push({ kind: "badValue", setting });
 		return fallback;
 	}
 	return value;
 }
 
-function readPresetValue(value: unknown, warnings: string[]): StatusPresetName {
+function readPresetValue(value: unknown, warnings: StatusWarning[]): StatusPresetName {
 	if (value === undefined) return DEFAULT_STATUS_SECTION.preset;
 	if (value === "ascii") return "default";
 	if (typeof value !== "string" || !VALID_PRESETS.has(value as StatusPresetName)) {
-		warnings.push("status.preset 的值无效，已使用默认值");
+		warnings.push({ kind: "badValue", setting: "module.status.preset.label" });
 		return DEFAULT_STATUS_SECTION.preset;
 	}
 	return value as StatusPresetName;
 }
 
-function readSegments(value: unknown, warnings: string[]): StatusSegmentId[] | null {
+function readSegments(value: unknown, warnings: StatusWarning[]): StatusSegmentId[] | null {
 	if (value === undefined || value === null) return null;
 	if (!Array.isArray(value)) {
-		warnings.push("status.segments 必须是数组或 null，已使用默认值");
+		warnings.push({ kind: "badValue", setting: "module.status.segments.label" });
 		return null;
 	}
 	const seen = new Set<StatusSegmentId>();
 	for (const segment of value) {
 		if (typeof segment !== "string" || !VALID_SEGMENTS.has(segment as StatusSegmentId)) {
-			warnings.push(`status.segments 包含无效值: ${String(segment)}，已忽略`);
+			warnings.push({ kind: "badSegmentValue", value: String(segment) });
 			continue;
 		}
 		seen.add(segment as StatusSegmentId);
@@ -167,13 +176,13 @@ function readSegments(value: unknown, warnings: string[]): StatusSegmentId[] | n
 }
 
 export function readStatusSection(section: Record<string, unknown> | undefined): LoadedStatusSection {
-	const warnings: string[] = [];
+	const warnings: StatusWarning[] = [];
 	const source = isRecord(section) ? section : {};
 	return {
 		config: {
 			preset: readPresetValue(source.preset, warnings),
 			segments: readSegments(source.segments, warnings),
-			telemetry: readBoolean(source.telemetry, DEFAULT_STATUS_SECTION.telemetry, "status.telemetry", warnings),
+			telemetry: readBoolean(source.telemetry, DEFAULT_STATUS_SECTION.telemetry, "module.status.telemetry.label", warnings),
 		},
 		warnings,
 	};

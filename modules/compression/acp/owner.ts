@@ -3,7 +3,7 @@ import type { Translator } from "../../../i18n/index.ts";
 import type { CompressionFallbackLedger } from "../fallback.ts";
 import { hasActiveCheckpointClaim, hasForeignCheckpointClaim, latestCheckpoint } from "../codex/checkpoint.ts";
 import type { CompactHandlerResult, CompactOwnerModule } from "../scheduler.ts";
-import type { CompressionDisplayReporter } from "../display.ts";
+import type { CompressionDisplayReporter, DisplayMessage } from "../display.ts";
 import { COMPRESSION_STATUS_KEY } from "../scheduler.ts";
 import { readAcpSidecarBlockCount } from "./sidecar.ts";
 import { acpHostSupported, type AcpCompressionEngine } from "./engine.ts";
@@ -50,7 +50,7 @@ export function createAcpOwner(deps: AcpOwnerDeps): AcpOwner {
     if (!engine) {
 
       if (display) {
-        display.fail("acp", "engine-missing");
+        display.fail("acp", "engine-missing", { key: "module.compression.acp.toolUnavailable" });
       } else {
         notifyOnce(ctx, `engine-missing|${event.reason}`, "error", t("module.compression.acp.toolUnavailable"));
       }
@@ -84,7 +84,10 @@ export function createAcpOwner(deps: AcpOwnerDeps): AcpOwner {
       }
 
       if (display) {
-        display.protect("acp", "host-unsupported-state");
+        display.protect("acp", "host-unsupported-state", {
+          key: "module.compression.acp.hostUnsupportedWithState",
+          vars: { reason },
+        });
       } else {
         notifyOnce(
           ctx,
@@ -102,7 +105,10 @@ export function createAcpOwner(deps: AcpOwnerDeps): AcpOwner {
     if (!state) {
 
       if (display) {
-        display.fail("acp", "state-failed");
+        display.fail("acp", "state-failed", {
+          key: "module.compression.acp.compactUnavailable",
+          vars: { reason },
+        });
       } else {
         notifyOnce(
           ctx,

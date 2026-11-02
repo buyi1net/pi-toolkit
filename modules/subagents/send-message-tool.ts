@@ -4,8 +4,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text, stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { toolCardFailureReason, renderToolCardCall, formatToolCardLine, cardBackground, compactRenderText } from "../../kit/tool-card.ts";
 import { readNameRegistry } from "./session.ts";
+import { normalizeTaskName } from "./names.ts";
 import type { RuntimeRegistry } from "./registry.ts";
-import type { SubagentsTranslate } from "./messages/index.ts";
+import { subagentFailureLabels, subagentStatusWord, type SubagentsTranslate } from "./messages/index.ts";
 import { createParentUpdateQueue, createParentUpdateProducers, type ParentSessionUpdate } from "./parent-update-queue.ts";
 import { agentTreeRootDir, readAgentTreeRecords } from "./agent-tree.ts";
 
@@ -118,6 +119,33 @@ function targetNames(deps: SendMessageToolDeps, ctx: ToolContext): ResolvedEntry
   return [...merged.map((entry) => ({ ...entry, managedLocally: true as const, parentAgentId: null, parentCanonicalTaskName: null })), ...remote];
 }
 
+/**
+ * Resolve a human/model-supplied name against the entries. Exact names win; only when nothing
+ * matches exactly do we fall back to the same normalization `spawn_agent` applies, and even then
+ * only when that folded form names exactly one agent. Two distinct names folding together
+ * (`pi-x` and `pi_x`) stay ambiguous instead of silently picking one.
+ */
+function resolveNameMatches(
+  entries: ResolvedEntry[],
+  target: string,
+): { entries: ResolvedEntry[] } | { error: ReturnType<typeof errorResult> } {
+  const exact = entries.filter((entry) => entry.name === target);
+  if (exact.length > 0) return { entries: exact };
+  const normalized = normalizeTaskName(target);
+  if (!normalized) return { entries: [] };
+  const folded = entries.filter((entry) => normalizeTaskName(entry.name) === normalized);
+  const distinctNames = [...new Set(folded.map((entry) => entry.name))];
+  if (distinctNames.length > 1) {
+    return {
+      error: errorResult("target_ambiguous", `Normalized task name "${normalized}" matches multiple targets.`, {
+        target,
+        candidates: folded.map((entry) => ({ agent_id: entry.agentId, canonical_task_name: entry.canonicalTaskName })),
+      }),
+    };
+  }
+  return { entries: folded };
+}
+
 export function resolveLifecycleTarget(
   deps: SendMessageToolDeps,
   ctx: ToolContext,
@@ -159,11 +187,12 @@ export function resolveLifecycleTarget(
     return { error: errorResult("target_not_found", `No subagent matches canonical task path "${target}".`, { target }) };
   }
 
-  const nameMatches = entries.filter((entry) => entry.name === target);
-  const openMatches = nameMatches.filter((entry) => entry.status !== "closed");
+  const nameMatches = resolveNameMatches(entries, target);
+  if ("error" in nameMatches) return { error: nameMatches.error };
+  const openMatches = nameMatches.entries.filter((entry) => entry.status !== "closed");
   const matches = openMatches.length > 0
     ? openMatches
-    : [...nameMatches].sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 1);
+    : [...nameMatches.entries].sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 1);
   const idMatches = entries.filter((entry) => entry.agentId === target);
   if (idMatches.length > 1) {
     return { error: errorResult("target_ambiguous", `Agent id "${target}" matches multiple historical runs.`, { target, candidates: idMatches.map((entry) => ({ agent_id: entry.agentId, canonical_task_name: entry.canonicalTaskName })) }) };
@@ -229,25 +258,22 @@ export function lifecycleUpdateDetails(update: ParentSessionUpdate, target: Targ
   };
 }
 
-/** 生命周期卡的统一 meta 标签：agent id / canonical / submission（· update）。有值才出对应行。 */
-export function lifecycleMetaLines(
-  details: { agent_id?: unknown; canonical_task_name?: unknown; submission_id?: unknown; update_id?: unknown },
+/** 失败卡展开区的事实行：目标名 / 状态 / 运行时事实；写给模型的指令与原文不进用户卡。 */
+export function lifecycleFailureFactLines(
+  details: Record<string, unknown>,
   t?: SubagentsTranslate,
 ): string[] {
-  const meta: string[] = [];
-  const agentId = compactRenderText(details.agent_id);
-  if (agentId) meta.push(t?.("module.subagents.tool.meta.agentId", { id: agentId }) ?? `agent id ${agentId}`);
-  const canonical = compactRenderText(details.canonical_task_name);
-  if (canonical) meta.push(t?.("module.subagents.tool.meta.canonical", { name: canonical }) ?? `canonical ${canonical}`);
-  const submissionId = compactRenderText(details.submission_id);
-  const updateId = compactRenderText(details.update_id);
-  if (submissionId) {
-    meta.push([
-      t?.("module.subagents.tool.meta.submission", { id: submissionId }) ?? `submission ${submissionId}`,
-      updateId ? t?.("module.subagents.tool.meta.update", { id: updateId }) ?? `update ${updateId}` : "",
-    ].filter(Boolean).join(" · "));
+  const lines: string[] = [];
+  const target = compactRenderText(details.task_name) || compactRenderText(details.target);
+  if (target) lines.push(t?.("module.subagents.tool.meta.target", { name: target }) ?? `target ${target}`);
+  const status = compactRenderText(details.status);
+  if (status) {
+    const word = subagentStatusWord(status, t);
+    lines.push(t?.("module.subagents.tool.meta.status", { status: word }) ?? `status ${word}`);
   }
-  return meta;
+  const fact = compactRenderText(details.fact);
+  if (fact) lines.push(fact);
+  return lines;
 }
 
 export function registerSendMessageTool(pi: ExtensionAPI, deps: SendMessageToolDeps): void {
@@ -267,16 +293,17 @@ export function registerSendMessageTool(pi: ExtensionAPI, deps: SendMessageToolD
     },
     renderResult(result, options, theme, context) {
       const details = result.details as any;
-      const text = result.content[0]?.type === "text" ? result.content[0].text : "Message delivery failed";
       const submitted = typeof details?.submission_id === "string";
       const title = deps.t?.("module.subagents.tool.send_message.display") ?? "Message subagent";
       const object = typeof details?.task_name === "string" ? details.task_name : typeof details?.target === "string" ? details.target : undefined;
       const status = submitted
         ? deps.t?.("module.subagents.tool.send_message.result.submitted") ?? "Message submitted"
-        : toolCardFailureReason(text, details);
+        : toolCardFailureReason(
+            details,
+            subagentFailureLabels(deps.t?.("module.subagents.tool.failure.send") ?? "Message not submitted", deps.t),
+          );
       const message = typeof context?.args?.message === "string" ? context.args.message : "";
-      const meta = submitted ? lifecycleMetaLines(details, deps.t) : [];
-      const failure = typeof details?.message === "string" && details.message !== "" ? details.message : "The message could not be submitted.";
+      const failureFacts = submitted ? [] : lifecycleFailureFactLines(details, deps.t);
 
       const component = {
         invalidate() {},
@@ -294,11 +321,8 @@ export function registerSendMessageTool(pi: ExtensionAPI, deps: SendMessageToolD
                 ...bodyLines.map((line) => theme.fg("toolOutput", line)),
               );
             }
-            if (submitted && meta.length > 0) {
-              lines.push("", ...meta.map((entry) => theme.fg("dim", truncateToWidth(entry, lineWidth))));
-            }
-            if (!submitted && failure) {
-              lines.push("", ...failure.split("\n").flatMap((line: string) => wrapTextWithAnsi(stripTerminalSequences(line), lineWidth)).map((line: string) => theme.fg("error", line)));
+            if (!submitted && failureFacts.length > 0) {
+              lines.push("", ...failureFacts.map((entry) => theme.fg("dim", truncateToWidth(entry, lineWidth))));
             }
           }
           const box = new Box(1, 1, cardBackground(theme, context?.isError === true ? "toolErrorBg" : "toolSuccessBg"));
@@ -329,13 +353,16 @@ export function registerSendMessageTool(pi: ExtensionAPI, deps: SendMessageToolD
         return errorResult("target_not_receivable", message, { target: params.target, agent_id: target.agentId, task_name: target.name, status: status ?? null });
       }
       const delivered = deps.handleSubagentSteer({ name: target.name, message }) as any;
-      if (delivered?.details?.error) return errorResult("target_not_receivable", `${String(delivered.details.error)} If its session context is recoverable, use followup_task to start a new round.`, { target: params.target, agent_id: target.agentId, task_name: target.name, status: target.status ?? null });
+      if (delivered?.details?.error) {
+        const errorFact = String(delivered.details.error);
+        return errorResult("target_not_receivable", `${errorFact} If its session context is recoverable, use followup_task to start a new round.`, { target: params.target, agent_id: target.agentId, task_name: target.name, status: target.status ?? null, fact: errorFact });
+      }
       const submissionId = `message-${randomUUID()}`;
       const update = lifecycleQueue(deps, ctx).message({
         agent_id: target.agentId,
         task_name: target.name,
         status: "running",
-        summary: `Immediate message ${submissionId} submitted.`,
+        summary: deps.t?.("module.subagents.updates.messageSubmitted") ?? "Immediate message submitted.",
         update_id: submissionId,
       });
       const ids = lifecycleUpdateDetails(update, target, submissionId);

@@ -120,11 +120,13 @@ export interface FormatSkillResultInput {
   readonly truncated?: boolean;
 }
 
+const REFERENCES_LINE_PREFIX = "References are relative to ";
+
 export function formatSkillResult(input: FormatSkillResultInput): string {
   const { skill, body, args, bundledFiles, truncated } = input;
   const parts: string[] = [
     `<skill name="${escapeXmlAttribute(skill.name)}" location="${escapeXmlAttribute(skill.filePath)}">`,
-    `References are relative to ${skill.baseDir}.`,
+    `${REFERENCES_LINE_PREFIX}${skill.baseDir}.`,
     "",
     body,
     "</skill>",
@@ -158,6 +160,17 @@ export function escapeXmlAttribute(value: string): string {
     "'": "&apos;",
   };
   return value.replace(/[&<>"']/g, (character) => escapes[character] ?? character);
+}
+
+/** 展开卡用的正文行：剥掉 <skill> 协议包装与定位说明行，只留正文本身。 */
+export function skillCardBodyLines(text: string): string[] {
+  const lines = text.split("\n");
+  const start = lines.findIndex((line) => line.startsWith("<skill "));
+  if (start === -1) return [];
+  const end = lines.indexOf("</skill>", start);
+  const body = lines.slice(start + 1, end === -1 ? lines.length : end);
+  while (body.length > 0 && (body[0].trim() === "" || body[0].startsWith(REFERENCES_LINE_PREFIX))) body.shift();
+  return body;
 }
 
 async function resolveRealPath(path: string, label: string): Promise<string> {

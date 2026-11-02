@@ -159,24 +159,22 @@ export class VisionBridge {
 
   async queryLatest(question: string, ctx: ExtensionContext): Promise<VisionAnswer> {
     const normalizedQuestion = question.trim();
-    if (!normalizedQuestion) return { ok: false, json: this.t("module.vision.queryEmpty") };
+    if (!normalizedQuestion) return { ok: false, json: this.t("module.vision.queryEmpty"), reason: this.t("module.vision.queryEmpty") };
     await this.cache.load(ctx);
     const image = this.latestImages.get(this.sessionKey(ctx));
-    if (!image) return { ok: false, json: this.t("module.vision.queryNoImage") };
+    if (!image) return { ok: false, json: this.t("module.vision.queryNoImage"), reason: this.t("module.vision.queryNoImage") };
     let preparedImage: VisionImage;
     try {
       [preparedImage] = await prepareVisionImages([image]);
     } catch (error) {
       this.reportPreprocessFailure(error, ctx);
-      return {
-        ok: false,
-        json: this.t("module.vision.injectPreprocessFailed", { reason: describeVisionImageError(error, this.t) }),
-      };
+      const reason = this.t("module.vision.injectPreprocessFailed", { reason: describeVisionImageError(error, this.t) });
+      return { ok: false, json: reason, reason };
     }
     const note = await this.analyze(preparedImage, normalizedQuestion, ctx, Date.now() + TASK_DEADLINE_MS);
     return note
       ? { ok: true, text: note.note, backend: note.model }
-      : { ok: false, json: this.t("module.vision.queryFailed") };
+      : { ok: false, json: this.t("module.vision.queryFailed"), reason: this.t("module.vision.queryFailed") };
   }
 
   async prepare(messages: VisionMessages, ctx: ExtensionContext): Promise<VisionMessages> {

@@ -2,7 +2,7 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import type { Translator } from "../../i18n/index.ts";
 import type { CompressionMode } from "./api.ts";
-import type { CompressionStrategyResolution } from "./strategy.ts";
+import { compressionDisplayReasonLabel } from "./messages/index.ts";
 
 export type CompressionDisplayOwner = "native" | "extension";
 
@@ -30,21 +30,15 @@ export interface CompressionDisplayEntryData {
 
   readonly reason?: string;
 
+  readonly messageKey?: string;
+  readonly messageVars?: Readonly<Record<string, string | number>>;
+
   readonly at: number;
 }
 
-export interface DisplaySeamChoice {
-
-  readonly nativeMasking: "available" | "unavailable";
-
-  readonly seam: "extension-custom-entry";
-}
-
-export function decideDisplayOwner(
-  resolution: CompressionStrategyResolution | undefined,
-): CompressionDisplayOwner {
-  if (resolution === undefined) return "native";
-  return resolution.mode === "native" ? "native" : "extension";
+export interface DisplayMessage {
+  readonly key: string;
+  readonly vars?: Readonly<Record<string, string | number>>;
 }
 
 export function isDisplayEntry(entry: SessionEntry): entry is SessionEntry & {
@@ -53,24 +47,6 @@ export function isDisplayEntry(entry: SessionEntry): entry is SessionEntry & {
   data?: CompressionDisplayEntryData;
 } {
   return entry.type === "custom" && entry.customType === COMPRESSION_DISPLAY_ENTRY_TYPE;
-}
-
-export function latestDisplayEntry(
-  entries: readonly SessionEntry[],
-  owner: CompressionDisplayOwner,
-): CompressionDisplayEntryData | undefined {
-  let latest: CompressionDisplayEntryData | undefined;
-  for (const entry of entries) {
-    if (!isDisplayEntry(entry)) continue;
-    const data = entry.data;
-    if (data && data.owner === owner) latest = data;
-  }
-  return latest;
-}
-
-export function resolveDisplaySeam(): DisplaySeamChoice {
-
-  return { nativeMasking: "unavailable", seam: "extension-custom-entry" };
 }
 
 export interface DisplayController {
@@ -83,9 +59,9 @@ export interface DisplayController {
 
   succeed(mode: CompressionMode): CompressionDisplayEntryData | undefined;
 
-  fail(mode: CompressionMode, reason: string): CompressionDisplayEntryData | undefined;
+  fail(mode: CompressionMode, reason: string, message?: DisplayMessage): CompressionDisplayEntryData | undefined;
 
-  protect(mode: CompressionMode, reason: string): CompressionDisplayEntryData | undefined;
+  protect(mode: CompressionMode, reason: string, message?: DisplayMessage): CompressionDisplayEntryData | undefined;
 
   conclude(mode: CompressionMode): CompressionDisplayEntryData | undefined;
 
@@ -93,7 +69,7 @@ export interface DisplayController {
 
   recoverSucceed(mode: CompressionMode): CompressionDisplayEntryData | undefined;
 
-  recoverFail(mode: CompressionMode, reason: string): CompressionDisplayEntryData | undefined;
+  recoverFail(mode: CompressionMode, reason: string, message?: DisplayMessage): CompressionDisplayEntryData | undefined;
 }
 
 export function createDisplayController(): DisplayController {
@@ -108,17 +84,28 @@ export function createDisplayController(): DisplayController {
     return current !== undefined && current.mode === mode;
   }
 
+  function messageFields(
+    message: DisplayMessage | undefined,
+  ): Pick<CompressionDisplayEntryData, "messageKey" | "messageVars"> {
+    if (message === undefined) return {};
+    return {
+      messageKey: message.key,
+      ...(message.vars === undefined ? {} : { messageVars: message.vars }),
+    };
+  }
+
   function terminalEntry(
     mode: CompressionMode,
     state: "failed" | "protected",
     reason: string,
+    message?: DisplayMessage,
   ): CompressionDisplayEntryData | undefined {
     if (current?.state === "in-progress" && current.mode === mode) {
-      return commit({ ...current, state, reason, at: Date.now() });
+      return commit({ ...current, state, reason, ...messageFields(message), at: Date.now() });
     }
     if (current?.state === "in-progress" || current?.state === "recovering") return undefined;
     if (current?.mode === mode) return undefined;
-    return commit({ owner: "extension", mode, state, reason, at: Date.now() });
+    return commit({ owner: "extension", mode, state, reason, ...messageFields(message), at: Date.now() });
   }
 
   const controller: DisplayController = {
@@ -152,11 +139,11 @@ export function createDisplayController(): DisplayController {
       if (!fromCurrentMode(mode) || current?.state !== "in-progress") return undefined;
       return commit({ ...current, state: "succeeded", at: Date.now() });
     },
-    fail(mode, reason): CompressionDisplayEntryData | undefined {
-      return terminalEntry(mode, "failed", reason);
+    fail(mode, reason, message): CompressionDisplayEntryData | undefined {
+      return terminalEntry(mode, "failed", reason, message);
     },
-    protect(mode, reason): CompressionDisplayEntryData | undefined {
-      return terminalEntry(mode, "protected", reason);
+    protect(mode, reason, message): CompressionDisplayEntryData | undefined {
+      return terminalEntry(mode, "protected", reason, message);
     },
     conclude(mode): CompressionDisplayEntryData | undefined {
       if (!fromCurrentMode(mode) || current?.state !== "in-progress") return undefined;
@@ -170,9 +157,9 @@ export function createDisplayController(): DisplayController {
       if (!fromCurrentMode(mode) || current?.state !== "recovering") return undefined;
       return commit({ ...current, state: "recovery-succeeded", at: Date.now() });
     },
-    recoverFail(mode, reason): CompressionDisplayEntryData | undefined {
+    recoverFail(mode, reason, message): CompressionDisplayEntryData | undefined {
       if (!fromCurrentMode(mode) || current?.state !== "recovering") return undefined;
-      return commit({ ...current, state: "recovery-failed", reason, at: Date.now() });
+      return commit({ ...current, state: "recovery-failed", reason, ...messageFields(message), at: Date.now() });
     },
   };
   return controller;
@@ -183,15 +170,20 @@ export function displayEntryLabel(
   t: Translator,
 ): string {
   const modeLabel = t(`module.compression.mode.${data.mode}`);
+  const reasonText = data.messageKey !== undefined
+    ? t(data.messageKey, data.messageVars)
+    : data.reason !== undefined
+      ? compressionDisplayReasonLabel(data.reason, t)
+      : "";
   switch (data.state) {
     case "in-progress":
       return t("module.compression.display.inProgress", { mode: modeLabel });
     case "succeeded":
       return t("module.compression.display.succeeded", { mode: modeLabel });
     case "failed":
-      return t("module.compression.display.failed", { mode: modeLabel, reason: data.reason ?? "" });
+      return t("module.compression.display.failed", { mode: modeLabel, reason: reasonText });
     case "protected":
-      return t("module.compression.display.protected", { mode: modeLabel, reason: data.reason ?? "" });
+      return t("module.compression.display.protected", { mode: modeLabel, reason: reasonText });
     case "expired":
       return t("module.compression.display.expired", { mode: modeLabel });
     case "concluded":
@@ -201,7 +193,7 @@ export function displayEntryLabel(
     case "recovery-succeeded":
       return t("module.compression.display.recoverySucceeded", { mode: modeLabel });
     case "recovery-failed":
-      return t("module.compression.display.recoveryFailed", { mode: modeLabel, reason: data.reason ?? "" });
+      return t("module.compression.display.recoveryFailed", { mode: modeLabel, reason: reasonText });
   }
 }
 
@@ -211,9 +203,9 @@ export interface CompressionDisplayReporter {
 
   succeed(mode: CompressionMode): void;
 
-  fail(mode: CompressionMode, reason: string): void;
+  fail(mode: CompressionMode, reason: string, message?: DisplayMessage): void;
 
-  protect(mode: CompressionMode, reason: string): void;
+  protect(mode: CompressionMode, reason: string, message?: DisplayMessage): void;
 
   conclude(mode: CompressionMode): void;
 
@@ -221,7 +213,7 @@ export interface CompressionDisplayReporter {
 
   recoverSucceed(mode: CompressionMode): void;
 
-  recoverFail(mode: CompressionMode, reason: string): void;
+  recoverFail(mode: CompressionMode, reason: string, message?: DisplayMessage): void;
 }
 
 export interface DisplayPresentation {
@@ -294,11 +286,11 @@ export function createDisplayReporter(
     succeed(mode): void {
       apply(controller.succeed(mode));
     },
-    fail(mode, reason): void {
-      apply(controller.fail(mode, reason));
+    fail(mode, reason, message): void {
+      apply(controller.fail(mode, reason, message));
     },
-    protect(mode, reason): void {
-      apply(controller.protect(mode, reason));
+    protect(mode, reason, message): void {
+      apply(controller.protect(mode, reason, message));
     },
     conclude(mode): void {
       apply(controller.conclude(mode));
@@ -309,8 +301,8 @@ export function createDisplayReporter(
     recoverSucceed(mode): void {
       apply(controller.recoverSucceed(mode));
     },
-    recoverFail(mode, reason): void {
-      apply(controller.recoverFail(mode, reason));
+    recoverFail(mode, reason, message): void {
+      apply(controller.recoverFail(mode, reason, message));
     },
   };
 }

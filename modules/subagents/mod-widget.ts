@@ -19,7 +19,8 @@ import {
   widgetIcon,
 } from "./display.ts";
 import { layoutTwoColumnSegments, type StatusSegment } from "../tui/status/segment-layout.ts";
-import { activeScopeLabel, statusLabelText } from "./status-lines.ts";
+import { activeScopeDisplay, statusLabelText } from "./status-lines.ts";
+import { loadStatusConfig } from "./status.ts";
 import type { StatusSnapshot } from "./status.ts";
 import type { RunningSubagent } from "./types.ts";
 
@@ -44,8 +45,17 @@ function noteSkip(reason: WidgetSkipReason, error?: unknown): void {
   debugLog(`subagent widget not installed: ${reason}`, error);
 }
 
+let statusEnabledCache: boolean | null = null;
+
 export function isStatusEnabled(): boolean {
-  return true;
+  if (statusEnabledCache === null) {
+    try {
+      statusEnabledCache = loadStatusConfig().enabled;
+    } catch {
+      statusEnabledCache = true;
+    }
+  }
+  return statusEnabledCache;
 }
 
 function formatWidgetRightLabel(snapshot: StatusSnapshot): string {
@@ -53,7 +63,7 @@ function formatWidgetRightLabel(snapshot: StatusSnapshot): string {
   if (snapshot.kind === "starting") return ` ${t("module.subagents.widget.status.starting")} `;
   if (snapshot.kind === "running") return ` ${t("module.subagents.widget.status.running")} ${snapshot.elapsedText} `;
   if (snapshot.kind === "active") {
-    const label = activeScopeLabel(snapshot);
+    const label = activeScopeDisplay(snapshot, t);
     const duration = snapshot.activeDurationText ? ` ${snapshot.activeDurationText}` : "";
     return label ? ` ${t("module.subagents.widget.status.active")} · ${label}${duration} ` : ` ${t("module.subagents.widget.status.active")} `;
   }
@@ -68,7 +78,7 @@ function formatWidgetRightLabel(snapshot: StatusSnapshot): string {
     return ` ${t("module.subagents.widget.stale.toolRunning", { duration })} `;
   }
   if (snapshot.kind === "stale") {
-    const last = activeScopeLabel(snapshot) ?? snapshot.latestEvent ?? "—";
+    const last = activeScopeDisplay(snapshot, t) ?? snapshot.latestEvent ?? "—";
     const duration = snapshot.staleDurationText ?? "";
     return ` ${t("module.subagents.widget.stale.noActivity", { duration, last })} `;
   }
@@ -160,7 +170,7 @@ export function renderWidgetSnapshotLines(
     ? (text: string) => theme.fg("text", text)
     : undefined;
   const lines: string[] = [
-    borderTop("Subagents", widgetText("module.subagents.widget.count.running", { count: snapshot.counts.allCount }), width, colorize),
+    borderTop(widgetText("module.subagents.label"), widgetText("module.subagents.widget.count.running", { count: snapshot.counts.allCount }), width, colorize),
   ];
   const tier = subagentTreeTier(width);
   const metadataLevel = widgetMetadataLevel(snapshot, width, tier);
@@ -186,12 +196,12 @@ export function renderWidgetSnapshotLines(
     lines.push(borderLine(prefix + layout.left, layout.right, width, colorize));
     if (row.collapseAfter != null && row.collapseAfter > 0) {
 
-      lines.push(borderLine(` ${muted ? muted("└─") : "└─"} … +${row.collapseAfter} more`, "", width, colorize));
+      lines.push(borderLine(` ${muted ? muted("└─") : "└─"} … ${widgetText("module.subagents.widget.more", { count: row.collapseAfter })}`, "", width, colorize));
     }
   }
 
   if (snapshot.counts.globalOverflow > 0) {
-    lines.push(borderLine(` … +${snapshot.counts.globalOverflow} more`, "", width, colorize));
+    lines.push(borderLine(` … ${widgetText("module.subagents.widget.more", { count: snapshot.counts.globalOverflow })}`, "", width, colorize));
   }
   lines.push(borderBottom(width, colorize));
   return lines;

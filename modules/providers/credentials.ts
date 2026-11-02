@@ -13,22 +13,33 @@ export function piTuiConfigPath(agentDir: string): string {
 	return join(agentDir, PI_TUI_CONFIG_FILENAME);
 }
 
+export type ProviderWarningKind =
+	| "readFailed"
+	| "parseFailed"
+	| "notObject"
+	| "badGithubDomain"
+	| "invalid";
+
+export interface ProviderWarning {
+	readonly kind: ProviderWarningKind;
+}
+
 export interface LoadedProviderAccess {
 
 	readonly exists: boolean;
 
 	readonly access?: PiProviderAccessConfig;
-	readonly warnings: readonly string[];
+	readonly warnings: readonly ProviderWarning[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function readGithubDomain(value: unknown, warnings: string[]): string | undefined {
+function readGithubDomain(value: unknown, warnings: ProviderWarning[]): string | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value !== "string" || !value.trim()) {
-		warnings.push("data.providerAccess.githubDomain 必须是非空字符串，已忽略");
+		warnings.push({ kind: "badGithubDomain" });
 		return undefined;
 	}
 	const domain = value.trim().toLowerCase();
@@ -39,22 +50,14 @@ function readGithubDomain(value: unknown, warnings: string[]): string | undefine
 		}
 		return domain;
 	} catch {
-		warnings.push("data.providerAccess.githubDomain 必须是主机名，已忽略");
+		warnings.push({ kind: "badGithubDomain" });
 		return undefined;
 	}
 }
 
-const VALIDATION_RULES = {
-	object: "必须是对象",
-	array: "必须是数组",
-	nonEmptyArray: "必须是非空数组",
-	nonEmptyString: "必须是非空字符串",
-	choice: "的值无效",
-} as const;
-
-function readProviderAccess(value: unknown, warnings: string[]): PiProviderAccessConfig | undefined {
+function readProviderAccess(value: unknown, warnings: ProviderWarning[]): PiProviderAccessConfig | undefined {
 	if (!isRecord(value)) {
-		warnings.push("data.providerAccess 必须是对象，已忽略");
+		warnings.push({ kind: "invalid" });
 		return undefined;
 	}
 	try {
@@ -68,7 +71,7 @@ function readProviderAccess(value: unknown, warnings: string[]): PiProviderAcces
 		};
 	} catch (error) {
 		if (!(error instanceof ProviderConfigValidationError)) throw error;
-		warnings.push(`${error.field} ${VALIDATION_RULES[error.rule]}，已忽略`);
+		warnings.push({ kind: "invalid" });
 		return undefined;
 	}
 }
@@ -82,19 +85,19 @@ export function loadProviderAccessFile(agentDir: string): LoadedProviderAccess {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
 			return { exists: false, warnings: [] };
 		}
-		return { exists: false, warnings: [`${path}: 读取失败（${(error as Error).message}），供应商查询按未配置处理`] };
+		return { exists: false, warnings: [{ kind: "readFailed" }] };
 	}
 
-	const warnings: string[] = [];
+	const warnings: ProviderWarning[] = [];
 	let root: unknown;
 	try {
 		root = JSON.parse(text);
-	} catch (error) {
-		warnings.push(`${path}: 解析失败（${(error as Error).message}），供应商查询按未配置处理`);
+	} catch {
+		warnings.push({ kind: "parseFailed" });
 		return { exists: true, warnings };
 	}
 	if (!isRecord(root)) {
-		warnings.push(`${path}: 顶层不是对象，供应商查询按未配置处理`);
+		warnings.push({ kind: "notObject" });
 		return { exists: true, warnings };
 	}
 	const data = root.data;
