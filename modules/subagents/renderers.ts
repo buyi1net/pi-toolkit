@@ -94,7 +94,7 @@ export function registerSubagentRenderers(
             .replace(/\n\nFollow up with subagent_message[\s\S]+$/, "")
             .replace(`Sub-agent "${name}" completed (${elapsed}).\n\n`, "")
             .replace(`Sub-agent "${name}" failed (exit code ${exitCode}).\n\n`, "")
-            .replace(new RegExp(`^Sub-agent "${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}" failed after ${elapsed} \\(provider/agent error — auto-retry exhausted\\)\\.\\n\\n`), "");
+            .replace(new RegExp(`^Sub-agent "${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}" (?:failed|was terminated) after ${elapsed} \\([^)]*\\)\\.\\n\\n`), "");
           const summaryLines = summary
             ? summary.split("\n").flatMap((line: string) => wrapTextWithAnsi(stripTerminalSequences(line), Math.max(1, width - 2)))
             : [];

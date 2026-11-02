@@ -3,6 +3,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { existsSync, readFileSync } from "node:fs";
 import { parseHeadlessSurface, type HeadlessChild } from "./headless.ts";
+import { createParentUpdateQueue, type ParentUpdateQueueStats } from "./parent-update-queue.ts";
 import {
   getSubagentActivityFile,
   readSubagentActivityFile,
@@ -644,6 +645,23 @@ function formatAge(ageMs: number | null): string {
   return `${Math.floor(minutes / 60)}h ago`;
 }
 
+export function readQueueDepth(artifactDir: string): ParentUpdateQueueStats | null {
+  try {
+    return createParentUpdateQueue(artifactDir).stats();
+  } catch {
+    return null;
+  }
+}
+
+function formatQueueDepth(stats: ParentUpdateQueueStats | null): string {
+  if (!stats) return "Parent update queue: unreadable";
+  return (
+    `Parent update queue: pending=${stats.pending} retained=${stats.retained} ` +
+    `cursor=${stats.cursor} next=${stats.next_update_seq} ` +
+    `wait_lease=${stats.waiting ? "active" : "idle"}`
+  );
+}
+
 function formatInspection(view: SubagentInspection): string {
   const status = view.status ? ` status=${view.status}` : "";
   const phase = view.phase ? ` phase=${view.phase}` : "";
@@ -684,7 +702,8 @@ export function registerSubagentInspectTool(pi: ExtensionAPI, deps: SubagentInsp
       "With no name, inspect all currently running/recovering subagents; with name, inspect that session even if it has finished. " +
       "The snapshot includes lifecycle, activity phase/event, last activity age, waiting reason or question, process/PID or pane liveness, " +
       "model/thinking with the routing-snapshot model source (fallback runs are labeled as inheriting the parent session with the reason), " +
-      "optional cohortId, child count, timeout state, and steer/resume availability. " +
+      "optional cohortId, child count, timeout state, steer/resume availability, and the parent update queue depth " +
+      "(pending/retained/cursor/next plus whether a wait lease is active). " +
       "This is an on-demand observation, not a polling loop; do not call it repeatedly just to wait.",
     promptSnippet:
       "Inspect the current subagent status once: lifecycle, phase, last activity, waiting reason, process/PID, children, timeout, and controls.",
@@ -728,6 +747,7 @@ export function registerSubagentInspectTool(pi: ExtensionAPI, deps: SubagentInsp
         ctx.sessionManager.getSessionId(),
       );
       const now = Date.now();
+      const queueStats = readQueueDepth(artifactDir);
       const registry = deps.readNameRegistry(artifactDir);
       const runtimePath = deps.registry.pathFor(artifactDir);
       const runtimeRecords = deps.registry.readRecords(runtimePath);
@@ -822,8 +842,8 @@ export function registerSubagentInspectTool(pi: ExtensionAPI, deps: SubagentInsp
           };
         }
         return {
-          content: [{ type: "text" as const, text: `Subagent status (observed at ${new Date(now).toISOString()}):\n${formatInspection(inspection)}` }],
-          details: { observedAt: now, scope: "name", name: requestedName, subagents: [inspection] },
+          content: [{ type: "text" as const, text: `Subagent status (observed at ${new Date(now).toISOString()}):\n${formatInspection(inspection)}\n${formatQueueDepth(queueStats)}` }],
+          details: { observedAt: now, scope: "name", name: requestedName, queue: queueStats, subagents: [inspection] },
         };
       }
 
@@ -850,8 +870,8 @@ export function registerSubagentInspectTool(pi: ExtensionAPI, deps: SubagentInsp
           : "No running or recovering subagents are currently registered. Use includeFinished: true to include session history."
         : `Subagent status (observed at ${new Date(now).toISOString()}):\n${inspections.map(formatInspection).join("\n")}`;
       return {
-        content: [{ type: "text" as const, text }],
-        details: { observedAt: now, scope: includeFinished ? "all" : "running", subagents: inspections },
+        content: [{ type: "text" as const, text: `${text}\n${formatQueueDepth(queueStats)}` }],
+        details: { observedAt: now, scope: includeFinished ? "all" : "running", queue: queueStats, subagents: inspections },
       };
     },
 

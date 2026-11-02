@@ -1,7 +1,7 @@
 import { visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
 import { runtimeRegistry, latestCtx, latestPi, MODULE_INSTANCE_KEY, moduleInstanceId } from "./mod.ts";
-import { getArtifactDir, widgetText } from "./mod-host.ts";
-import { createParentUpdateQueue, type ParentUpdateQueueStats } from "./parent-update-queue.ts";
+import { widgetText } from "./mod-host.ts";
+import { debugLog } from "./diagnostics.ts";
 import {
   buildFirstLayerOnlySnapshot,
   type DescendantsTracker,
@@ -25,12 +25,24 @@ import type { RunningSubagent } from "./types.ts";
 
 const WIDGET_INTERVAL_KEY = Symbol.for("pi-subagents/widget-interval");
 
+export type WidgetSkipReason =
+  | "module-instance-replaced"
+  | "no-latest-context"
+  | "host-ui-unavailable"
+  | "snapshot-failed"
+  | "set-widget-failed";
+
 export const widgetRuntime: {
   interval: ReturnType<typeof setInterval> | null;
   tree: DescendantsTracker | null;
   snapshot: WidgetSnapshot | null;
-  queueStats: ParentUpdateQueueStats | null;
-} = { interval: null, tree: null, snapshot: null, queueStats: null };
+  lastSkip: WidgetSkipReason | null;
+} = { interval: null, tree: null, snapshot: null, lastSkip: null };
+
+function noteSkip(reason: WidgetSkipReason, error?: unknown): void {
+  widgetRuntime.lastSkip = reason;
+  debugLog(`subagent widget not installed: ${reason}`, error);
+}
 
 export function isStatusEnabled(): boolean {
   return true;
@@ -131,22 +143,11 @@ function widgetMetadataLevel(snapshot: WidgetSnapshot, width: number, tier: Retu
   return "hidden";
 }
 
-function formatQueueStatsLine(stats: ParentUpdateQueueStats, width: number): string {
-  const text = widgetText("module.subagents.widget.queue.stats", {
-    pending: String(stats.pending),
-    retained: String(stats.retained),
-    cursor: String(stats.cursor),
-    next: String(stats.next_update_seq),
-  });
-  return truncateToWidth(text, Math.max(1, width - 2));
-}
-
 export function renderWidgetSnapshotLines(
   snapshot: WidgetSnapshot,
   width: number,
   theme?: any,
   currentSessionThinkingLevel?: string,
-  queueStats?: ParentUpdateQueueStats | null,
 ): string[] {
 
   const colorize = widgetBorderColor(snapshot, theme, currentSessionThinkingLevel);
@@ -192,10 +193,6 @@ export function renderWidgetSnapshotLines(
   if (snapshot.counts.globalOverflow > 0) {
     lines.push(borderLine(` … +${snapshot.counts.globalOverflow} more`, "", width, colorize));
   }
-  if (queueStats && (queueStats.pending > 0 || queueStats.waiting)) {
-    const statsLine = formatQueueStatsLine(queueStats, width);
-    lines.push(borderLine(` ${muted ? muted(statsLine) : statsLine}`, "", width, colorize));
-  }
   lines.push(borderBottom(width, colorize));
   return lines;
 }
@@ -215,14 +212,23 @@ export function renderSubagentWidgetLines(
 }
 
 function currentUiContext(): typeof latestCtx {
-  if ((globalThis as any)[MODULE_INSTANCE_KEY] !== moduleInstanceId) return null;
-  const ctx = latestCtx;
-  if (!ctx) return null;
-  try {
-    return ctx.hasUI ? ctx : null;
-  } catch {
+  if ((globalThis as any)[MODULE_INSTANCE_KEY] !== moduleInstanceId) {
+    noteSkip("module-instance-replaced");
     return null;
   }
+  const ctx = latestCtx;
+  if (!ctx) {
+    noteSkip("no-latest-context");
+    return null;
+  }
+  try {
+    if (ctx.hasUI) return ctx;
+  } catch (error) {
+    noteSkip("host-ui-unavailable", error);
+    return null;
+  }
+  noteSkip("host-ui-unavailable");
+  return null;
 }
 
 function currentThinkingLevel(): string | undefined {
@@ -239,38 +245,27 @@ function currentThinkingLevel(): string | undefined {
   }
 }
 
-function readQueueStats(): ParentUpdateQueueStats | null {
-  if ((globalThis as any)[MODULE_INSTANCE_KEY] !== moduleInstanceId) return null;
-  const ctx = latestCtx;
-  if (!ctx) return null;
-  try {
-    const sessionManager = ctx.sessionManager as
-      | { getSessionDir?: () => string; getSessionId?: () => string }
-      | undefined;
-    const sessionDir = sessionManager?.getSessionDir?.();
-    const sessionId = sessionManager?.getSessionId?.();
-    if (!sessionDir || !sessionId) return null;
-    return createParentUpdateQueue(getArtifactDir(sessionDir, sessionId)).stats();
-  } catch {
-    return null;
-  }
-}
-
 export function updateWidget() {
   const ctx = currentUiContext();
   if (!ctx) return;
 
-  widgetRuntime.queueStats = readQueueStats();
-  const firstLayer = runtimeRegistry.list();
-  const snapshot = widgetRuntime.tree
-    ? widgetRuntime.tree.snapshot(firstLayer, Date.now())
-    : buildFirstLayerOnlySnapshot(firstLayer, Date.now());
+  let snapshot: WidgetSnapshot;
+  try {
+    const firstLayer = runtimeRegistry.list();
+    snapshot = widgetRuntime.tree
+      ? widgetRuntime.tree.snapshot(firstLayer, Date.now())
+      : buildFirstLayerOnlySnapshot(firstLayer, Date.now());
+  } catch (error) {
+    noteSkip("snapshot-failed", error);
+    return;
+  }
   widgetRuntime.snapshot = snapshot;
 
   if (snapshot.counts.allCount === 0) {
     try {
       ctx.ui.setWidget("subagent-status", undefined);
-    } catch {
+    } catch (error) {
+      noteSkip("set-widget-failed", error);
       return;
     }
     if (widgetRuntime.interval) {
@@ -294,7 +289,6 @@ export function updateWidget() {
                 width,
                 theme,
                 currentThinkingLevel(),
-                widgetRuntime.queueStats,
               )
             : [];
           },
@@ -302,9 +296,11 @@ export function updateWidget() {
       },
       { placement: "aboveEditor" },
     );
-  } catch {
+  } catch (error) {
+    noteSkip("set-widget-failed", error);
     return;
   }
+  widgetRuntime.lastSkip = null;
 }
 
 export function startWidgetRefresh() {

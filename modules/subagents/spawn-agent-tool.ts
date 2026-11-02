@@ -39,7 +39,8 @@ function agentTypeParameterSchema(discoverAgents: () => Array<{ name: string }>)
   return Type.Optional(Type.Union(names.map((name) => Type.Literal(name)), { description }));
 }
 
-const FORK_TURNS_DESCRIPTION = "Required. none starts with only the task context; all inherits the parent history.";
+const FORK_TURNS_DESCRIPTION =
+  "Required. none starts with only the task context; all inherits the parent conversation text only — user and assistant messages, without tool calls or tool results. Put context the child needs into message.";
 
 export type DeliverTerminal = (running: RunningSubagent, result: SubagentResult, source: "spawn" | "followup" | "recovered-exit" | "recovered-headless" | "recovered-pane", deliveryId: string) => void;
 
@@ -131,7 +132,8 @@ export function registerSpawnAgentTool(pi: ExtensionAPI, deps: SpawnAgentToolDep
     description:
       "Start a sub-agent and return immediately. Read subagent_models first; agent_type is optional and defaults to general-purpose. Choose model and reasoning_effort from the same directory. model accepts a unique model id/name or an exact provider/model route. " +
       "If multiple providers expose the same name, pass the provider/model route from the directory. " +
-      "Choose fork_turns explicitly: none starts with only the task context, all inherits the parent history. " +
+      "Choose fork_turns explicitly: none starts with only the task context; all inherits the parent conversation text only (user and assistant messages, no tool calls and no tool results), so put every context the child needs into message. " +
+      "Delegation is capped at one more level: an agent at depth 2 or deeper never receives this tool, so do not plan on a grandchild spawning further sub-agents. " +
       "Unknown model references return model_not_found with up to three suggestions, ordered same-family first, then substring matches, then nearest by name distance. " +
       "The field is required; do not omit it. " +
       "The run posts progress updates to the parent queue and its terminal result is delivered to this session automatically as a message — use wait_agent to receive updates, followup_task to continue the run, and close_agent to release the name. " +

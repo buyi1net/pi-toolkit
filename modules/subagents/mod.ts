@@ -161,6 +161,15 @@ function sessionPreservedNote(options?: { sessionPreserved?: boolean }): string 
     : `\n\nThis sub-agent has finished and its session is preserved. If the task goal is achieved, simply continue with your work — do NOT message it again unless you have a genuinely NEW instruction (repeated messaging after auto-exit creates an infinite loop).`;
 }
 
+const SIGNAL_EXIT_CODES: Record<number, string> = { 137: "SIGKILL", 143: "SIGTERM" };
+
+function terminatedBySignal(result: { exitCode: number; errorMessage?: string }): string | null {
+  const byCode = SIGNAL_EXIT_CODES[result.exitCode];
+  if (byCode) return byCode;
+  const fromMessage = /\(signal (SIG[A-Z]+)\)/.exec(result.errorMessage ?? "");
+  return fromMessage ? fromMessage[1]! : null;
+}
+
 export interface ResultEnvelopeParts {
   payload: string;
   hostNote: string;
@@ -179,11 +188,12 @@ export function buildResultEnvelopeParts(
     const recoveryHint = options?.sessionPreserved === false
       ? "spawn a new subagent with a corrected route or task"
       : "spawn a new subagent or continue the preserved session with followup_task";
+    const signal = terminatedBySignal(result);
+    const headline = signal
+      ? `Sub-agent "${name}" was terminated after ${formatElapsed(result.elapsed)} (process killed by ${signal}).`
+      : `Sub-agent "${name}" failed after ${formatElapsed(result.elapsed)} (provider/agent error — auto-retry exhausted).`;
     return {
-      payload:
-        `Sub-agent "${name}" failed after ${formatElapsed(result.elapsed)} ` +
-        `(provider/agent error — auto-retry exhausted).\n\n` +
-        `Error: ${result.errorMessage}`,
+      payload: `${headline}\n\n` + `Error: ${result.errorMessage}`,
       hostNote:
         `The subagent did not produce a result. If a retry is genuinely warranted, ` +
         `${recoveryHint}. ${hostNote}`,
@@ -211,9 +221,12 @@ export function resolveResultPresentation(
     const recoveryHint = options?.sessionPreserved === false
       ? "spawn a new subagent with a corrected route or task"
       : "spawn a new subagent or continue the preserved session with followup_task";
+    const signal = terminatedBySignal(result);
+    const headline = signal
+      ? `Sub-agent "${name}" was terminated after ${formatElapsed(result.elapsed)} (process killed by ${signal}).`
+      : `Sub-agent "${name}" failed after ${formatElapsed(result.elapsed)} (provider/agent error — auto-retry exhausted).`;
     return (
-      `Sub-agent "${name}" failed after ${formatElapsed(result.elapsed)} ` +
-      `(provider/agent error — auto-retry exhausted).\n\n` +
+      `${headline}\n\n` +
       `Error: ${result.errorMessage}\n\n` +
       `The subagent did not produce a result. If a retry is genuinely warranted, ` +
       `${recoveryHint}.${sessionNote}`

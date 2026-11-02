@@ -91,7 +91,7 @@ export function registerFollowupTaskTool(pi: ExtensionAPI, deps: FollowupTaskToo
           target: params.target,
           agent_id: target.agentId,
           task_name: target.name,
-          status: deps.registry.get(target.agentId)?.waitMode ?? "running",
+          status: "running",
         });
       }
       if (deps.registry.isNameReserved(target.name)) {

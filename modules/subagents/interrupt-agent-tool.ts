@@ -138,6 +138,13 @@ export function registerInterruptAgentTool(pi: ExtensionAPI, deps: InterruptAgen
       if (!running) {
         const status = target.agentId ? historicalStatus(deps, ctx, target.agentId) : null;
         if (status === "handed_off") return errorResult("agent_handed_off", `Subagent "${target.name}" was handed off and cannot be interrupted in this process.`, { target: params.target, agent_id: target.agentId, task_name: target.name, status });
+        if (status === "waiting") {
+          return errorResult(
+            "agent_not_running",
+            `Subagent "${target.name}" is not running: its current round is already interrupted and it is waiting for instructions. Send followup_task to wake it.`,
+            { target: params.target, agent_id: target.agentId || null, task_name: target.name, status: "waiting" },
+          );
+        }
         return errorResult("agent_already_finished", `Subagent "${target.name}" is not running and cannot be interrupted.`, { target: params.target, agent_id: target.agentId || null, task_name: target.name, status: status ?? "completed" });
       }
       if (running.interruptRequested || running.publicStatus === "waiting") {

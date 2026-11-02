@@ -41,8 +41,8 @@ export const SUBAGENT_LOADOUT_VERSION = 2;
 
 export const FORK_IDENTITY_RESET = [
   "[子代理启动上下文 / child-agent bootstrap] 本条由派生方自动写入，不是用户输入。",
-  "你现在是新派生的子代理。上面的对话是从父代理继承来的历史上下文；只遵守你自己的角色、身份和下面的 NEW_TASK，更早的身份、任务和针对具体动作的授权都属于你的祖先代理。继承的工具调用只是历史记录，活的工具会话和进程句柄都没有被继承。把结果汇报给你的父代理，不要执行历史里的待办。",
-  "You are now a newly spawned child agent. The preceding conversation is inherited parent context. Follow your own role, identity, and the NEW_TASK below; earlier identities, tasks, and action-specific approvals belong to your ancestors. Inherited tool calls are historical records; live tool sessions and process handles are not inherited. Report your result to your parent and do not carry out pending work mentioned in the inherited history.",
+  "你现在是新派生的子代理。上面的对话是从父代理继承来的纯文本对话：只有 user 和 assistant 的自然语言消息，不含任何工具调用与工具结果。只遵守你自己的角色、身份和下面的 NEW_TASK，更早的身份、任务和针对具体动作的授权都属于你的祖先代理。把结果汇报给你的父代理，不要执行历史里的待办；父代理没有传给你的上下文，需要什么就自己查或直接问。",
+  "You are now a newly spawned child agent. The preceding conversation is the parent's text conversation only: user and assistant natural-language messages, with no tool calls and no tool results. Follow your own role, identity, and the NEW_TASK below; earlier identities, tasks, and action-specific approvals belong to your ancestors. Report your result to your parent and do not carry out pending work mentioned in the inherited history; anything the parent did not hand over must be looked up or asked for.",
 ].join("\n\n");
 
 const FORK_KEPT_ENTRY_TYPES = new Set(["model_change", "thinking_level_change"]);

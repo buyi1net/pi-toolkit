@@ -24,7 +24,7 @@ import {
 } from "./status.ts";
 import type { RunningSubagent } from "./types.ts";
 
-export const SUBAGENT_WIDGET_ROW_BUDGET = 6;
+export const SUBAGENT_WIDGET_ROW_BUDGET = 8;
 
 const MAX_DESCENT_DEPTH = 8;
 
@@ -139,8 +139,10 @@ export function layoutWidgetTree(inputs: readonly TreeRowInput[]): WidgetSnapsho
   roots.forEach((root, index) => walk(root, [], index === roots.length - 1, true));
 
   const selected = new Set<string>();
+  const rootRank = (node: TreeNode): number => (node.input.depth === 0 ? 0 : 1);
   const candidates = [...nodes].sort(
     (left, right) =>
+      rootRank(left) - rootRank(right) ||
       URGENCY[right.input.snapshot.kind] - URGENCY[left.input.snapshot.kind] ||
       left.order - right.order,
   );
